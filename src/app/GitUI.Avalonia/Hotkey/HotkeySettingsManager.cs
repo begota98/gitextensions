@@ -185,6 +185,7 @@ internal sealed class HotkeySettingsManager : IHotkeySettingsManager
                 Hk(FormBrowse.Command.ViewFile, WinFormsShims.Keys.F3),
                 Hk(FormBrowse.Command.EditFile, WinFormsShims.Keys.F4),
                 Hk(FormBrowse.Command.OpenWithDifftool, WinFormsShims.Keys.Alt | WinFormsShims.Keys.F3),
+                Hk(FormBrowse.Command.OpenWorkingDirectoryFile, WinFormsShims.Keys.Shift | WinFormsShims.Keys.F4),
                 Hk(FormBrowse.Command.CloseRepository, WinFormsShims.Keys.Control | WinFormsShims.Keys.W),
                 Hk(FormBrowse.Command.FocusRevisionGrid, WinFormsShims.Keys.Control | WinFormsShims.Keys.D1),
                 Hk(FormBrowse.Command.FocusCommitInfo, WinFormsShims.Keys.Control | WinFormsShims.Keys.D2),
