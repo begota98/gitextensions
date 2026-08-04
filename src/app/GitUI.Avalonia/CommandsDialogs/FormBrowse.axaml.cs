@@ -113,6 +113,10 @@ public sealed partial class FormBrowse : GitModuleForm
         OpenRepo = 45,
         CloseRepository = 15,
 
+        // Port-only command, so the id sits outside the upstream range.
+        ViewFile = 1001,
+        EditFile = 22,
+
         // WinForms routes F5 through ToolStripItem.ShortcutKeys. Avalonia has no ToolStrip,
         // so refresh joins the same command dispatcher without changing persisted upstream IDs.
         Refresh = 50,
@@ -596,6 +600,37 @@ public sealed partial class FormBrowse : GitModuleForm
         if (!string.IsNullOrWhiteSpace(path))
         {
             ChangeWorkingDirectory(path);
+        }
+    }
+
+    // A blob from an older revision has no location on disk, so only a working-directory file
+    // can be viewed or edited.
+    private string? SelectedWorkingDirectoryFile()
+    {
+        GitItemStatus? item = revisionDiff.FileStatusList.SelectedItem;
+        string? path = item is null
+            ? null
+            : new FullPathResolver(() => Module.WorkingDir).Resolve(item.Name)?.ToNativePath();
+        return path is not null && File.Exists(path) ? path : null;
+    }
+
+    private void ViewSelectedFile()
+    {
+        if (SelectedWorkingDirectoryFile() is string path)
+        {
+            // Jump to the line the caret is on in the diff, in the file's own numbering.
+            using FormEditor viewer = new(
+                UICommands, path, showWarning: false, readOnly: true, revisionDiff.FileViewer.CurrentFileLine);
+            viewer.ShowDialog(this);
+        }
+    }
+
+    private void EditSelectedFile()
+    {
+        if (SelectedWorkingDirectoryFile() is string path)
+        {
+            // Jump to the line the caret is on in the diff, in the file's own numbering.
+            UICommands.StartFileEditorDialog(path, lineNumber: revisionDiff.FileViewer.CurrentFileLine);
         }
     }
 
@@ -1918,6 +1953,8 @@ public sealed partial class FormBrowse : GitModuleForm
             case Command.ManageWorkTrees: ManageWorktreeToolStripMenuItemClick(this, EventArgs.Empty); break;
             case Command.OpenRepo: OpenRepositoryDialog(); break;
             case Command.CloseRepository: ChangeWorkingDirectory(string.Empty); break;
+            case Command.ViewFile: ViewSelectedFile(); break;
+            case Command.EditFile: EditSelectedFile(); break;
             default: return base.ExecuteCommand(command);
         }
 
