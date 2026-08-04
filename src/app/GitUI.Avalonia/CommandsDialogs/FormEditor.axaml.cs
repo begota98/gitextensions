@@ -1,4 +1,6 @@
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using GitExtensions.Extensibility.Git;
 using GitExtUtils;
 using GitUI.Editor;
@@ -62,6 +64,19 @@ public sealed partial class FormEditor : GitModuleForm
         toolStripSaveButton.Click += toolStripSaveButton_Click;
         fileViewer.TextChanged += (_, _) => HasChanges = true;
         fileViewer.TextLoaded += (_, _) => HasChanges = false;
+
+        // The editor control handles Escape itself, so the key never bubbles to the window and
+        // the shared Escape-to-close never runs while the caret is in the text.
+        AddHandler(KeyDownEvent, CloseOnEscapePressed, RoutingStrategies.Tunnel);
+    }
+
+    private void CloseOnEscapePressed(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            Close();
+        }
     }
 
     private void OpenFile(string fileName, int? line = null)
