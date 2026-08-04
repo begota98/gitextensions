@@ -61,7 +61,9 @@ public class GitModuleForm : GitExtensionsForm, IGitUICommandsSource, ResourceMa
 
     public override bool ProcessHotkey(WinFormsShims.Keys keyData)
     {
-        if (!HotkeysEnabled)
+        // Script hotkeys default to Keys.None, so an unmapped key press (a bare modifier, for
+        // example) would otherwise match and execute the first user script.
+        if (!HotkeysEnabled || keyData == WinFormsShims.Keys.None)
         {
             return false;
         }

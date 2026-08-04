@@ -579,6 +579,9 @@ public sealed partial class FormBrowse : GitModuleForm
 
     private async Task OpenRepositoryDialogAsync()
     {
+        // FileAndForget starts on a background thread; StorageProvider must be used from the UI thread.
+        await _loadOperations.JoinableTaskFactory.SwitchToMainThreadAsync();
+
         FolderPickerOpenOptions options = new()
         {
             AllowMultiple = false,

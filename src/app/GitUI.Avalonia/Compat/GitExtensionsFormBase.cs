@@ -176,7 +176,9 @@ public class GitExtensionsFormBase : Window, ITranslate, WinFormsShims.IWin32Win
     /// <summary>Dispatches a WinForms-compatible key value through the loaded command table.</summary>
     public virtual bool ProcessHotkey(WinFormsShims.Keys keyData)
     {
-        if (!HotkeysEnabled)
+        // Keys.None means "unmapped key" here, so it must never match a command that has no
+        // hotkey assigned - that would run an arbitrary command on any unmapped key press.
+        if (!HotkeysEnabled || keyData == WinFormsShims.Keys.None)
         {
             return false;
         }
