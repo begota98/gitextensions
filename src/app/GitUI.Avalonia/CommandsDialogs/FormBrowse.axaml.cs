@@ -118,6 +118,9 @@ public sealed partial class FormBrowse : GitModuleForm
         EditFile = 22,
         OpenWithDifftool = 19,
 
+        // Port-only: upstream carries this one on its diff control, not on Browse.
+        OpenWorkingDirectoryFile = 1002,
+
         // WinForms routes F5 through ToolStripItem.ShortcutKeys. Avalonia has no ToolStrip,
         // so refresh joins the same command dispatcher without changing persisted upstream IDs.
         Refresh = 50,
@@ -613,6 +616,15 @@ public sealed partial class FormBrowse : GitModuleForm
             ? null
             : new FullPathResolver(() => Module.WorkingDir).Resolve(item.Name)?.ToNativePath();
         return path is not null && File.Exists(path) ? path : null;
+    }
+
+    /// <summary>Opens the selected file with the system default application (Shift+F4).</summary>
+    private void OpenSelectedWorkingDirectoryFile()
+    {
+        if (SelectedWorkingDirectoryFile() is string path)
+        {
+            OsShellUtil.Open(path);
+        }
     }
 
     private void OpenSelectedFileWithDifftool()
@@ -1969,6 +1981,7 @@ public sealed partial class FormBrowse : GitModuleForm
             case Command.CloseRepository: ChangeWorkingDirectory(string.Empty); break;
             case Command.ViewFile: ViewSelectedFile(); break;
             case Command.OpenWithDifftool: OpenSelectedFileWithDifftool(); break;
+            case Command.OpenWorkingDirectoryFile: OpenSelectedWorkingDirectoryFile(); break;
             case Command.EditFile: EditSelectedFile(); break;
             default: return base.ExecuteCommand(command);
         }
