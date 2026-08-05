@@ -183,6 +183,10 @@ internal sealed class HotkeySettingsManager : IHotkeySettingsManager
                 FormBrowse.HotkeySettingsName,
                 Hk(FormBrowse.Command.GitBash, WinFormsShims.Keys.Control | WinFormsShims.Keys.G),
                 Hk(FormBrowse.Command.OpenRepo, WinFormsShims.Keys.Control | WinFormsShims.Keys.O),
+                Hk(FormBrowse.Command.ViewFile, WinFormsShims.Keys.F3),
+                Hk(FormBrowse.Command.EditFile, WinFormsShims.Keys.F4),
+                Hk(FormBrowse.Command.OpenWithDifftool, WinFormsShims.Keys.Alt | WinFormsShims.Keys.F3),
+                Hk(FormBrowse.Command.OpenWorkingDirectoryFile, WinFormsShims.Keys.Shift | WinFormsShims.Keys.F4),
                 Hk(FormBrowse.Command.CloseRepository, WinFormsShims.Keys.Control | WinFormsShims.Keys.W),
                 Hk(FormBrowse.Command.FocusRevisionGrid, WinFormsShims.Keys.Control | WinFormsShims.Keys.D1),
                 Hk(FormBrowse.Command.FocusCommitInfo, WinFormsShims.Keys.Control | WinFormsShims.Keys.D2),
@@ -192,6 +196,8 @@ internal sealed class HotkeySettingsManager : IHotkeySettingsManager
                 Hk(FormBrowse.Command.FocusGitConsole, WinFormsShims.Keys.Control | WinFormsShims.Keys.D6),
                 Hk(FormBrowse.Command.FocusOutputHistoryAndToggleIfPanel, WinFormsShims.Keys.Control | WinFormsShims.Keys.D9),
                 Hk(FormBrowse.Command.Refresh, WinFormsShims.Keys.F5),
+                Hk(FormBrowse.Command.OpenSettings, WinFormsShims.Keys.Control | WinFormsShims.Keys.Oemcomma),
+                Hk(FormBrowse.Command.QuickFetch, WinFormsShims.Keys.Control | WinFormsShims.Keys.Shift | WinFormsShims.Keys.Down),
                 Hk(FormBrowse.Command.Commit, WinFormsShims.Keys.Control | WinFormsShims.Keys.Space),
                 Hk(FormBrowse.Command.CheckoutBranch, WinFormsShims.Keys.Control | WinFormsShims.Keys.OemPeriod),
                 Hk(FormBrowse.Command.FocusFilter, WinFormsShims.Keys.Control | WinFormsShims.Keys.E),
@@ -299,13 +305,27 @@ internal sealed class HotkeySettingsManager : IHotkeySettingsManager
                 Hk(FormStash.Command.NextStash, WinFormsShims.Keys.Control | WinFormsShims.Keys.N),
                 Hk(FormStash.Command.PreviousStash, WinFormsShims.Keys.Control | WinFormsShims.Keys.P),
                 Hk(FormStash.Command.Refresh, WinFormsShims.Keys.F5)),
+
+            // FileViewer.NextOccurrence/PreviousOccurrence are deliberately unbound: they walk the
+            // markers that only the find window's "Highlight all" button creates, so their upstream
+            // Alt+Right/Alt+Left would appear dead until it is pressed.
             new HotkeySettings(
                 FileViewer.HotkeySettingsName,
                 Hk(FileViewer.Command.Find, WinFormsShims.Keys.Control | WinFormsShims.Keys.F),
                 Hk(FileViewer.Command.Replace, WinFormsShims.Keys.Control | WinFormsShims.Keys.H),
                 Hk(FileViewer.Command.FindNextOrOpenWithDifftool, WinFormsShims.Keys.F3),
                 Hk(FileViewer.Command.FindPrevious, WinFormsShims.Keys.Shift | WinFormsShims.Keys.F3),
-                Hk(FileViewer.Command.GoToLine, WinFormsShims.Keys.Control | WinFormsShims.Keys.G)),
+                Hk(FileViewer.Command.GoToLine, WinFormsShims.Keys.Control | WinFormsShims.Keys.G),
+                Hk(FileViewer.Command.StageLines, WinFormsShims.Keys.S),
+                Hk(FileViewer.Command.UnstageLines, WinFormsShims.Keys.U),
+                Hk(FileViewer.Command.ResetLines, WinFormsShims.Keys.R),
+                Hk(FileViewer.Command.NextChange, WinFormsShims.Keys.Alt | WinFormsShims.Keys.Down),
+                Hk(FileViewer.Command.PreviousChange, WinFormsShims.Keys.Alt | WinFormsShims.Keys.Up),
+                Hk(FileViewer.Command.ShowEntireFile, WinFormsShims.Keys.Control | WinFormsShims.Keys.E),
+                Hk(FileViewer.Command.ShowSyntaxHighlighting, WinFormsShims.Keys.X),
+                Hk(FileViewer.Command.IgnoreAllWhitespace, WinFormsShims.Keys.Control | WinFormsShims.Keys.Shift | WinFormsShims.Keys.W),
+                Hk(FileViewer.Command.IncreaseNumberOfVisibleLines, WinFormsShims.Keys.Control | WinFormsShims.Keys.Oemplus),
+                Hk(FileViewer.Command.DecreaseNumberOfVisibleLines, WinFormsShims.Keys.Control | WinFormsShims.Keys.OemMinus)),
             new HotkeySettings(
                 FormSettings.HotkeySettingsName,
                 LoadScriptHotkeys()),
