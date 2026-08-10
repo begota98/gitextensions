@@ -8,7 +8,7 @@ internal sealed class VsCode : DiffMergeTool
     public override string DiffCommand => "--new-window --wait --diff \"$LOCAL\" \"$REMOTE\"";
 
     /// <inheritdoc />
-    public override string ExeFileName => "Code.exe";
+    public override string ExeFileName => OperatingSystem.IsWindows() ? "Code.exe" : "code";
 
     /// <inheritdoc />
     public override string MergeCommand => "--new-window --wait --merge \"$REMOTE\" \"$LOCAL\" \"$BASE\" \"$MERGED\"";
@@ -21,6 +21,11 @@ internal sealed class VsCode : DiffMergeTool
 
     private static string[] GetFolders()
     {
+        if (OperatingSystem.IsMacOS())
+        {
+            return ["/Applications/Visual Studio Code.app/Contents/Resources/app/bin"];
+        }
+
         string folder = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         return
         [
