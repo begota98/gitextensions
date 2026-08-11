@@ -53,7 +53,13 @@ public partial class FileViewer : GitModuleControl, IFileViewer
     private readonly DiffBackgroundRenderer _diffBackgroundRenderer;
     private readonly DiffTextColorizer _diffTextColorizer;
     private readonly DiffViewerLineNumberControl _diffViewerLineNumberControl;
-    private readonly FindAndReplaceForm _findAndReplaceForm;
+    private FindAndReplaceForm? _findAndReplaceForm;
+
+    // Avalonia registers a Window with the platform as soon as it is constructed, so creating
+    // this with the viewer gives every FileViewer a top level the desktop shell counts before
+    // the user has ever searched. WinForms defers the native window until the form is shown,
+    // which is why the original can construct it in place.
+    private FindAndReplaceForm FindAndReplace => _findAndReplaceForm ??= new FindAndReplaceForm();
     private readonly IFullPathResolver _fullPathResolver;
     private readonly List<HighlightedLines> _lineHighlights = [];
     private DiffHighlightService? _diffHighlightService;
@@ -113,7 +119,6 @@ public partial class FileViewer : GitModuleControl, IFileViewer
             ClearImage();
         };
 
-        _findAndReplaceForm = new FindAndReplaceForm();
         _fullPathResolver = new FullPathResolver(() => Module.WorkingDir);
 
         NumberOfContextLines = AppSettings.NumberOfContextLines;
@@ -1166,13 +1171,13 @@ public partial class FileViewer : GitModuleControl, IFileViewer
     /// <summary>Shows the Find window for this editor.</summary>
     public void Find(bool replace)
     {
-        _findAndReplaceForm.ShowFor(TextEditor, replace && !TextEditor.IsReadOnly);
+        FindAndReplace.ShowFor(TextEditor, replace && !TextEditor.IsReadOnly);
     }
 
     /// <summary>Finds the next or previous occurrence using the current Find settings.</summary>
     public Task FindNextAsync(bool searchForwardOrOpenWithDifftool)
     {
-        return _findAndReplaceForm.FindNextAsync(
+        return FindAndReplace.FindNextAsync(
             viaF3: true,
             searchBackward: !searchForwardOrOpenWithDifftool,
             messageIfNotFound: "Text not found");
@@ -1494,13 +1499,13 @@ public partial class FileViewer : GitModuleControl, IFileViewer
     public int TotalNumberOfLines => TextEditor.Document?.LineCount ?? 0;
 
     /// <summary>Configures cross-file search navigation.</summary>
-    public void SetFileLoader(GetNextFileFnc fileLoader) => _findAndReplaceForm.SetFileLoader(fileLoader);
+    public void SetFileLoader(GetNextFileFnc fileLoader) => FindAndReplace.SetFileLoader(fileLoader);
 
     /// <summary>Moves to the next highlighted Find occurrence.</summary>
-    public void GoToNextOccurrence() => _findAndReplaceForm.GoToOccurrence(TextEditor, searchBackward: false);
+    public void GoToNextOccurrence() => FindAndReplace.GoToOccurrence(TextEditor, searchBackward: false);
 
     /// <summary>Moves to the previous highlighted Find occurrence.</summary>
-    public void GoToPreviousOccurrence() => _findAndReplaceForm.GoToOccurrence(TextEditor, searchBackward: true);
+    public void GoToPreviousOccurrence() => FindAndReplace.GoToOccurrence(TextEditor, searchBackward: true);
 
     /// <summary>Moves to the first changed block.</summary>
     public void GoToFirstChange() => GoToChange(searchBackward: false, fromTop: true);
@@ -2460,7 +2465,7 @@ public partial class FileViewer : GitModuleControl, IFileViewer
             _control = control;
         }
 
-        public FindAndReplaceForm FindAndReplaceForm => _control._findAndReplaceForm;
+        public FindAndReplaceForm FindAndReplaceForm => _control.FindAndReplace;
 
         public ComboBox EncodingToolStripComboBox => _control.encodingToolStripComboBox;
 
