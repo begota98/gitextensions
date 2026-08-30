@@ -1,4 +1,4 @@
-using System.ComponentModel.Design;
+﻿using System.ComponentModel.Design;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
@@ -18,6 +18,7 @@ using GitUI.ScriptsEngine;
 using GitUIPluginInterfaces;
 using Microsoft.VisualStudio.Threading;
 using NSubstitute;
+using SourceDataGridView = GitUI.Compat.WinFormsControls.DataGridView;
 using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitExtensionsTests;
@@ -71,6 +72,21 @@ public sealed class FormPushTests
         FormPush form = new();
         ITranslation translation = Substitute.For<ITranslation>();
 
+        form.FindControl<ComboBox>("PushDestination")!.Text = "https://example.invalid/repository.git";
+        form.FindControl<ComboBox>("_NO_TRANSLATE_Branch")!.Text = "main";
+        form.FindControl<ComboBox>("RemoteBranch")!.Text = "main";
+        form.FindControl<ComboBox>("TagComboBox")!.Text = "v1.0";
+        form.FindControl<ComboBox>("RecursiveSubmodules")!.SelectedIndex = 1;
+        SourceDataGridView branchGrid = form.FindControl<SourceDataGridView>("BranchGrid")!;
+        branchGrid.Columns.Should().HaveCount(6);
+        branchGrid.Columns.Select(column => column.Name).Should().Equal(
+            "LocalColumn",
+            "RemoteColumn",
+            "NewColumn",
+            "PushColumn",
+            "ForceColumn",
+            "DeleteColumn");
+
         form.AddTranslationItems(translation);
         form.TranslateItems(translation);
 
@@ -80,6 +96,7 @@ public sealed class FormPushTests
         translation.Received(1).AddTranslationItem(nameof(FormPush), "labelTo", "Text", "&to");
         translation.Received(1).AddTranslationItem(nameof(FormPush), "ckForceWithLease", "Text", "&Force with lease");
         translation.Received(1).AddTranslationItem(nameof(FormPush), "AddRemote", "Text", "&Manage remotes");
+        translation.Received(1).AddTranslationItem(nameof(FormPush), "LoadSSHKey", "Text", "&Load SSH key");
         translation.Received(1).AddTranslationItem(nameof(FormPush), "BranchTab", "Text", "Push branches");
         translation.Received(1).AddTranslationItem(nameof(FormPush), "TagTab", "Text", "Push tags");
         translation.Received(1).AddTranslationItem(nameof(FormPush), "MultipleBranchTab", "Text", "Push multiple branches");
@@ -97,6 +114,10 @@ public sealed class FormPushTests
         translation.Received(1).AddTranslationItem(nameof(FormPush), "_noCurrentBranch", "Text", "No branch is selected, cannot push.");
         translation.Received(1).AddTranslationItem(nameof(FormPush), "_pushCaption", "Text", "Push");
         translation.Received(1).AddTranslationItem(nameof(FormPush), "_pushToCaption", "Text", "Push to {0}");
+        foreach (string runtimeField in new[] { "PushDestination", "_NO_TRANSLATE_Branch", "RemoteBranch", "TagComboBox", "RecursiveSubmodules" })
+        {
+            translation.DidNotReceive().AddTranslationItem(nameof(FormPush), runtimeField, "Text", Arg.Any<string>());
+        }
 
         string[] emittedKeys = translation.ReceivedCalls()
             .Where(call => call.GetMethodInfo().Name == nameof(ITranslation.AddTranslationItem))
@@ -105,13 +126,27 @@ public sealed class FormPushTests
         emittedKeys.Distinct(StringComparer.Ordinal).Count().Should().Be(
             emittedKeys.Length,
             "each field must be routed through exactly one translation path");
+        form.FindControl<HyperlinkButton>("ShowOptions")!.IsVisible.Should().BeTrue();
+        form.FindControl<Border>("PushOptionsPanel")!.IsVisible.Should().BeFalse(
+            "the original Designer starts with the advanced options collapsed");
         form.Close();
+    }
+
+    [AvaloniaTest]
+    public void FormPush_should_hide_PuTTY_key_loading_until_a_remote_is_selected()
+    {
+        FormPush form = new();
+
+        Button loadSshKey = form.FindControl<Button>("LoadSSHKey")
+            ?? throw new InvalidOperationException("The source LoadSSHKey action was not created.");
+        loadSshKey.IsVisible.Should().BeFalse();
     }
 
     [AvaloniaTest]
     public void FormPush_should_show_the_current_branch_selected_remote_and_force_with_lease()
     {
         GitModule module = CreateRepositoryAndRemote();
+        module.SetSetting("remote.origin.puttykeyfile", "C:\\keys\\origin.ppk");
         FormPush form = new(new GitUICommands(_serviceContainer, module));
 
         form.Show();
@@ -129,6 +164,8 @@ public sealed class FormPushTests
                 ?? throw new InvalidOperationException("The create-pull-request checkbox was not created.");
             Button push = form.FindControl<Button>("Push")
                 ?? throw new InvalidOperationException("Push button was not created.");
+            Button loadSshKey = form.FindControl<Button>("LoadSSHKey")
+                ?? throw new InvalidOperationException("The source LoadSSHKey action was not created.");
             Label labelFrom = form.FindControl<Label>("labelFrom")
                 ?? throw new InvalidOperationException("Branch label was not created.");
             Label labelTo = form.FindControl<Label>("labelTo")
@@ -140,6 +177,7 @@ public sealed class FormPushTests
             (branch.SelectedItem as string ?? branch.Text).Should().Be(module.GetSelectedBranch());
             remoteBranch.Text.Should().Be(branch.Text);
             push.IsEnabled.Should().BeTrue();
+            loadSshKey.IsVisible.Should().Be(OperatingSystem.IsWindows());
             forceWithLease.IsChecked.Should().BeFalse();
             createPullRequest.IsEnabled.Should().BeFalse("the configured local remote is not hosted by Azure DevOps");
 
@@ -147,6 +185,49 @@ public sealed class FormPushTests
 
             forceWithLease.IsChecked.Should().BeTrue();
             form.CaptureRenderedFrame().Should().NotBeNull("the reduced push dialog should render headlessly");
+
+            Control groupBox2 = form.FindControl<Control>("groupBox2")!;
+            TabControl tabs = form.FindControl<TabControl>("TabControlTagBranch")!;
+            Control branchTab = form.FindControl<Control>("BranchTab")!;
+            Control branchLayout = form.FindControl<Control>("tableLayoutPanel1")!;
+            Label branchDestinationLabel = form.FindControl<Label>("labelTo")!;
+            ComboBox remoteBranchControl = form.FindControl<ComboBox>("RemoteBranch")!;
+            Control pull = form.FindControl<Control>("Pull")!;
+
+            groupBox2.Should().BeOfType<GitUI.Compat.WinFormsControls.GroupBox>();
+            groupBox2.Bounds.Size.Should().Be(new Avalonia.Size(556, 80));
+            groupBox2.Margin.Should().Be(new Avalonia.Thickness(0, 0, 4, 0));
+            tabs.Classes.Should().Contain("gitextensions-native-tabs");
+            tabs.Margin.Should().Be(new Avalonia.Thickness(0, 6));
+            branchTab.Should().BeOfType<GitUI.Compat.WinFormsControls.TabPage>();
+            ToolTip.GetTip(branchTab).Should().Be("Push branches and commits to remote repository.");
+            branchLayout.Bounds.Size.Should().Be(new Avalonia.Size(416, 23));
+            branchDestinationLabel.Bounds.Y.Should().Be(3);
+            remoteBranchControl.Bounds.Width.Should().Be(196);
+            pull.Bounds.Size.Should().Be(new Avalonia.Size(101, 25));
+        }
+        finally
+        {
+            form.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    public void FormPush_should_transfer_focus_to_the_selected_url_option()
+    {
+        GitModule module = CreateRepositoryAndRemote();
+        using FormPush form = new(new GitUICommands(_serviceContainer, module));
+        form.Show();
+        try
+        {
+            ComboBox remotes = form.FindControl<ComboBox>("_NO_TRANSLATE_Remotes")!;
+            RadioButton pushToUrl = form.FindControl<RadioButton>("PushToUrl")!;
+            remotes.Focus(Avalonia.Input.NavigationMethod.Tab).Should().BeTrue();
+
+            pushToUrl.IsChecked = true;
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+            pushToUrl.IsKeyboardFocusWithin.Should().BeTrue();
         }
         finally
         {

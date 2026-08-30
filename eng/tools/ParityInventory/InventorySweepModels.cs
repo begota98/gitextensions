@@ -3,7 +3,7 @@
 // parity-scaffolding: Defines the deterministic aggregate contract for a functional baseline sweep.
 internal sealed record InventorySweepResult
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 4;
 
     public required int SchemaVersion { get; init; }
 
@@ -36,9 +36,15 @@ internal sealed record InventorySweepSummary
 
     public required int FindingCount { get; init; }
 
+    public required int DependentFindingCount { get; init; }
+
+    public required int TotalDifferenceCount { get; init; }
+
     public required IReadOnlyDictionary<string, int> FindingsByCategory { get; init; }
 
     public required int AdaptedCommentCount { get; init; }
+
+    public required int AcceptedFrameworkDeviationCount { get; init; }
 }
 
 // parity-scaffolding: Records how one portmap source-to-twin mapping entered the sweep.
@@ -55,6 +61,10 @@ internal sealed record SweepMappingResult
     public required IReadOnlyList<string> TypeNames { get; init; }
 
     public required int FindingCount { get; init; }
+
+    public required int DependentFindingCount { get; init; }
+
+    public required int TotalDifferenceCount { get; init; }
 
     public required IReadOnlyList<string> Evidence { get; init; }
 
@@ -74,7 +84,13 @@ internal sealed record SweepTypeResult
 
     public required int FindingCount { get; init; }
 
+    public required int DependentFindingCount { get; init; }
+
+    public required int TotalDifferenceCount { get; init; }
+
     public required IReadOnlyDictionary<string, int> FindingsByCategory { get; init; }
 
     public required int AdaptedCommentCount { get; init; }
+
+    public required int AcceptedFrameworkDeviationCount { get; init; }
 }

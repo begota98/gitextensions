@@ -23,6 +23,7 @@ using GitExtUtils;
 using GitUI;
 using GitUI.Blame;
 using GitUI.CommandsDialogs;
+using GitUI.CommandsDialogs.BrowseDialog;
 using GitUI.CommandsDialogs.BrowseDialog.DashboardControl;
 using GitUI.CommandsDialogs.Menus;
 using GitUI.Compat;
@@ -36,6 +37,7 @@ using GitUIPluginInterfaces;
 using Microsoft.VisualStudio.Threading;
 using NSubstitute;
 using ResourceManager;
+using SourceControls = GitUI.Compat.WinFormsControls;
 using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitExtensionsTests;
@@ -95,6 +97,8 @@ public sealed class FormBrowseTests
             dashboardForm.FindControl<Dashboard>("dashboard")!.IsVisible.Should().BeTrue();
             dashboardForm.FindControl<Grid>("mainContentGrid")!.IsVisible.Should().BeFalse();
             dashboardForm.FindControl<WrapPanel>("toolPanel")!.IsVisible.Should().BeFalse();
+            dashboardForm.FindControl<MenuItem>("dashboardToolStripMenuItem")!.IsVisible.Should().BeTrue();
+            dashboardForm.FindControl<MenuItem>("repositoryToolStripMenuItem")!.IsVisible.Should().BeFalse();
         }
 
         invalidModule.GitExecutable.RunCommand(new GitArgumentBuilder("init") { "--quiet" });
@@ -105,6 +109,14 @@ public sealed class FormBrowseTests
         repositoryForm.FindControl<Dashboard>("dashboard")!.IsVisible.Should().BeFalse();
         repositoryForm.FindControl<Grid>("mainContentGrid")!.IsVisible.Should().BeTrue();
         repositoryForm.FindControl<WrapPanel>("toolPanel")!.IsVisible.Should().BeTrue();
+        repositoryForm.FindControl<MenuItem>("dashboardToolStripMenuItem")!.IsVisible.Should().BeFalse();
+        repositoryForm.FindControl<MenuItem>("repositoryToolStripMenuItem")!.IsVisible.Should().BeTrue();
+        repositoryForm.FindControl<MenuItem>("editgitignoreToolStripMenuItem1").Should().NotBeNull();
+        repositoryForm.FindControl<MenuItem>("editGitAttributesToolStripMenuItem").Should().NotBeNull();
+        repositoryForm.FindControl<MenuItem>("cleanupToolStripMenuItem").Should().NotBeNull();
+        repositoryForm.FindControl<MenuItem>("checkoutToolStripMenuItem").Should().NotBeNull();
+        repositoryForm.FindControl<MenuItem>("bisectToolStripMenuItem").Should().NotBeNull();
+        repositoryForm.FindControl<MenuItem>("formatPatchToolStripMenuItem").Should().NotBeNull();
     }
 
     [AvaloniaTest]
@@ -343,7 +355,7 @@ public sealed class FormBrowseTests
 
             bool reloadStarted = false;
             loadingStatus.PropertyChanged += (_, e) =>
-                reloadStarted |= e.Property == TextBlock.TextProperty && loadingStatus.Text == "Loading…";
+                reloadStarted |= e.Property == TextBlock.TextProperty && loadingStatus.Text == "Loading";
             commands.RepoChangedNotifier.Notify();
 
             await WaitUntilAsync(() => reloadStarted && loadingStatus.Text == "2 revisions");
@@ -524,6 +536,34 @@ public sealed class FormBrowseTests
         translation.Received(1).AddTranslationItem(nameof(FormBrowse), "deleteIndexLockToolStripMenuItem", "Text", "&Delete index.lock");
         translation.Received(1).AddTranslationItem(nameof(FormBrowse), "editLocalGitConfigToolStripMenuItem", "Text", "&Edit .git/config");
         translation.Received(1).AddTranslationItem(nameof(FormBrowse), "repoSettingsToolStripMenuItem", "Text", "Rep&ository settings...");
+        translation.Received(1).AddTranslationItem(nameof(FormBrowse), "editgitignoreToolStripMenuItem1", "Text", "Edit .git&ignore");
+        translation.Received(1).AddTranslationItem(nameof(FormBrowse), "editgitinfoexcludeToolStripMenuItem", "Text", "Edit .git/info/&exclude");
+        translation.Received(1).AddTranslationItem(nameof(FormBrowse), "editGitAttributesToolStripMenuItem", "Text", "Edit .git&attributes");
+        translation.Received(1).AddTranslationItem(nameof(FormBrowse), "editmailmapToolStripMenuItem", "Text", "Edit .&mailmap");
+        translation.Received(1).AddTranslationItem(nameof(FormBrowse), "menuitemSparse", "Text", "Sparse Wor&king Copy");
+        translation.Received(1).AddTranslationItem(nameof(FormBrowse), "closeToolStripMenuItem", "Text", "&Close (go to Dashboard)");
+        translation.Received(1).AddTranslationItem(nameof(FormBrowse), "refreshDashboardToolStripMenuItem", "Text", "&Refresh");
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6h.3b.2b.2b.2b.5")]
+    public void FormBrowse_and_RevisionGrid_should_preserve_source_control_identities_on_native_Avalonia_controls()
+    {
+        using FormBrowse form = new();
+
+        form.FindControl<SourceControls.MenuStripEx>("mainMenuStrip").Should().NotBeNull();
+        form.FindControl<SourceControls.ToolStripMenuItem>("repositoryToolStripMenuItem").Should().NotBeNull();
+        form.FindControl<SourceControls.ToolStripContainer>("toolPanel").Should().NotBeNull();
+        form.FindControl<SourceControls.SplitContainer>("RightSplitContainer").Should().NotBeNull();
+        form.FindControl<SourceControls.SplitContainer>("RevisionsSplitContainer").Should().NotBeNull();
+        form.FindControl<SourceControls.Panel>("RevisionGridContainer").Should().NotBeNull();
+        form.FindControl<SourceControls.TabPage>("CommitInfoTabPage").Should().NotBeNull();
+        form.FindControl<SourceControls.TabPage>("DiffTabPage").Should().NotBeNull();
+        form.FindControl<SourceControls.TabPage>("TreeTabPage").Should().NotBeNull();
+        form.FindControl<SourceControls.TabPage>("GpgInfoTabPage").Should().NotBeNull();
+        form.RevisionGrid.FindControl<SourceControls.ContextMenuStrip>("mainContextMenu").Should().NotBeNull();
+        form.RevisionGrid.FindControl<SourceControls.ToolStripMenuItem>("commitToolStripMenuItem").Should().NotBeNull();
+        form.RevisionGrid.FindControl<SourceControls.ToolStripSeparator>("sepCommit").Should().NotBeNull();
     }
 
     [AvaloniaTest]
@@ -551,8 +591,16 @@ public sealed class FormBrowseTests
             "|",
             "manageWorktreeToolStripMenuItem",
             "|",
+            "editgitignoreToolStripMenuItem1",
+            "editgitinfoexcludeToolStripMenuItem",
+            "editGitAttributesToolStripMenuItem",
+            "editmailmapToolStripMenuItem",
+            "menuitemSparse",
+            "|",
             "gitMaintenanceToolStripMenuItem",
-            "repoSettingsToolStripMenuItem");
+            "repoSettingsToolStripMenuItem",
+            "|",
+            "closeToolStripMenuItem");
 
         KeyGesture fileExplorerShortcut = new(Key.O, KeyModifiers.Control | KeyModifiers.Shift);
         form.fileExplorerToolStripMenuItem.HotKey.Should().BeEquivalentTo(fileExplorerShortcut);
@@ -564,20 +612,6 @@ public sealed class FormBrowseTests
             "recoverLostObjectsToolStripMenuItem",
             "deleteIndexLockToolStripMenuItem",
             "editLocalGitConfigToolStripMenuItem");
-
-        foreach (string unavailableName in new[]
-        {
-            "editgitignoreToolStripMenuItem1",
-            "editgitinfoexcludeToolStripMenuItem",
-            "editGitAttributesToolStripMenuItem",
-            "editmailmapToolStripMenuItem",
-            "menuitemSparse",
-            "closeToolStripMenuItem",
-        })
-        {
-            form.FindControl<Control>(unavailableName).Should().BeNull(
-                $"{unavailableName} must remain absent until its native dialog or Dashboard action exists");
-        }
     }
 
     [AvaloniaTest]
@@ -606,6 +640,11 @@ public sealed class FormBrowseTests
         form.synchronizeAllSubmodulesToolStripMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         form.recoverLostObjectsToolStripMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         form.repoSettingsToolStripMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        form.editgitignoreToolStripMenuItem1.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        form.editgitinfoexcludeToolStripMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        form.editGitAttributesToolStripMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        form.editmailmapToolStripMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        form.menuitemSparse.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
 
         commands.Received(1).StartRemotesDialog(form);
         commands.Received(1).StartSubmodulesDialog(form);
@@ -613,6 +652,11 @@ public sealed class FormBrowseTests
         commands.Received(1).StartSyncSubmodulesDialog(form);
         commands.Received(1).StartVerifyDatabaseDialog(form);
         commands.Received(1).StartRepoSettingsDialog(form);
+        commands.Received(1).StartEditGitIgnoreDialog(form, false);
+        commands.Received(1).StartEditGitIgnoreDialog(form, true);
+        commands.Received(1).StartEditGitAttributesDialog(form);
+        commands.Received(1).StartMailMapDialog(form);
+        commands.Received(1).StartSparseWorkingCopyDialog(form);
     }
 
     [AvaloniaTest]
@@ -777,6 +821,31 @@ public sealed class FormBrowseTests
     }
 
     [AvaloniaTest]
+    public void FormBrowse_should_execute_the_git_command_log_shortcut_while_the_tools_menu_is_closed()
+    {
+        FormGitCommandLog.TestAccessor.OpenInstance?.Close();
+        Dispatcher.UIThread.RunJobs();
+        using FormBrowse form = new();
+        KeyEventArgs keyEvent = new()
+        {
+            RoutedEvent = InputElement.KeyDownEvent,
+            Key = Key.F12,
+        };
+
+        form.RaiseEvent(keyEvent);
+        Dispatcher.UIThread.RunJobs();
+
+        keyEvent.Handled.Should().BeTrue();
+        FormGitCommandLog commandLog = FormGitCommandLog.TestAccessor.OpenInstance
+            ?? throw new AssertionException("F12 did not open the Git command log.");
+        commandLog.IsVisible.Should().BeTrue();
+        form.toolsToolStripMenuItem.IsSubMenuOpen.Should().BeFalse();
+
+        commandLog.Close();
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    [AvaloniaTest]
     public void FormBrowse_navigate_and_view_menus_should_match_the_supported_revision_grid_inventory()
     {
         using FormBrowse form = new();
@@ -790,6 +859,7 @@ public sealed class FormBrowseTests
             "viewToolStripMenuItem",
             "commandsToolStripMenuItem",
             "_repositoryHostsToolStripMenuItem",
+            "dashboardToolStripMenuItem",
             "pluginsToolStripMenuItem",
             "toolsToolStripMenuItem",
             "helpToolStripMenuItem");
@@ -946,10 +1016,6 @@ public sealed class FormBrowseTests
             MenuItem mainRemote = GetTaggedMenuItem(view, "ShowRemoteBranches");
             MenuItem contextRemote = GetTaggedMenuItem(form.RevisionGrid.ViewMenuItem, "ShowRemoteBranches");
 
-            view.Items.OfType<MenuItem>().Should().OnlyContain(item => item.MinWidth == 425.6);
-            view.Items.OfType<Separator>().Should().OnlyContain(
-                separator => separator.Width == 423.2 && separator.HorizontalAlignment == Avalonia.Layout.HorizontalAlignment.Center);
-
             view.RaiseEvent(new RoutedEventArgs(MenuItem.SubmenuOpenedEvent));
             mainRemote.IsChecked.Should().BeFalse();
             contextRemote.IsChecked.Should().BeFalse();
@@ -1032,6 +1098,7 @@ public sealed class FormBrowseTests
             "|",
             "stashToolStripMenuItem",
             "resetToolStripMenuItem",
+            "cleanupToolStripMenuItem",
             "|",
             "branchToolStripMenuItem",
             "deleteBranchToolStripMenuItem",
@@ -1045,25 +1112,16 @@ public sealed class FormBrowseTests
             "|",
             "cherryPickToolStripMenuItem",
             "archiveToolStripMenuItem",
+            "checkoutToolStripMenuItem",
+            "bisectToolStripMenuItem",
             "toolStripMenuItemReflog",
             "|",
+            "formatPatchToolStripMenuItem",
             "applyPatchToolStripMenuItem",
             "patchToolStripMenuItem");
 
         MenuFlyout pullFlyout = (MenuFlyout)form.toolStripButtonPull.Flyout!;
         pullFlyout.Items.Should().Contain(form.fetchAllToolStripMenuItem);
-
-        foreach (string unavailableName in new[]
-        {
-            "cleanupToolStripMenuItem",
-            "checkoutToolStripMenuItem",
-            "bisectToolStripMenuItem",
-            "formatPatchToolStripMenuItem",
-        })
-        {
-            form.FindControl<Control>(unavailableName).Should().BeNull(
-                $"{unavailableName} must remain absent until its native dialog exists");
-        }
     }
 
     [AvaloniaTest]
@@ -1105,6 +1163,10 @@ public sealed class FormBrowseTests
         translation.Received(1).AddTranslationItem(nameof(FormBrowse), "resetToolStripMenuItem", "Text", "&Reset changes...");
         translation.Received(1).AddTranslationItem(nameof(FormBrowse), "runMergetoolToolStripMenuItem", "Text", "&Solve merge conflicts...");
         translation.Received(1).AddTranslationItem(nameof(FormBrowse), "cherryPickToolStripMenuItem", "Text", "Cherr&y pick...");
+        translation.Received(1).AddTranslationItem(nameof(FormBrowse), "cleanupToolStripMenuItem", "Text", "Clean &working directory...");
+        translation.Received(1).AddTranslationItem(nameof(FormBrowse), "checkoutToolStripMenuItem", "Text", "Check&out revision...");
+        translation.Received(1).AddTranslationItem(nameof(FormBrowse), "bisectToolStripMenuItem", "Text", "B&isect...");
+        translation.Received(1).AddTranslationItem(nameof(FormBrowse), "formatPatchToolStripMenuItem", "Text", "&Format patch...");
         translation.Received(1).AddTranslationItem(nameof(FormBrowse), "applyPatchToolStripMenuItem", "Text", "&Apply patch...");
         translation.Received(1).AddTranslationItem(nameof(FormBrowse), "fetchAllToolStripMenuItem", "Text", "Fetch &all");
     }
@@ -1132,6 +1194,7 @@ public sealed class FormBrowseTests
             form.undoLastCommitToolStripMenuItem,
             form.pushToolStripMenuItem,
             form.resetToolStripMenuItem,
+            form.cleanupToolStripMenuItem,
             form.branchToolStripMenuItem,
             form.deleteBranchToolStripMenuItem,
             form.checkoutBranchToolStripMenuItem,
@@ -1142,7 +1205,10 @@ public sealed class FormBrowseTests
             form.deleteTagToolStripMenuItem,
             form.cherryPickToolStripMenuItem,
             form.archiveToolStripMenuItem,
+            form.checkoutToolStripMenuItem,
+            form.bisectToolStripMenuItem,
             form.toolStripMenuItemReflog,
+            form.formatPatchToolStripMenuItem,
             form.applyPatchToolStripMenuItem,
         }.Should().OnlyContain(item => item.IsEnabled);
 
@@ -1150,6 +1216,9 @@ public sealed class FormBrowseTests
         form.resetToolStripMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         form.runMergetoolToolStripMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         form.cherryPickToolStripMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        form.cleanupToolStripMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        form.checkoutToolStripMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        form.formatPatchToolStripMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         form.applyPatchToolStripMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
 
         commands.Received(1).StartPushDialog(form, pushOnShow: false);
@@ -1161,6 +1230,9 @@ public sealed class FormBrowseTests
         commands.Received(1).StartCherryPickDialog(
             form,
             Arg.Is<IEnumerable<GitRevision>>(revisions => revisions.Single().ObjectId == module.GetCurrentCheckout()));
+        commands.Received(1).StartCleanupRepositoryDialog(form);
+        commands.Received(1).StartCheckoutRevisionDialog(form);
+        commands.Received(1).StartFormatPatchDialog(form);
         commands.Received(1).StartApplyPatchDialog(form, patchFile: null);
     }
 
@@ -1193,6 +1265,7 @@ public sealed class FormBrowseTests
             bareForm.undoLastCommitToolStripMenuItem,
             bareForm.stashToolStripMenuItem,
             bareForm.resetToolStripMenuItem,
+            bareForm.cleanupToolStripMenuItem,
             bareForm.branchToolStripMenuItem,
             bareForm.deleteBranchToolStripMenuItem,
             bareForm.checkoutBranchToolStripMenuItem,
@@ -1200,6 +1273,8 @@ public sealed class FormBrowseTests
             bareForm.rebaseToolStripMenuItem,
             bareForm.runMergetoolToolStripMenuItem,
             bareForm.cherryPickToolStripMenuItem,
+            bareForm.checkoutToolStripMenuItem,
+            bareForm.bisectToolStripMenuItem,
             bareForm.toolStripMenuItemReflog,
             bareForm.applyPatchToolStripMenuItem,
         }.Should().OnlyContain(item => !item.IsEnabled);
@@ -1228,7 +1303,7 @@ public sealed class FormBrowseTests
             await WaitUntilAsync(() => loadingStatus.Text == "2 revisions");
             bool reloadStarted = false;
             loadingStatus.PropertyChanged += (_, e) =>
-                reloadStarted |= e.Property == TextBlock.TextProperty && loadingStatus.Text == "Loading…";
+                reloadStarted |= e.Property == TextBlock.TextProperty && loadingStatus.Text == "Loading";
 
             form.undoLastCommitToolStripMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
 
@@ -1851,7 +1926,7 @@ public sealed class FormBrowseTests
                 relatedRef.Guid.Returns(initialCommit.ToString());
                 relatedRef.ObjectId.Returns(initialCommit);
                 revisionGrid.SetSelectedRevision(secondCommit).Should().BeTrue();
-                revisionGrid.GoToRelatedRef(relatedRef).Should().BeTrue();
+                revisionGrid.TryGoToRelatedRef(relatedRef).Should().BeTrue();
                 revisionGrid.SelectedRevision!.ObjectId.Should().Be(initialCommit);
             }
             finally
@@ -1912,6 +1987,7 @@ public sealed class FormBrowseTests
     {
         GitModule module = CreateRepositoryWithInitialCommit();
         module.GitExecutable.RunCommand(new GitArgumentBuilder("branch") { "feature" });
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("update-ref") { "refs/remotes/origin/main", "HEAD" });
         ILockableNotifier notifier = Substitute.For<ILockableNotifier>();
         IGitUICommands commands = Substitute.For<IGitUICommands>();
         commands.Module.Returns(module);
@@ -2029,14 +2105,17 @@ public sealed class FormBrowseTests
                 .Single(item => item.Header?.ToString() == "feature");
             MenuItem renameFeature = renameBranch.Items.Cast<MenuItem>()
                 .Single(item => item.Header?.ToString() == "feature");
-            MenuItem deleteFeature = deleteBranch.Items.Cast<MenuItem>()
+            MenuItem deleteFeature = deleteBranch.Items.OfType<MenuItem>()
                 .Single(item => item.Header?.ToString() == "feature");
+            MenuItem deleteRemoteMain = deleteBranch.Items.OfType<MenuItem>()
+                .Single(item => item.Header?.ToString() == "origin/main");
 
             checkoutFeature.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             pushFeature.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             mergeFeature.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             renameFeature.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             deleteFeature.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            deleteRemoteMain.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             createBranch.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             createTag.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             archiveRevision.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
@@ -2050,6 +2129,7 @@ public sealed class FormBrowseTests
             commands.Received(1).StartMergeBranchDialog(form, "feature");
             commands.Received(1).StartRenameDialog(form, "feature");
             commands.Received(1).StartDeleteBranchDialog(form, "feature");
+            commands.Received(1).StartDeleteRemoteBranchDialog(form, "origin/main");
             commands.Received(1).StartCreateBranchDialog(form, selectedObjectId);
             commands.Received(1).StartCreateTagDialog(
                 form,

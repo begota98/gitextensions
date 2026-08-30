@@ -1,4 +1,4 @@
-﻿using Avalonia.Controls;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -12,8 +12,6 @@ using ResourceManager.Hotkey;
 using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace ResourceManager;
-
-// NOTE do not make this class abstract as it breaks the Avalonia designer
 
 /// <summary>
 /// Base class for all Git Extensions forms.
@@ -149,14 +147,31 @@ public class GitExtensionsFormBase : Window, ITranslate, WinFormsShims.IWin32Win
 
     protected override void OnOpened(EventArgs e)
     {
+        // Avalonia exposes Opened rather than WinForms' separate Load and Shown hooks.
+        // Preserve their one-shot ordering and overridable method boundaries for ported forms.
+        bool raiseRuntimeLifecycle = !Design.IsDesignMode && !_runtimeLoadRaised;
+        if (raiseRuntimeLifecycle)
+        {
+            _runtimeLoadRaised = true;
+            OnLoad(e);
+        }
+
         base.OnOpened(e);
 
         // Avalonia's preview host opens the window; design mode must never start runtime work.
-        if (!Design.IsDesignMode && !_runtimeLoadRaised)
+        if (raiseRuntimeLifecycle)
         {
-            _runtimeLoadRaised = true;
             OnRuntimeLoad(e);
+            OnShown(e);
         }
+    }
+
+    protected virtual void OnLoad(EventArgs e)
+    {
+    }
+
+    protected virtual void OnShown(EventArgs e)
+    {
     }
 
     private void GitExtensionsFormBase_Activated(object? sender, EventArgs e)
@@ -185,10 +200,19 @@ public class GitExtensionsFormBase : Window, ITranslate, WinFormsShims.IWin32Win
     }
 
     /// <summary>
-    /// Notifies whenever the application becomes active.
+    /// Checks if the form wants to handle the key and executes that hotkey
+    /// (without propagating an unhandled key to the base class function as in <cref>ProcessCmdKey</cref>).
     /// </summary>
-    protected virtual void OnApplicationActivated()
+    public virtual bool ProcessHotkey(WinFormsShims.Keys keyData)
     {
+        // Avalonia maps modifier-only and unsupported key events to None; None is not an assignable hotkey.
+        if (!HotkeysEnabled || keyData == WinFormsShims.Keys.None)
+        {
+            return false;
+        }
+
+        HotkeyCommand? hotkey = _hotkeys.FirstOrDefault(hotkey => hotkey.KeyData == keyData);
+        return hotkey is not null && ExecuteCommand(hotkey.CommandCode);
     }
 
     protected bool IsDesignMode => Design.IsDesignMode;
@@ -240,19 +264,10 @@ public class GitExtensionsFormBase : Window, ITranslate, WinFormsShims.IWin32Win
         where T : struct, Enum
         => _hotkeys.GetShortcutToolTip(commandCode);
 
-    /// <summary>
-    /// Checks if the form wants to handle the key and executes that hotkey
-    /// (without propagating an unhandled key to the base class function as in <cref>ProcessCmdKey</cref>).
-    /// </summary>
-    public virtual bool ProcessHotkey(WinFormsShims.Keys keyData)
+    /// <summary>Override this method to handle form-specific Hotkey commands.</summary>
+    protected virtual bool ExecuteCommand(int command)
     {
-        if (!HotkeysEnabled)
-        {
-            return false;
-        }
-
-        HotkeyCommand? hotkey = _hotkeys.FirstOrDefault(hotkey => hotkey.KeyData == keyData);
-        return hotkey is not null && ExecuteCommand(hotkey.CommandCode);
+        return false;
     }
 
     /// <summary>
@@ -271,10 +286,18 @@ public class GitExtensionsFormBase : Window, ITranslate, WinFormsShims.IWin32Win
         return false;
     }
 
-    /// <summary>Override this method to handle form-specific Hotkey commands.</summary>
-    protected virtual bool ExecuteCommand(int command)
+    /// <summary>Performs post-initialisation tasks such as translation and DPI scaling.</summary>
+    /// <remarks>
+    /// <para>Subclasses must ensure this method is called in their constructor, ideally as the final statement.</para>
+    /// <para>Requiring this extra life-cycle event allows preparing the UI after any call to <c>InitializeComponent</c>,
+    /// but before it is show. Both the WinForms <c>Load</c> and <c>Shown</c> events occur too late for
+    /// operations that effect layout.</para>
+    /// </remarks>
+    protected void InitializeComplete()
     {
-        return false;
+        Translator.Translate(this, AppSettings.CurrentTranslation);
+        AvaloniaTranslationUtils.RemoveTextBlockMnemonicMarkers(this);
+        InputAccessibility.Apply(this);
     }
 
     /// <summary>Controls the shared Escape-to-close behavior; the repository browser opts out.</summary>
@@ -314,18 +337,9 @@ public class GitExtensionsFormBase : Window, ITranslate, WinFormsShims.IWin32Win
         base.OnKeyDown(e);
     }
 
-    /// <summary>Performs post-initialisation tasks such as translation and DPI scaling.</summary>
-    /// <remarks>
-    /// <para>Subclasses must ensure this method is called in their constructor, ideally as the final statement.</para>
-    /// <para>Requiring this extra life-cycle event allows preparing the UI after any call to <c>InitializeComponent</c>,
-    /// but before it is show. Both the WinForms <c>Load</c> and <c>Shown</c> events occur too late for
-    /// operations that effect layout.</para>
-    /// </remarks>
-    protected void InitializeComplete()
+    public virtual void AddTranslationItems(ITranslation translation)
     {
-        Translator.Translate(this, AppSettings.CurrentTranslation);
-        AvaloniaTranslationUtils.RemoveTextBlockMnemonicMarkers(this);
-        InputAccessibility.Apply(this);
+        AvaloniaTranslationUtils.AddTranslationItemsFromFields(GetType().Name, this, translation);
     }
 
     void IDisposable.Dispose()
@@ -333,13 +347,15 @@ public class GitExtensionsFormBase : Window, ITranslate, WinFormsShims.IWin32Win
         GC.SuppressFinalize(this);
     }
 
-    public virtual void AddTranslationItems(ITranslation translation)
-    {
-        AvaloniaTranslationUtils.AddTranslationItemsFromFields(GetType().Name, this, translation);
-    }
-
     public virtual void TranslateItems(ITranslation translation)
     {
         AvaloniaTranslationUtils.TranslateItemsFromFields(GetType().Name, this, translation);
+    }
+
+    /// <summary>
+    /// Notifies whenever the application becomes active.
+    /// </summary>
+    protected virtual void OnApplicationActivated()
+    {
     }
 }

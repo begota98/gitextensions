@@ -9,6 +9,7 @@ using GitUI.Compat;
 using GitUI.Properties;
 using GitUI.UserControls;
 using Microsoft.VisualStudio.Threading;
+using Brush = Avalonia.Media.IBrush;
 
 namespace GitUI.CommandsDialogs;
 
@@ -22,7 +23,7 @@ partial class FormBrowse
     {
         if (_hasRuntimeCommands)
         {
-            commandsToolStripMenuItem.SubmenuOpened += CommandsToolStripMenuItem_SubmenuOpened;
+            commandsToolStripMenuItem.SubmenuOpened += CommandsToolStripMenuItem_DropDownOpening;
         }
 
         InitFilters();
@@ -104,12 +105,18 @@ partial class FormBrowse
     }
 
     private void UpdateTooltipWithShortcut(Control button, Command command)
-        => UpdateTooltipWithShortcut(button, KeysMapper.ToKeyGesture(GetShortcutKeys(command)));
+        => UpdateTooltipWithShortcut(button, GetShortcutKeyTooltipString(command));
 
     private static void UpdateTooltipWithShortcut(Control button, KeyGesture? keys)
+        => UpdateTooltipWithShortcut(button, keys is null ? string.Empty : $"({keys})");
+
+    private static void UpdateTooltipWithShortcut(Control button, string shortcut)
     {
-        string text = ToolTip.GetTip(button)?.ToString() ?? button.Name ?? string.Empty;
-        ToolTip.SetTip(button, keys is null ? text : $"{text} ({keys})");
+        string text = ToolTip.GetTip(button)?.ToString()
+            ?? (button as ContentControl)?.Content?.ToString()
+            ?? button.Name
+            ?? string.Empty;
+        ToolTip.SetTip(button, text.UpdateSuffix(shortcut));
     }
 
     private void InsertFetchPullShortcuts()
@@ -139,9 +146,7 @@ partial class FormBrowse
             Avalonia.Automation.AutomationProperties.SetName(clonedToolStripMenuItem, toolTipText);
             ToolTip.SetTip(
                 clonedToolStripMenuItem,
-                command.HasValue
-                    ? $"{toolTipText} ({GetShortcutKeyTooltipString(command.Value)})"
-                    : toolTipText);
+                toolTipText.UpdateSuffix(command.HasValue ? GetShortcutKeyTooltipString(command.Value) : null!));
 
             clonedToolStripMenuItem.Click += (_, _) => toolStripMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             return clonedToolStripMenuItem;
@@ -239,9 +244,7 @@ partial class FormBrowse
         defaultPullFetchAllToolStripMenuItem.IsVisible = hasMultipleRemotes;
     }
 
-    private Avalonia.Media.IBrush UpdateCommitButtonAndGetBrush(
-        IReadOnlyList<GitItemStatus>? status,
-        bool showCount)
+    private Brush UpdateCommitButtonAndGetBrush(IReadOnlyList<GitItemStatus>? status, bool showCount)
     {
         RepoStateVisualiser repoStateVisualiser = new();
         (Avalonia.Media.IImage image, Avalonia.Media.IBrush brush) = repoStateVisualiser.Invoke(status);

@@ -97,6 +97,8 @@ internal sealed class WorktreeTree : Tree
             }
 
             hasDirectorySeparator = hasDirectorySeparator || span.ContainsAny(DirectorySeparatorChars);
+
+            // Find the longest character-for-character match.
             int limit = Math.Min(prefix.Length, span.Length);
             int matchLength = 0;
             for (int i = 0; i < limit; i++)
@@ -117,12 +119,16 @@ internal sealed class WorktreeTree : Tree
             return string.Empty;
         }
 
+        // Snap to the last directory separator in the common prefix.
         int directorySeparatorIndex = prefix.LastIndexOfAny(DirectorySeparatorChars);
         if (directorySeparatorIndex >= 0)
         {
             return prefix[..(directorySeparatorIndex + 1)].ToString();
         }
 
+        // Fall back to word-boundary characters only when none of the paths contain
+        // directory separators. This handles the case where all worktrees are flat
+        // siblings in the same directory (e.g. "repo_dev", "repo_test").
         if (hasDirectorySeparator)
         {
             return string.Empty;
@@ -131,6 +137,12 @@ internal sealed class WorktreeTree : Tree
         int boundaryIndex = prefix.LastIndexOfAny(WordBoundaryChars);
         return boundaryIndex < 0 ? string.Empty : prefix[..(boundaryIndex + 1)].ToString();
     }
+
+    private static readonly SearchValues<char> DirectorySeparatorChars = SearchValues.Create(
+        [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]);
+
+    private static readonly SearchValues<char> WordBoundaryChars = SearchValues.Create(
+        ['_', '-', '.', ' ']);
 
     public void CreateWorktree(IWin32Window owner)
     {
@@ -159,10 +171,4 @@ internal sealed class WorktreeTree : Tree
             UICommands.RepoChangedNotifier.Notify();
         }
     }
-
-    private static readonly SearchValues<char> DirectorySeparatorChars = SearchValues.Create(
-        [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]);
-
-    private static readonly SearchValues<char> WordBoundaryChars = SearchValues.Create(
-        ['_', '-', '.', ' ']);
 }

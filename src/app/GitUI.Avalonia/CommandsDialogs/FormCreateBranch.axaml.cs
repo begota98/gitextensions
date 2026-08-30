@@ -111,10 +111,9 @@ public sealed partial class FormCreateBranch : GitExtensionsDialog
         BranchNameTextBox.CaretIndex = Math.Min(caretPosition, BranchNameTextBox.Text.Length);
     }
 
-    protected override void OnOpened(EventArgs e)
+    protected override void OnShown(EventArgs e)
     {
-        base.OnOpened(e);
-
+        base.OnShown(e);
         chkCheckoutAfterCreate.IsChecked = CheckoutAfterCreation;
         commitPicker.IsEnabled = UserAbleToChangeRevision;
         grpOrphan.IsEnabled = CouldBeOrphan;
@@ -123,6 +122,8 @@ public sealed partial class FormCreateBranch : GitExtensionsDialog
 
     private void cmdOk_Click(object? sender, EventArgs e)
     {
+        // Ok button set as the "AcceptButton" for the form
+        // if the user hits [Enter] at any point, we need to trigger BranchNameTextBox Leave event
         cmdOk.Focus();
 
         ObjectId objectId = default;
@@ -163,6 +164,7 @@ public sealed partial class FormCreateBranch : GitExtensionsDialog
             bool success = UICommands.StartGitCommandProcessDialog(this, command);
             if (chkCreateOrphan.IsChecked == true && success && chkClearOrphan.IsChecked == true)
             {
+                // orphan AND orphan creation success AND clear
                 UICommands.StartGitCommandProcessDialog(this, Commands.Remove());
             }
 

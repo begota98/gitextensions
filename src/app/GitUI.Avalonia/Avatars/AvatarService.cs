@@ -24,7 +24,8 @@ public static class AvatarService
     public static IAvatarCacheCleaner CacheCleaner { get; }
 
     /// <summary>
-    /// Updates the internal avatar provider chain to reflect the active settings.
+    /// Updates the internal avatar provider chain to
+    /// reflect the current active (according to <see cref="AppSettings"/> provider.
     /// </summary>
     public static void UpdateAvatarProvider()
     {
@@ -39,7 +40,11 @@ public static class AvatarService
         AvatarFallbackType? fallbackType,
         IAvatarDownloader? downloader = null)
     {
+        // initialize download only if needed (some options, like local providers, don't need a downloader)
+        // and use the downloader provided as parameter if possible.
         Lazy<IAvatarDownloader> lazyDownloader = new(() => downloader ?? new AvatarDownloader());
+
+        // build collection of (non-null) providers
         IAvatarProvider[] providers = [.. new[]
         {
             BuildMainProvider(),
@@ -47,6 +52,7 @@ public static class AvatarService
         }
         .WhereNotNull()];
 
+        // only create chained avatar overhead if really needed
         return providers.Length switch
         {
             0 => null,
@@ -54,6 +60,10 @@ public static class AvatarService
             _ => new ChainedAvatarProvider(providers),
         };
 
+        // 1. query GitHub (with non-reply and regular email addresses)
+        //    GitHub might internally fall back to Gravatar, so only need a single request in most cases.
+        // 2. resolve via Gravatar (for users that don't have a GitHub account)
+        //    this request also directly provides the fallback if it's Gravatar compatible.
         IAvatarProvider BuildDefaultMainProvider()
             => new ChainedAvatarProvider(
                 new GithubAvatarProvider(lazyDownloader.Value),
@@ -70,6 +80,7 @@ public static class AvatarService
             };
         }
 
+        // Local methods to build requested main and fallback providers:
         IAvatarProvider? BuildMainProvider()
         {
             return provider switch
@@ -79,11 +90,6 @@ public static class AvatarService
                 _ => null,
             };
         }
-    }
-
-    public static void UpdateAvatarInitialFontsSettings()
-    {
-        InitialsAvatarProvider.UpdateFontsSettings();
     }
 
     private static (IAvatarProvider provider, IAvatarCacheCleaner cacheCleaner) SetupCachingAndFallback()
@@ -97,5 +103,10 @@ public static class AvatarService
                 UserImageAvatarProvider));
 
         return (mainProvider, cacheCleaner);
+    }
+
+    public static void UpdateAvatarInitialFontsSettings()
+    {
+        InitialsAvatarProvider.UpdateFontsSettings();
     }
 }

@@ -523,6 +523,11 @@ internal static class SourceInventoryReader
             }
 
             string parent = Normalize(collection.Expression);
+            if (!menuNames.Contains(parent))
+            {
+                continue;
+            }
+
             List<string> children = ExtractCollectionItems(invocation).ToList();
             for (int index = 0; index < children.Count; index++)
             {
@@ -778,10 +783,18 @@ internal static class SourceInventoryReader
             }
 
             string kind = element.Name.LocalName;
-            part.Members.Add(NewMember(part.Path, part.Members.Count, "control", name, "private", kind));
+            string accessibility = (string?)element.Attribute(x + "FieldModifier") ?? "private";
+
+            // AXAML x:Name generates the field that the WinForms Designer declares explicitly.
+            part.Members.Add(NewMember(part.Path, part.Members.Count, "field", name, accessibility, $"{kind} {name}"));
+            XElement[] contentChildren = element.Elements().Take(2).ToArray();
+            bool hasNestedTextContent = contentChildren.Length == 1
+                && contentChildren[0].Name.LocalName == "TextBlock"
+                && contentChildren[0].Attribute("Text") is not null;
             string? translatedProperty = element.Attribute("Header") is not null
                 || element.Attribute("Content") is not null
                 || element.Attribute("Text") is not null
+                || hasNestedTextContent
                     ? "Text"
                     : element.Attribute("Watermark") is not null ? "Watermark" : null;
             if (translatedProperty is not null)
@@ -794,7 +807,7 @@ internal static class SourceInventoryReader
                 });
             }
 
-            if (kind is "ContextMenu" or "MenuItem")
+            if (IsMenuContainerElement(kind))
             {
                 menuNames[element] = name;
             }
@@ -804,12 +817,14 @@ internal static class SourceInventoryReader
         {
             int order = 0;
             foreach (XElement child in element.Elements()
-                         .Where(child => child.Name.LocalName is "MenuItem" or "Separator"))
+                         .Where(child => IsMenuItemElement(child.Name.LocalName)
+                             || IsMenuSeparatorElement(child.Name.LocalName)))
             {
                 string? childName = (string?)child.Attribute(x + "Name");
                 if (string.IsNullOrWhiteSpace(childName))
                 {
-                    childName = $"<{child.Name.LocalName.ToLowerInvariant()}:{order}>";
+                    string anonymousKind = IsMenuSeparatorElement(child.Name.LocalName) ? "separator" : "menuitem";
+                    childName = $"<{anonymousKind}:{order}>";
                 }
 
                 part.Menus.Add(new MenuEntry
@@ -818,13 +833,22 @@ internal static class SourceInventoryReader
                     Parent = parent,
                     Order = order++,
                     Name = childName,
-                    Kind = child.Name.LocalName == "Separator" ? "separator" : "item"
+                    Kind = IsMenuSeparatorElement(child.Name.LocalName) ? "separator" : "item"
                 });
             }
         }
 
         parts.Add(part);
     }
+
+    private static bool IsMenuContainerElement(string localName) =>
+        localName is "ContextMenu" or "ContextMenuStrip" || IsMenuItemElement(localName);
+
+    private static bool IsMenuItemElement(string localName) =>
+        localName is "MenuItem" or "ToolStripMenuItem";
+
+    private static bool IsMenuSeparatorElement(string localName) =>
+        localName is "Separator" or "ToolStripSeparator";
 
     private static TranslationKeyEntry NewTranslationKey(string key, string origin) =>
         new()

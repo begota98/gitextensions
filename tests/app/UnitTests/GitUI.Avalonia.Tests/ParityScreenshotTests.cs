@@ -9,6 +9,7 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
 using Avalonia.LogicalTree;
+using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Styling;
 using Avalonia.Threading;
@@ -18,12 +19,14 @@ using GitCommands;
 using GitCommands.ExternalLinks;
 using GitCommands.Git;
 using GitCommands.Git.Gpg;
+using GitCommands.Logging;
 using GitCommands.Settings;
 using GitCommands.Submodules;
 using GitCommands.UserRepositoryHistory;
 using GitExtensions.Extensibility;
 using GitExtensions.Extensibility.Git;
 using GitExtensions.Extensibility.Plugins;
+using GitExtensions.ParityCapture;
 using GitExtensions.Plugins.Gource;
 using GitExtUtils;
 using GitExtUtils.GitUI.Theming;
@@ -31,8 +34,10 @@ using GitUI;
 using GitUI.Avatars;
 using GitUI.Blame;
 using GitUI.CommandsDialogs;
+using GitUI.CommandsDialogs.AboutBoxDialog;
 using GitUI.CommandsDialogs.BrowseDialog;
 using GitUI.CommandsDialogs.BrowseDialog.DashboardControl;
+using GitUI.CommandsDialogs.CommitDialog;
 using GitUI.CommandsDialogs.Menus;
 using GitUI.CommandsDialogs.RepoHosting;
 using GitUI.CommandsDialogs.SettingsDialog;
@@ -46,6 +51,7 @@ using GitUI.Help;
 using GitUI.HelperDialogs;
 using GitUI.LeftPanel;
 using GitUI.ScriptsEngine;
+using GitUI.SettingControlBindings;
 using GitUI.SpellChecker;
 using GitUI.UserControls;
 using GitUI.UserControls.RevisionGrid;
@@ -66,6 +72,7 @@ namespace GitExtensionsTests;
 [TestFixture]
 public sealed partial class ParityScreenshotTests
 {
+    private static readonly ConditionalWeakTable<Control, CaptureRepositoryHostFixture> RepositoryHostCaptureFixtures = new();
     private const string CaptureCategory = "VisualParityCapture";
     private const string CaptureEnvironmentVariable = "GITEXT_CAPTURE_PARITY_SHOTS";
     private const string CaptureViewEnvironmentVariable = "GITEXT_CAPTURE_PARITY_VIEW";
@@ -164,7 +171,7 @@ public sealed partial class ParityScreenshotTests
                 await SeedStandaloneControlAsync(view, context);
             }
 
-            await WaitForAsyncViewsAsync(view);
+            await WaitForAsyncViewsAsync(view, context);
             Dispatcher.UIThread.RunJobs();
             if (view is FormBrowse formBrowse)
             {
@@ -276,6 +283,8 @@ public sealed partial class ParityScreenshotTests
         }
         finally
         {
+            ReleaseRepositoryHostCaptureFixture(view);
+            await DrainRepositoryHostCaptureAsync(view);
             window.Close();
             if (!ReferenceEquals(window, view) && view is IDisposable disposableView)
             {
@@ -297,8 +306,12 @@ public sealed partial class ParityScreenshotTests
             .Where(candidate => candidate.Contains(value, StringComparison.OrdinalIgnoreCase));
 
     // parity-scaffolding: Gives all three repository-host dialogs the WinForms capture model.
-    private static IRepositoryHostPlugin CreateRepositoryHostCaptureFixture(CaptureContext context)
+    private static CaptureRepositoryHostFixture CreateRepositoryHostCaptureFixture(
+        CaptureContext context,
+        Type viewType,
+        string stateId)
     {
+        ManualResetEventSlim providerGate = new(initialState: false);
         IHostedBranch mainBranch = Substitute.For<IHostedBranch>();
         mainBranch.Name.Returns(MainBranchName);
         mainBranch.Sha.Returns(context.ParentRevision.ObjectId);
@@ -352,7 +365,38 @@ public sealed partial class ParityScreenshotTests
             + "@@ -1 +1 @@\n"
             + "-old\n"
             + "+new\n"));
-        target.GetPullRequests().Returns([pullRequest]);
+        target.GetPullRequests().Returns(_ =>
+        {
+            if (stateId == "pull-requests.loading")
+            {
+                providerGate.Wait();
+            }
+
+            return new[] { pullRequest };
+        });
+        mine.GetPullRequests().Returns(_ =>
+        {
+            if (stateId == "pull-requests.loading")
+            {
+                providerGate.Wait();
+            }
+
+            return Array.Empty<IPullRequestInformation>();
+        });
+
+        if (stateId == "branches.loading")
+        {
+            mine.GetBranches().Returns(_ =>
+            {
+                providerGate.Wait();
+                return new[] { mainBranch, featureBranch };
+            });
+            target.GetBranches().Returns(_ =>
+            {
+                providerGate.Wait();
+                return new[] { mainBranch, featureBranch };
+            });
+        }
 
         IHostedRemote targetRemote = CreateHostedRemote("origin", target, isOwnedByMe: false);
         IHostedRemote mineRemote = CreateHostedRemote("contributor", mine, isOwnedByMe: true);
@@ -360,10 +404,42 @@ public sealed partial class ParityScreenshotTests
         host.Name.Returns("Parity Host");
         host.ConfigurationOk.Returns(true);
         host.OwnerLogin.Returns("contributor");
-        host.GetMyRepos().Returns([mine]);
+        host.GetMyRepos().Returns(_ =>
+        {
+            if (viewType == typeof(ForkAndCloneForm) && stateId == "initial.loading")
+            {
+                providerGate.Wait();
+            }
+
+            if (stateId == "owned.error")
+            {
+                throw new InvalidOperationException("Deterministic owned repository failure.");
+            }
+
+            return new[] { mine };
+        });
         host.SearchForRepository(Arg.Any<string>()).Returns([target]);
-        host.GetHostedRemotesForModule().Returns([targetRemote, mineRemote]);
-        return host;
+        IReadOnlyList<IHostedRemote> remotes = [targetRemote, mineRemote];
+        host.GetHostedRemotesForModule().Returns(_ =>
+        {
+            if (stateId == "provider.empty")
+            {
+                return [];
+            }
+
+            if (viewType == typeof(ViewPullRequestsForm) && stateId == "initial.loading")
+            {
+                providerGate.Wait();
+            }
+
+            if (viewType == typeof(CreatePullRequestForm) && stateId == "initial.loading")
+            {
+                return new BlockingReadOnlyList<IHostedRemote>(remotes, providerGate);
+            }
+
+            return remotes;
+        });
+        return new CaptureRepositoryHostFixture(host, providerGate);
     }
 
     private static IHostedRepository CreateHostedRepository(
@@ -396,24 +472,42 @@ public sealed partial class ParityScreenshotTests
         IHostedRepository repository,
         bool isOwnedByMe)
     {
+        // parity-scaffolding: Read nested substitutes before configuring the remote; interpolating
+        // substitute calls inside Returns can accidentally configure the repository's last call.
+        string owner = repository.Owner ?? string.Empty;
+        string repositoryName = repository.Name;
+        string cloneUrl = repository.CloneUrl;
         IHostedRemote remote = Substitute.For<IHostedRemote>();
         remote.Name.Returns(name);
-        remote.Data.Returns($"{repository.Owner}/{repository.Name}");
-        remote.DisplayData.Returns($"{remote.Data} ({name})");
+        remote.Data.Returns($"{owner}/{repositoryName}");
+        remote.DisplayData.Returns($"{owner}/{repositoryName} ({name})");
         remote.IsOwnedByMe.Returns(isOwnedByMe);
-        remote.Owner.Returns(repository.Owner);
-        remote.RemoteRepositoryName.Returns(repository.Name);
-        remote.RemoteUrl.Returns(repository.CloneUrl);
+        remote.Owner.Returns(owner);
+        remote.RemoteRepositoryName.Returns(repositoryName);
+        remote.RemoteUrl.Returns(cloneUrl);
         remote.CloneProtocol.Returns(GitProtocol.Https);
         remote.GetHostedRepository().Returns(repository);
         return remote;
     }
 
-    private static Control CreateView(CaptureContext context, Type viewType)
+    private static Control CreateView(CaptureContext context, Type viewType, CaptureStatePlan? captureState = null)
     {
+        // parity-scaffolding: The real application initialises this before constructing About/EnvironmentInfo.
+        UserEnvironmentInformation.Initialise("9999999999999999999999999999999999abcdef", isDirty: true);
+
         if (viewType == typeof(SimplePrompt))
         {
             return new SimplePrompt("Script input", "Branch name", FeatureBranchName);
+        }
+
+        if (viewType == typeof(SettingControlBindingsCaptureSurface))
+        {
+            return new SettingControlBindingsCaptureSurface();
+        }
+
+        if (viewType == typeof(SettingControlBindingsNullCaptureSurface))
+        {
+            return new SettingControlBindingsNullCaptureSurface();
         }
 
         if (viewType == typeof(FormFilePrompt))
@@ -437,24 +531,42 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(CreatePullRequestForm))
         {
-            return new CreatePullRequestForm(
+            CaptureRepositoryHostFixture fixture = CreateRepositoryHostCaptureFixture(
+                context,
+                viewType,
+                captureState?.Id ?? "normal");
+            CreatePullRequestForm form = new(
                 context.Commands,
-                CreateRepositoryHostCaptureFixture(context),
-                chooseRemote: "origin",
-                chooseBranch: FeatureBranchName);
+                fixture.Host,
+                chooseRemote: null,
+                chooseBranch: null);
+            RepositoryHostCaptureFixtures.Add(form, fixture);
+            return form;
         }
 
         if (viewType == typeof(ForkAndCloneForm))
         {
-            return new ForkAndCloneForm(
+            CaptureRepositoryHostFixture fixture = CreateRepositoryHostCaptureFixture(
+                context,
+                viewType,
+                captureState?.Id ?? "normal");
+            ForkAndCloneForm form = new(
                 context.Commands,
-                CreateRepositoryHostCaptureFixture(context),
+                fixture.Host,
                 gitModuleChanged: null);
+            RepositoryHostCaptureFixtures.Add(form, fixture);
+            return form;
         }
 
         if (viewType == typeof(ViewPullRequestsForm))
         {
-            return new ViewPullRequestsForm(context.Commands, CreateRepositoryHostCaptureFixture(context));
+            CaptureRepositoryHostFixture fixture = CreateRepositoryHostCaptureFixture(
+                context,
+                viewType,
+                captureState?.Id ?? "normal");
+            ViewPullRequestsForm form = new(context.Commands, fixture.Host);
+            RepositoryHostCaptureFixtures.Add(form, fixture);
+            return form;
         }
 
         if (viewType == typeof(HotkeysSettingsPage))
@@ -474,6 +586,90 @@ public sealed partial class ParityScreenshotTests
         if (viewType == typeof(FormBrowse))
         {
             return new FormBrowse(context.Commands);
+        }
+
+        if (viewType == typeof(FormCleanupRepository))
+        {
+            return new FormCleanupRepository(context.Commands);
+        }
+
+        if (viewType == typeof(FormBisect))
+        {
+            RevisionGridControl revisionGrid = new() { UICommandsSource = context };
+            return new FormBisect(revisionGrid);
+        }
+
+        if (viewType == typeof(FormSparseWorkingCopy))
+        {
+            return new FormSparseWorkingCopy(context.Commands);
+        }
+
+        if (viewType == typeof(FormDeleteRemoteBranch))
+        {
+            return new FormDeleteRemoteBranch(context.Commands, "origin/feature/delete-me");
+        }
+
+        if (viewType == typeof(FormResetAnotherBranch))
+        {
+            return FormResetAnotherBranch.Create(context.Commands, context.HeadRevision);
+        }
+
+        if (viewType == typeof(FormCommitTemplateSettings))
+        {
+            return new FormCommitTemplateSettings(context.Commands);
+        }
+
+        if (viewType == typeof(FormOpenDirectory))
+        {
+            return new FormOpenDirectory(
+                context.Commands.GetRequiredService<IGitExecutorProvider>(),
+                context.Commands.Module);
+        }
+
+        if (viewType == typeof(FormAddToGitIgnore))
+        {
+            return new FormAddToGitIgnore(context.Commands, localExclude: false, "src/*.cs");
+        }
+
+        if (viewType == typeof(FormGitIgnore))
+        {
+            return new FormGitIgnore(context.Commands, localExclude: false);
+        }
+
+        if (viewType == typeof(FormGitAttributes))
+        {
+            return new FormGitAttributes(context.Commands);
+        }
+
+        if (viewType == typeof(FormMailMap))
+        {
+            return new FormMailMap(context.Commands);
+        }
+
+        if (viewType == typeof(FormBlame))
+        {
+            return new FormBlame(context.Commands, AppSourcePath, context.HeadRevision, initialLine: 2);
+        }
+
+        if (viewType == typeof(FormLog))
+        {
+            return new FormLog(context.Commands);
+        }
+
+        if (viewType == typeof(FormGitCommandLog))
+        {
+            CommandLog.Clear();
+            GitModule.GitCommandCache.Clear();
+            GitModule.GitCommandCache.Add(
+                "status --porcelain=v2",
+                "1 .M N... 100644 100644 src/App.cs",
+                string.Empty);
+            ProcessOperation operation = CommandLog.LogProcessStart(
+                "git",
+                "-c core.quotepath=false log --oneline --decorate",
+                context.WorkingDirectory);
+            operation.LogProcessEnd(0);
+            return new FormGitCommandLog();
         }
 
         if (viewType == typeof(FormRecentReposSettings))
@@ -519,7 +715,7 @@ public sealed partial class ParityScreenshotTests
         if (viewType == typeof(FormCheckoutRevision))
         {
             FormCheckoutRevision form = new(context.Commands);
-            form.SetRevision(context.HeadRevision.ObjectId.ToString());
+            form.SetRevision("HEAD");
             return form;
         }
 
@@ -632,7 +828,7 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(FormCommit))
         {
-            return new FormCommit(context.Commands, commitMessage: "Describe the representative Avalonia changes");
+            return new FormCommit(context.Commands);
         }
 
         if (viewType == typeof(FormCreateBranch))
@@ -684,7 +880,7 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(FormPull))
         {
-            return new FormPull(context.Commands, MainBranchName, RemoteName, GitPullAction.Default);
+            return new FormPull(context.Commands, MainBranchName, RemoteName, GitPullAction.Merge);
         }
 
         if (viewType == typeof(FormPush))
@@ -816,6 +1012,13 @@ public sealed partial class ParityScreenshotTests
 
     private static void PrepareView(Control root, CaptureContext context)
     {
+        if (root is FormAbout formAbout)
+        {
+            FieldInfo thanksTimer = typeof(FormAbout).GetField("_thanksTimer", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new InvalidOperationException("FormAbout._thanksTimer could not be found.");
+            ((DispatcherTimer)thanksTimer.GetValue(formAbout)!).Stop();
+        }
+
         if (root is EditNetSpell editNetSpell)
         {
             editNetSpell.Text = $"Describe the Avalonia spell-checking changes.{Environment.NewLine}{Environment.NewLine}This sentnce contains a deliberate misspeling and an overlong commit-message body line for visual verification.";
@@ -947,13 +1150,6 @@ public sealed partial class ParityScreenshotTests
                 .GetField("ProcessCallback", BindingFlags.Instance | BindingFlags.NonPublic)
                 ?? throw new InvalidOperationException("FormStatus.ProcessCallback could not be found.");
             processCallback.SetValue(formStatus, (Action<FormStatus>)(_ => { }));
-        }
-
-        if (root is FormPush formPush)
-        {
-            HyperlinkButton showOptions = formPush.FindControl<HyperlinkButton>("ShowOptions")
-                ?? throw new InvalidOperationException("FormPush.ShowOptions could not be found.");
-            showOptions.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
         }
 
         if (root is FormSubmodules formSubmodules)
@@ -1302,28 +1498,46 @@ public sealed partial class ParityScreenshotTests
 
     private static void SeedChecklist(ChecklistSettingsPage checklist)
     {
-        (string Name, string Message, bool Repair)[] rows =
+        // parity-scaffolding: Keep registry, shell-tool, and Git configuration identical across paired hosts.
+        (string Name, string Message, bool Valid)[] rows =
         [
-            ("GitFound", "Git 2.52.0 is found on your computer.", false),
-            ("UserNameSet", "A username and an email address are configured.", false),
-            ("MergeTool", "There is a mergetool configured: kdiff3", false),
-            ("DiffTool", "There is a difftool configured: kdiff3", false),
-            ("ShellExtensionsRegistered", "Shell extensions are not installed. Run the installer to install the shell extensions.", false),
-            ("GitBinFound", "Linux tools (sh) found on your computer.", false),
-            ("GitExtensionsInstall", "Git Extensions is properly registered.", false),
-            ("SshConfig", "Default SSH client, OpenSSH, will be used.", false),
-            ("translationConfig", "The configured language is English.", false),
-            ("GcmDetected", "Obsolete git-credential-winstore.exe detected", true),
+            ("GitFound", "Git 2.52.0 is found on your computer.", true),
+            ("UserNameSet", "A username and an email address are configured.", true),
+            ("MergeTool", "You need to configure merge tool in order to solve merge conflicts.", false),
+            ("DiffTool", "You should configure a diff tool to show file diff in external program.", false),
+            ("ShellExtensionsRegistered", "Shell extensions registered properly.", true),
+            ("GitBinFound", "Linux tools (sh) not found. To solve this problem you can set the correct path in settings.", false),
+            ("GitExtensionsInstall", "Git Extensions is properly registered.", true),
+            ("SshConfig", "Default SSH client, OpenSSH, will be used.", true),
+            ("translationConfig", "There is no language configured for Git Extensions.", false),
         ];
-        foreach ((string name, string message, bool repair) in rows)
+        foreach ((string name, string message, bool valid) in rows)
         {
             Button status = GetRequiredControl<Button>(checklist, name);
             Button fix = GetRequiredControl<Button>(
                 checklist,
-                name == "GcmDetected" ? "GcmDetectedFix" : $"{name}_Fix");
+                $"{name}_Fix");
+            System.Drawing.Color background = GetChecklistColor(valid);
             status.Content = message;
             status.IsVisible = true;
-            fix.IsVisible = repair;
+            status.Background = new SolidColorBrush(AvaloniaThemeResources.ToMediaColor(background));
+            status.Foreground = new SolidColorBrush(
+                AvaloniaThemeResources.ToMediaColor(ColorHelper.GetTextColor(background)));
+            fix.IsVisible = !valid;
+        }
+
+        GetRequiredControl<Button>(checklist, "GcmDetected").IsVisible = false;
+        GetRequiredControl<Button>(checklist, "GcmDetectedFix").IsVisible = false;
+        GetRequiredControl<CheckBox>(checklist, "CheckAtStartup").IsChecked = true;
+
+        static System.Drawing.Color GetChecklistColor(bool valid)
+        {
+            System.Drawing.Color color = valid
+                ? System.Drawing.Color.FromArgb(128, 255, 128)
+                : System.Drawing.Color.FromArgb(255, 128, 128);
+            return WinFormsShims.Application.SystemColorMode == WinFormsShims.SystemColorMode.Dark
+                ? color.DimColor()
+                : color;
         }
     }
 
@@ -1366,10 +1580,48 @@ public sealed partial class ParityScreenshotTests
         => root.FindControl<T>(name)
             ?? throw new InvalidOperationException($"{root.GetType().Name}.{name} could not be found.");
 
-    private static async Task WaitForAsyncViewsAsync(Control root)
+    private static async Task WaitForAsyncViewsAsync(
+        Control root,
+        CaptureContext context,
+        CaptureStatePlan? state = null)
     {
-        if (root is CreatePullRequestForm)
+        if (root is CreatePullRequestForm createPullRequestForm)
         {
+            CreatePullRequestForm.TestAccessor accessor = createPullRequestForm.GetTestAccessor();
+            if (state?.Id == "initial.loading")
+            {
+                Stopwatch loadingStopwatch = Stopwatch.StartNew();
+                while (!root.GetVisualDescendants().OfType<LoadingControl>().Any()
+                       && loadingStopwatch.Elapsed < TimeSpan.FromSeconds(5))
+                {
+                    Dispatcher.UIThread.RunJobs();
+                    await Task.Delay(10);
+                }
+
+                root.GetVisualDescendants().OfType<LoadingControl>().Should().ContainSingle();
+                accessor.CreateEnabled.Should().BeFalse();
+                return;
+            }
+
+            if (state?.Id == "branches.loading")
+            {
+                Stopwatch branchesStopwatch = Stopwatch.StartNew();
+                while ((root.GetVisualDescendants().OfType<LoadingControl>().Any()
+                        || accessor.TargetRepositories.ItemCount == 0)
+                       && branchesStopwatch.Elapsed < TimeSpan.FromSeconds(5))
+                {
+                    Dispatcher.UIThread.RunJobs();
+                    await Task.Delay(10);
+                }
+
+                root.GetVisualDescendants().OfType<LoadingControl>().Should().BeEmpty();
+                accessor.TargetRepositories.ItemCount.Should().BeGreaterThan(0);
+                accessor.SourceBranches.ItemCount.Should().Be(0);
+                accessor.TargetBranches.ItemCount.Should().Be(0);
+                accessor.CreateEnabled.Should().BeFalse();
+                return;
+            }
+
             // parity-scaffolding: Wait for both provider branch loaders before capturing the settled form.
             Button create = GetRequiredControl<Button>(root, "_createBtn");
             Stopwatch createStopwatch = Stopwatch.StartNew();
@@ -1382,12 +1634,46 @@ public sealed partial class ParityScreenshotTests
             create.IsEnabled.Should().BeTrue();
         }
 
-        if (root is ForkAndCloneForm)
+        if (root is ForkAndCloneForm forkAndCloneForm)
         {
+            ForkAndCloneForm.TestAccessor accessor = forkAndCloneForm.GetTestAccessor();
+            if (state?.Id == "initial.loading")
+            {
+                Stopwatch loadingStopwatch = Stopwatch.StartNew();
+                while (accessor.MyRepositories.ItemCount == 0
+                       && loadingStopwatch.Elapsed < TimeSpan.FromSeconds(5))
+                {
+                    Dispatcher.UIThread.RunJobs();
+                    await Task.Delay(10);
+                }
+
+                accessor.MyRepositoryNames.Should().ContainSingle().Which.Should().Contain("LOADING");
+                accessor.CloneEnabled.Should().BeFalse();
+                return;
+            }
+
+            if (state?.Id == "owned.error")
+            {
+                Stopwatch errorStopwatch = Stopwatch.StartNew();
+                while (!accessor.HelpText.Contains("Deterministic owned repository failure", StringComparison.Ordinal)
+                       && errorStopwatch.Elapsed < TimeSpan.FromSeconds(5))
+                {
+                    Dispatcher.UIThread.RunJobs();
+                    await Task.Delay(10);
+                }
+
+                accessor.MyRepositories.ItemCount.Should().Be(0);
+                accessor.HelpText.Should().Contain("Failed to get repositories");
+                accessor.HelpText.Should().Contain("Deterministic owned repository failure");
+                return;
+            }
+
             // parity-scaffolding: Wait for the provider-owned repository list to replace its loading row.
             ListBox repositories = GetRequiredControl<ListBox>(root, "myReposLV");
             Stopwatch repositoryStopwatch = Stopwatch.StartNew();
-            while (repositories.ItemCount == 0 && repositoryStopwatch.Elapsed < TimeSpan.FromSeconds(5))
+            while ((repositories.ItemCount == 0
+                    || accessor.MyRepositoryNames.Any(name => name.Contains("LOADING", StringComparison.Ordinal)))
+                   && repositoryStopwatch.Elapsed < TimeSpan.FromSeconds(5))
             {
                 Dispatcher.UIThread.RunJobs();
                 await Task.Delay(10);
@@ -1396,20 +1682,78 @@ public sealed partial class ParityScreenshotTests
             repositories.ItemCount.Should().BeGreaterThan(0);
         }
 
-        if (root is ViewPullRequestsForm)
+        if (root is ViewPullRequestsForm viewPullRequestsForm)
         {
-            // parity-scaffolding: Wait for the selected provider's pull request and discussion loaders.
+            // parity-scaffolding: Wait for the selected provider's pull request, diff, selected-file,
+            // and discussion loaders so the capture cannot record a settled row over an empty viewer.
+            ViewPullRequestsForm.TestAccessor accessor = viewPullRequestsForm.GetTestAccessor();
             ListBox pullRequests = GetRequiredControl<ListBox>(root, "_pullRequestsList");
             ListBox discussion = GetRequiredControl<ListBox>(root, "_discussionWB");
+            if (state?.Id == "initial.loading")
+            {
+                Stopwatch loadingStopwatch = Stopwatch.StartNew();
+                while (!root.GetVisualDescendants().OfType<LoadingControl>().Any()
+                       && loadingStopwatch.Elapsed < TimeSpan.FromSeconds(5))
+                {
+                    Dispatcher.UIThread.RunJobs();
+                    await Task.Delay(10);
+                }
+
+                root.GetVisualDescendants().OfType<LoadingControl>().Should().ContainSingle();
+                accessor.HostedRepositories.ItemCount.Should().Be(0);
+                return;
+            }
+
+            if (state?.Id == "provider.empty")
+            {
+                Stopwatch emptyStopwatch = Stopwatch.StartNew();
+                while (root.GetVisualDescendants().OfType<LoadingControl>().Any()
+                       && emptyStopwatch.Elapsed < TimeSpan.FromSeconds(5))
+                {
+                    Dispatcher.UIThread.RunJobs();
+                    await Task.Delay(10);
+                }
+
+                root.GetVisualDescendants().OfType<LoadingControl>().Should().BeEmpty();
+                accessor.HostedRepositories.ItemCount.Should().Be(0);
+                pullRequests.ItemCount.Should().Be(0);
+                return;
+            }
+
+            if (state?.Id == "pull-requests.loading")
+            {
+                Stopwatch pullRequestLoadingStopwatch = Stopwatch.StartNew();
+                while ((root.GetVisualDescendants().OfType<LoadingControl>().Any()
+                        || accessor.HostedRepositories.ItemCount == 0
+                        || pullRequests.ItemCount == 0)
+                       && pullRequestLoadingStopwatch.Elapsed < TimeSpan.FromSeconds(5))
+                {
+                    Dispatcher.UIThread.RunJobs();
+                    await Task.Delay(10);
+                }
+
+                root.GetVisualDescendants().OfType<LoadingControl>().Should().BeEmpty();
+                accessor.HostedRepositories.ItemCount.Should().BeGreaterThan(0);
+                accessor.PullRequestTitles.Should().BeEmpty();
+                pullRequests.ItemCount.Should().Be(1);
+                accessor.HostedRepositories.IsEnabled.Should().BeFalse();
+                return;
+            }
+
             Stopwatch pullRequestStopwatch = Stopwatch.StartNew();
-            while ((pullRequests.ItemCount == 0 || discussion.ItemCount == 0)
-                   && pullRequestStopwatch.Elapsed < TimeSpan.FromSeconds(5))
+            while ((pullRequests.ItemCount == 0
+                    || accessor.DiffItems.Count == 0
+                    || string.IsNullOrEmpty(accessor.DiffText)
+                    || discussion.ItemCount == 0)
+                   && pullRequestStopwatch.Elapsed < TimeSpan.FromSeconds(15))
             {
                 Dispatcher.UIThread.RunJobs();
                 await Task.Delay(10);
             }
 
             pullRequests.ItemCount.Should().BeGreaterThan(0);
+            accessor.DiffItems.Should().NotBeEmpty();
+            accessor.DiffText.Should().NotBeNullOrEmpty();
             discussion.ItemCount.Should().BeGreaterThan(0);
         }
 
@@ -1444,6 +1788,85 @@ public sealed partial class ParityScreenshotTests
 
             accessor.DiffFiles.AllItems.Should().NotBeEmpty();
             accessor.DiffText.TextEditor.Text.Should().NotBeEmpty();
+        }
+
+        if (root is FormBlame formBlame)
+        {
+            // parity-scaffolding: Wait for repository-backed blame text before capturing the editor surface.
+            BlameControl.TestAccessor accessor = formBlame.GetTestAccessor().BlameControl.GetTestAccessor();
+            Stopwatch blameStopwatch = Stopwatch.StartNew();
+            while (string.IsNullOrEmpty(accessor.BlameFile.TextEditor.Text)
+                   && blameStopwatch.Elapsed < TimeSpan.FromSeconds(15))
+            {
+                Dispatcher.UIThread.RunJobs();
+                await Task.Delay(10);
+            }
+
+            accessor.BlameFile.TextEditor.Text.Should().NotBeEmpty();
+        }
+
+        if (root is FormLog formLog)
+        {
+            // parity-scaffolding: Wait for the selected revision's file list and viewer to settle together.
+            FormLog.TestAccessor accessor = formLog.GetTestAccessor();
+            TextBlock loadingStatus = GetRequiredControl<TextBlock>(accessor.RevisionGrid, "lblLoadingStatus");
+            Stopwatch revisionStopwatch = Stopwatch.StartNew();
+            while (!IsLoadingComplete(loadingStatus.Text)
+                   && revisionStopwatch.Elapsed < TimeSpan.FromSeconds(15))
+            {
+                Dispatcher.UIThread.RunJobs();
+                await Task.Delay(10);
+            }
+
+            IsLoadingComplete(loadingStatus.Text).Should().BeTrue();
+            ObjectId head = accessor.RevisionGrid.CurrentCheckout;
+            head.IsZero.Should().BeFalse();
+            accessor.RevisionGrid.SetSelectedRevision(head).Should().BeTrue();
+            Dispatcher.UIThread.RunJobs();
+            Stopwatch logStopwatch = Stopwatch.StartNew();
+            while ((accessor.DiffFiles.AllItemsCount == 0
+                    || string.IsNullOrEmpty(accessor.DiffViewer.TextEditor.Text))
+                   && logStopwatch.Elapsed < TimeSpan.FromSeconds(15))
+            {
+                Dispatcher.UIThread.RunJobs();
+                await Task.Delay(10);
+            }
+
+            accessor.DiffFiles.AllItems.Should().NotBeEmpty();
+            accessor.DiffViewer.TextEditor.Text.Should().NotBeEmpty();
+        }
+
+        if (root is FormAddToGitIgnore formAddToGitIgnore)
+        {
+            // parity-scaffolding: The headless dispatcher does not complete AsyncLoader's delayed
+            // main-thread continuation; publish the same repository query through the product boundary.
+            FormAddToGitIgnore.TestAccessor accessor = formAddToGitIgnore.GetTestAccessor();
+            await Task.Delay(350);
+            Dispatcher.UIThread.RunJobs();
+            accessor.UpdatePreview(context.Module.GetIgnoredFiles(["src/*.cs"]));
+
+            accessor.Preview.IsEnabled.Should().BeTrue();
+            accessor.Preview.ItemCount.Should().BeGreaterThan(0);
+        }
+
+        if (root is FormGitIgnore formGitIgnore)
+        {
+            await WaitForEditorContentAsync(formGitIgnore.GetTestAccessor().Editor, ".gitignore");
+        }
+
+        if (root is FormGitAttributes formGitAttributes)
+        {
+            await WaitForEditorContentAsync(formGitAttributes.GetTestAccessor().Editor, ".gitattributes");
+        }
+
+        if (root is FormMailMap formMailMap)
+        {
+            await WaitForEditorContentAsync(formMailMap.GetTestAccessor().Editor, ".mailmap");
+        }
+
+        if (root is FormSparseWorkingCopy formSparseWorkingCopy)
+        {
+            await WaitForEditorContentAsync(formSparseWorkingCopy.GetTestAccessor().Editor, ".git/info/sparse-checkout");
         }
 
         if (FindNamedControl(root, "listBoxSearchResult") is ListBox searchResults
@@ -1555,6 +1978,19 @@ public sealed partial class ParityScreenshotTests
         loadingStatuses.Should().OnlyContain(status => IsLoadingComplete(status.Text));
     }
 
+    // parity-scaffolding: File-backed editor dialogs must be compared only after their real loader settles.
+    private static async Task WaitForEditorContentAsync(FileViewer editor, string fileName)
+    {
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        while (string.IsNullOrEmpty(editor.TextEditor.Text) && stopwatch.Elapsed < TimeSpan.FromSeconds(15))
+        {
+            Dispatcher.UIThread.RunJobs();
+            await Task.Delay(10);
+        }
+
+        editor.TextEditor.Text.Should().NotBeEmpty($"the {fileName} loader must publish file content before capture");
+    }
+
     private static async Task WaitForCommitDiffAsync(CommitDiff commitDiff)
     {
         Stopwatch stopwatch = Stopwatch.StartNew();
@@ -1574,9 +2010,15 @@ public sealed partial class ParityScreenshotTests
 
     private static (double Width, double Height) GetCaptureSize(Type viewType)
     {
+        if (viewType == typeof(SettingControlBindingsCaptureSurface)
+            || viewType == typeof(SettingControlBindingsNullCaptureSurface))
+        {
+            return (800, 320);
+        }
+
         if (viewType == typeof(BranchSelector))
         {
-            return (274.4, 54.4);
+            return (325, 54);
         }
 
         if (viewType == typeof(InteractiveGitActionControl))
@@ -1651,22 +2093,132 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(FormCompareToBranch))
         {
-            return (434, 110);
+            // parity-scaffolding: WinForms AutoSize contracts the 110-pixel Designer client
+            // to the measured 106-pixel runtime client before capture.
+            return (434, 106);
         }
 
         if (viewType == typeof(FormFormatPatch))
         {
-            return (1030, 665);
+            // parity-scaffolding: The source Designer is authored at 120 DPI; capture uses normalized 96-DPI DIPs.
+            return (824, 532);
         }
 
-        if (viewType == typeof(SearchControl))
+        if (viewType == typeof(FormBlame))
         {
-            return (325, 91);
+            return (784, 762);
         }
 
-        if (viewType == typeof(SearchWindow))
+        if (viewType == typeof(FormLog))
         {
-            return (325, 113);
+            return (750, 529);
+        }
+
+        if (viewType == typeof(FormGitCommandLog))
+        {
+            return (659, 470);
+        }
+
+        if (viewType == typeof(FormCleanupRepository))
+        {
+            // parity-scaffolding: The source Designer is authored at 120 DPI; WinForms' native
+            // 96-DPI AutoScale result is the authoritative Avalonia client size.
+            return (434, 582);
+        }
+
+        if (viewType == typeof(FormBisect))
+        {
+            // parity-scaffolding: WinForms AutoSize contracts the 171-pixel Designer client to 169.
+            return (248, 169);
+        }
+
+        if (viewType == typeof(FormSparseWorkingCopy))
+        {
+            // parity-scaffolding: WinForms declares an 800x600 minimum outer window.
+            return (784, 561);
+        }
+
+        if (viewType == typeof(FormDeleteRemoteBranch))
+        {
+            return (403, 167);
+        }
+
+        if (viewType == typeof(FormResetAnotherBranch))
+        {
+            return (545, 347);
+        }
+
+        if (viewType == typeof(FormCommitTemplateSettings))
+        {
+            return (698, 361);
+        }
+
+        if (viewType == typeof(FormSettings))
+        {
+            // parity-scaffolding: WinForms' 966x785 minimum outer window yields this native-96 client.
+            return (958, 746);
+        }
+
+        if (viewType == typeof(FormAbout))
+        {
+            return (601, 318);
+        }
+
+        if (viewType == typeof(EnvironmentInfo))
+        {
+            return (137, 78);
+        }
+
+        if (viewType == typeof(FormCommandlineHelp))
+        {
+            return (394, 662);
+        }
+
+        if (viewType == typeof(FormDonate))
+        {
+            return (508, 237);
+        }
+
+        if (viewType == typeof(FormChangeLog))
+        {
+            return (849, 411);
+        }
+
+        if (viewType == typeof(FormOpenDirectory))
+        {
+            return (615, 77);
+        }
+
+        if (viewType == typeof(FormContributors))
+        {
+            return (624, 442);
+        }
+
+        if (viewType == typeof(FormAddToGitIgnore))
+        {
+            return (599, 341);
+        }
+
+        if (viewType == typeof(FormGitIgnore))
+        {
+            return (634, 623);
+        }
+
+        if (viewType == typeof(FormGitAttributes) || viewType == typeof(FormMailMap))
+        {
+            return (634, 474);
+        }
+
+        if (viewType == typeof(SearchControl)
+            || (viewType.IsGenericType && viewType.GetGenericTypeDefinition() == typeof(SearchControl<>)))
+        {
+            return (64, 23);
+        }
+
+        if (viewType == typeof(SearchWindow)
+            || (viewType.IsGenericType && viewType.GetGenericTypeDefinition() == typeof(SearchWindow<>)))
+        {
+            return (325, 213);
         }
 
         if (viewType == typeof(FormDashboardCategoryTitle))
@@ -1834,6 +2386,21 @@ public sealed partial class ParityScreenshotTests
             return (900, 600);
         }
 
+        if (viewType == typeof(FormPull))
+        {
+            return (941, 525);
+        }
+
+        if (viewType == typeof(FormPush))
+        {
+            return (584, 290);
+        }
+
+        if (viewType == typeof(FormRemotes))
+        {
+            return (934, 306);
+        }
+
         if (viewType == typeof(FormUpdates))
         {
             return (462, 157);
@@ -1892,7 +2459,12 @@ public sealed partial class ParityScreenshotTests
         if (viewType == typeof(FormChooseTranslation))
         {
             // The WinForms full-window PrintWindow surface includes non-client chrome.
-            return (814.5, 577);
+            return (816, 578);
+        }
+
+        if (viewType == typeof(FormCommit))
+        {
+            return (918, 644);
         }
 
         if (viewType == typeof(ColorsSettingsPage))
@@ -1923,6 +2495,7 @@ public sealed partial class ParityScreenshotTests
             .Where(path => !Path.GetRelativePath(viewRoot, path).StartsWith("Styles" + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             .Order(StringComparer.Ordinal)
             .Select(path => CreateDescriptor(viewRoot, path, viewAssembly))
+            .OfType<ViewDescriptor>()
             .ToArray();
 
         // parity-scaffolding: Code-only controls need descriptors so the shared capture plan can render them without product wrappers.
@@ -1934,16 +2507,25 @@ public sealed partial class ParityScreenshotTests
             new("UserControls/WaitSpinner.cs", "UserControls/WaitSpinner", typeof(WaitSpinner).FullName!, typeof(WaitSpinner)),
             new("UserControls/WatermarkComboBox.cs", "UserControls/WatermarkComboBox", typeof(WatermarkComboBox).FullName!, typeof(WatermarkComboBox)),
             new("UserControls/CaseSensitiveComboBox.cs", "UserControls/CaseSensitiveComboBox", typeof(CaseSensitiveComboBox).FullName!, typeof(CaseSensitiveComboBox)),
+            new("CommandsDialogs/FormSparseWorkingCopy.cs", "CommandsDialogs/FormSparseWorkingCopy", typeof(FormSparseWorkingCopy).FullName!, typeof(FormSparseWorkingCopy)),
+            new("CommandsDialogs/AboutBoxDialog/FormContributors.cs", "CommandsDialogs/AboutBoxDialog/FormContributors", typeof(FormContributors).FullName!, typeof(FormContributors)),
+            new("SettingControlBindings/SettingControlBindingsCaptureSurface.cs", "SettingControlBindings/SettingControlBindingsCaptureSurface", typeof(SettingControlBindingsCaptureSurface).FullName!, typeof(SettingControlBindingsCaptureSurface)),
+            new("SettingControlBindings/SettingControlBindingsNullCaptureSurface.cs", "SettingControlBindings/SettingControlBindingsNullCaptureSurface", typeof(SettingControlBindingsNullCaptureSurface).FullName!, typeof(SettingControlBindingsNullCaptureSurface)),
             // parity-scaffolding: Plugin-owned AXAML lives outside GitUI.Avalonia but shares the capture schema and state driver.
             new("../../plugins/Gource/GourceStart.axaml", "../../plugins/Gource/GourceStart", typeof(GourceStart).FullName!, typeof(GourceStart)),
         ];
     }
 
-    private static ViewDescriptor CreateDescriptor(string viewRoot, string path, Assembly viewAssembly)
+    private static ViewDescriptor? CreateDescriptor(string viewRoot, string path, Assembly viewAssembly)
     {
         string axaml = File.ReadAllText(path);
         Match classMatch = ClassNameRegex.Match(axaml);
-        classMatch.Success.Should().BeTrue($"{path} should declare x:Class");
+        if (!classMatch.Success)
+        {
+            // parity-scaffolding: structural Designer twins excluded from AvaloniaXaml have no runtime class to capture.
+            return null;
+        }
+
         string className = classMatch.Groups["className"].Value;
         Type viewType = viewAssembly.GetType(className)
             ?? throw new InvalidOperationException($"The AXAML class {className} could not be resolved.");
@@ -1985,6 +2567,73 @@ public sealed partial class ParityScreenshotTests
         int Width,
         int Height,
         string File);
+
+    private static void ReleaseRepositoryHostCaptureFixture(Control control)
+    {
+        if (RepositoryHostCaptureFixtures.TryGetValue(control, out CaptureRepositoryHostFixture? fixture))
+        {
+            fixture.Dispose();
+            RepositoryHostCaptureFixtures.Remove(control);
+        }
+    }
+
+    private static void PrepareRepositoryHostCaptureState(Control control, CaptureStatePlan state)
+    {
+        if (control is ForkAndCloneForm forkAndCloneForm
+            && state.Id is "protocol.open" or "clone.hover" or "clone.pressed")
+        {
+            ForkAndCloneForm.TestAccessor accessor = forkAndCloneForm.GetTestAccessor();
+            accessor.SelectMyRepository(0);
+            Dispatcher.UIThread.RunJobs();
+            forkAndCloneForm.FindControl<ListBox>("myReposLV")!.Focus();
+            Dispatcher.UIThread.RunJobs();
+            accessor.CloneEnabled.Should().BeTrue();
+            if (state.Id == "protocol.open")
+            {
+                accessor.SelectedProtocol.Should().NotBeNull();
+            }
+        }
+    }
+
+    private static Task DrainRepositoryHostCaptureAsync(Control control)
+        => control switch
+        {
+            CreatePullRequestForm form => form.GetTestAccessor().JoinOperationsAsync(),
+            ForkAndCloneForm form => form.GetTestAccessor().JoinOperationsAsync(),
+            ViewPullRequestsForm form => form.GetTestAccessor().JoinOperationsAsync(),
+            _ => Task.CompletedTask,
+        };
+
+    private sealed class CaptureRepositoryHostFixture(
+        IRepositoryHostPlugin host,
+        ManualResetEventSlim providerGate) : IDisposable
+    {
+        public IRepositoryHostPlugin Host { get; } = host;
+
+        public void Dispose()
+        {
+            // parity-scaffolding: The released provider worker owns the final Wait return; disposing
+            // the gate before the form's operation observes it would turn a truthful loading state into a race.
+            providerGate.Set();
+        }
+    }
+
+    private sealed class BlockingReadOnlyList<T>(
+        IReadOnlyList<T> items,
+        ManualResetEventSlim providerGate) : IReadOnlyList<T>
+    {
+        public int Count => items.Count;
+
+        public T this[int index] => items[index];
+
+        public IEnumerator<T> GetEnumerator()
+        {
+            providerGate.Wait();
+            return items.GetEnumerator();
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
 
     private sealed class StubMessageBoxHost : WinFormsShims.IMessageBoxHost
     {
@@ -2071,10 +2720,20 @@ public sealed partial class ParityScreenshotTests
             Refs = Module.GetRefs(RefsFilter.NoFilter);
             ObjectId headId = Module.GetCurrentCheckout();
             ObjectId parentId = Module.RevParse("HEAD~1");
+            ObjectId baseId = parentId.IsZero ? headId : parentId;
             long headTime = new DateTimeOffset(2026, 7, 17, 10, 30, 0, TimeSpan.Zero).ToUnixTimeSeconds();
             long parentTime = new DateTimeOffset(2026, 7, 16, 16, 45, 0, TimeSpan.Zero).ToUnixTimeSeconds();
-            ParentRevision = CreateRevision(parentId, InitialCommitSubject, parentTime, []);
-            HeadRevision = CreateRevision(headId, HeadCommitSubject, headTime, [parentId]);
+            // parity-scaffolding: Paired captures use the same deterministic revision metadata;
+            // the externally-owned repository supplies object ids, refs, and branch topology only.
+            // A one-commit fixture has no parent, so reuse its nonzero HEAD as the representative
+            // base without inventing a self-parent relationship.
+            ParentRevision = CreateRevision(baseId, InitialCommitSubject, parentTime, []);
+            HeadRevision = CreateRevision(
+                headId,
+                HeadCommitSubject,
+                headTime,
+                parentId.IsZero ? [] : [parentId]);
+
             Stashes =
             [
                 new GitRevision(ObjectId.Parse("4444444444444444444444444444444444444444"))

@@ -20,15 +20,6 @@ public partial class FormFormatPatch : GitModuleForm
         new("Patch result");
     private readonly TranslationString _failCreatePatch =
         new("Unable to create patch file(s)");
-    private bool _runtimeInitialized;
-
-    // parity-scaffolding: Avalonia's view inventory and designer require a parameterless constructor.
-    public FormFormatPatch()
-    {
-        InitializeComponent();
-        WireEvents();
-        InitializeComplete();
-    }
 
     public FormFormatPatch(IGitUICommands commands)
         : base(commands, enablePositionRestore: true)
@@ -37,10 +28,9 @@ public partial class FormFormatPatch : GitModuleForm
         WireEvents();
         RevisionGrid.ShowUncommittedChangesIfPossible = false;
         InitializeComplete();
-        _runtimeInitialized = true;
     }
 
-    private void Browse_Click(object? sender, EventArgs e)
+    private void Browse_Click(object sender, EventArgs e)
     {
         string? userSelectedPath = OsShellUtil.PickFolder(this);
 
@@ -50,17 +40,13 @@ public partial class FormFormatPatch : GitModuleForm
         }
     }
 
-    protected override void OnRuntimeLoad(EventArgs e)
+    private void FormFormatPath_Load(object sender, EventArgs e)
     {
-        base.OnRuntimeLoad(e);
-        if (!_runtimeInitialized)
-        {
-            return;
-        }
-
         OutputPath.Text = AppSettings.LastFormatPatchDir;
         string selectedHead = Module.GetSelectedBranch();
-        SelectedBranch.Text = _currentBranchText.Text + " " + selectedHead;
+
+        // Avalonia Label exposes its text through Content instead of WinForms Label.Text.
+        SelectedBranch.Content = _currentBranchText.Text + " " + selectedHead;
 
         OutputPath.TextChanged += OutputPath_TextChanged;
 
@@ -76,7 +62,7 @@ public partial class FormFormatPatch : GitModuleForm
         }
     }
 
-    private void FormatPatch_Click(object? sender, EventArgs e)
+    private void FormatPatch_Click(object sender, EventArgs e)
     {
         if (string.IsNullOrEmpty(OutputPath.Text))
         {
@@ -133,6 +119,24 @@ public partial class FormFormatPatch : GitModuleForm
         }
     }
 
+    // parity-scaffolding: Avalonia's view inventory and designer require a parameterless constructor.
+    public FormFormatPatch()
+    {
+        InitializeComponent();
+        WireEvents();
+        InitializeComplete();
+    }
+
+    protected override void OnRuntimeLoad(EventArgs e)
+    {
+        base.OnRuntimeLoad(e);
+        if (TryGetUICommands(out _))
+        {
+            // Avalonia exposes the WinForms Load event through the portable runtime-load boundary.
+            FormFormatPath_Load(this, e);
+        }
+    }
+
     private void WireEvents()
     {
         Browse.Click += Browse_Click;
@@ -148,6 +152,6 @@ public partial class FormFormatPatch : GitModuleForm
         internal Button Browse => form.Browse;
         internal Button FormatPatch => form.FormatPatch;
         internal RevisionGridControl RevisionGrid => form.RevisionGrid;
-        internal TextBlock SelectedBranch => form.SelectedBranch;
+        internal Label SelectedBranch => form.SelectedBranch;
     }
 }

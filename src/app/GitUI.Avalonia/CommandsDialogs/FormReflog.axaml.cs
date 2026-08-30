@@ -1,4 +1,4 @@
-﻿using System.Text.RegularExpressions;
+using System.Text.RegularExpressions;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Input;
@@ -19,8 +19,7 @@ using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitUI.CommandsDialogs;
 
-// Twin of GitUI/CommandsDialogs/FormReflog.cs. The read-only sortable DataGridView is
-// represented by the same header-plus-ListBox pattern as the other Avalonia grid twins.
+// The read-only sortable DataGridView is represented by a header and typed ListBox.
 public sealed partial class FormReflog : GitModuleForm
 {
     private readonly TranslationString _continueResetCurrentBranchEvenWithChangesText = new("You have changes in your working directory that could be lost.\n\nDo you want to continue?");
@@ -31,14 +30,14 @@ public sealed partial class FormReflog : GitModuleForm
     private readonly TaskManager _loadOperations = GitUI.Compat.DesignTimeTaskManager.Create();
 
     private IReadOnlyList<RefLine> _refLines = [];
-    private string? _currentBranch;
-    private bool _isBranchCheckedOut;
-    private bool _isDirtyDir;
-    private string? _sortColumn;
-    private bool _sortAscending = true;
 
     [GeneratedRegex(@"^(?<sha>[^ ]+) (?<ref>[^:]+): (?<action>.+)$", RegexOptions.ExplicitCapture)]
     private static partial Regex ReflogRegex { get; }
+    private string? _currentBranch;
+    private bool _isBranchCheckedOut;
+    private string? _sortColumn;
+    private bool _sortAscending = true;
+    private bool _isDirtyDir;
 
     public FormReflog()
     {

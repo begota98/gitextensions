@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media.Imaging;
 using GitCommands;
@@ -11,9 +11,9 @@ public partial class HelpImageDisplayUserControl : GitExtensionsControl
     private Bitmap? _image1;
     private Bitmap? _image2;
     private bool _isExpanded;
-    private bool _isHover;
+    private double _hostContributionWidth = 40;
+    ////public const string fastForwardHoverText = "Hover to see scenario when fast forward is possible.";
     private bool _isLoaded;
-    private bool _showImage2OnHover;
 
     public HelpImageDisplayUserControl()
     {
@@ -39,12 +39,31 @@ public partial class HelpImageDisplayUserControl : GitExtensionsControl
             UpdateIsExpandedState();
             if (_isLoaded)
             {
+                // to avoid calling this when InitializeComponents is called
+                /*
+                                 * ...
+                                            this.helpImageDisplayUserControl1.IsExpanded = false;                       // this before...
+                                            this.helpImageDisplayUserControl1.Location = new System.Drawing.Point(3, 3);
+                                            this.helpImageDisplayUserControl1.MinimumSize = new System.Drawing.Size(30, 50);
+                                            this.helpImageDisplayUserControl1.Name = "helpImageDisplayUserControl1";    // ...this gives wrong id!!!
+                                 * ...
+
+                                 */
                 AppSettings.SetBool("HelpIsExpanded" + GetId(), value);
             }
         }
     }
 
     public string? UniqueIsExpandedSettingsId { get; set; }
+
+    private void UpdateIsExpandedState()
+    {
+        linkLabelHide.IsVisible = _isExpanded;
+        buttonShowHelp.IsVisible = !_isExpanded;
+        pictureBox1.IsVisible = _isExpanded;
+        labelHoverText.IsVisible = _isExpanded && IsOnHoverShowImage2;
+        UpdateControlSize();
+    }
 
     public Bitmap? Image1
     {
@@ -53,6 +72,10 @@ public partial class HelpImageDisplayUserControl : GitExtensionsControl
         {
             _image1 = value;
             UpdateImageDisplay();
+            if (IsExpanded)
+            {
+                UpdateControlSize();
+            }
         }
     }
 
@@ -63,9 +86,16 @@ public partial class HelpImageDisplayUserControl : GitExtensionsControl
         {
             _image2 = value;
             UpdateImageDisplay();
+            if (IsExpanded)
+            {
+                UpdateControlSize();
+            }
         }
     }
 
+    /// <summary>
+    /// see also IsOnHoverShowImage2NoticeText.
+    /// </summary>
     public bool IsOnHoverShowImage2
     {
         get => _showImage2OnHover;
@@ -77,11 +107,16 @@ public partial class HelpImageDisplayUserControl : GitExtensionsControl
         }
     }
 
+    /// <summary>
+    /// only shown when IsOnHoverShowImage2 is true.
+    /// </summary>
     public string IsOnHoverShowImage2NoticeText
     {
         get => labelHoverText.Text ?? string.Empty;
         set => labelHoverText.Text = value;
     }
+
+    private bool _isHover;
 
     private void LoadSettings()
     {
@@ -96,15 +131,27 @@ public partial class HelpImageDisplayUserControl : GitExtensionsControl
         UpdateImageDisplay();
     }
 
+    private bool _showImage2OnHover;
+
     private string GetId() => UniqueIsExpandedSettingsId ?? "MUST_BE_SET";
 
-    private void UpdateIsExpandedState()
+    private void UpdateControlSize()
     {
-        linkLabelHide.IsVisible = _isExpanded;
-        buttonShowHelp.IsVisible = !_isExpanded;
-        pictureBox1.IsVisible = _isExpanded;
-        labelHoverText.IsVisible = _isExpanded && IsOnHoverShowImage2;
-        MinWidth = _isExpanded ? 289 : 30;
+        double width = IsExpanded
+            ? Math.Max(Image1?.PixelSize.Width ?? 40, Image2?.PixelSize.Width ?? 40)
+            : 30;
+        double widthDelta = width - _hostContributionWidth;
+
+        Width = width;
+        MinWidth = width;
+        if (TopLevel.GetTopLevel(this) is not Window form || widthDelta == 0)
+        {
+            return;
+        }
+
+        form.Width += widthDelta;
+        form.MinWidth = Math.Max(0, form.MinWidth + widthDelta);
+        _hostContributionWidth = width;
     }
 
     private void UpdateImageDisplay()

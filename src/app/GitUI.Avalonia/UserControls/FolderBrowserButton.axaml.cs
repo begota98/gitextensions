@@ -7,12 +7,12 @@ using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitUI.UserControls;
 
-// Twin of GitUI/UserControls/FolderBrowserButton.cs. PathShowingControl retains the
-// original any-Control boundary for the TextBox and ComboBox consumers in ported dialogs.
+// PathShowingControl retains the original any-Control boundary for TextBox and ComboBox
+// consumers.
 [LocalizableProperties]
 public partial class FolderBrowserButton : GitExtensionsControl
 {
-    private string _text = "Bro&wse...";
+    private string _text = string.Empty;
 
     public FolderBrowserButton()
     {
@@ -27,8 +27,12 @@ public partial class FolderBrowserButton : GitExtensionsControl
     /// </summary>
     public Control? PathShowingControl { get; set; }
 
+    // Avalonia buttons do not bubble Click through a UserControl; forward it so original
+    // host forms can retain their Designer-wired handler instead of opening two pickers.
+    public event EventHandler? Click;
+
     /// <summary>
-    /// Gets or sets the host-form text using the original WinForms mnemonic syntax.
+    /// Specifies the text label of the button.
     /// </summary>
     public string Text
     {
@@ -59,6 +63,8 @@ public partial class FolderBrowserButton : GitExtensionsControl
         // if we do not use the DirectoryInfo then a path with slashes instead of backslashes won't work
         directoryInfoPath ??= getter();
 
+        // TODO: do we need ParentForm or is "this" ok?
+        // The owning TopLevel is Avalonia's ParentForm equivalent.
         string? userSelectedPath = OsShellUtil.PickFolder((TopLevel.GetTopLevel(this) as WinFormsShims.IWin32Window)!, directoryInfoPath);
 
         if (userSelectedPath is not null)
@@ -69,6 +75,12 @@ public partial class FolderBrowserButton : GitExtensionsControl
 
     private void buttonBrowse_Click(object sender, EventArgs e)
     {
+        if (Click is not null)
+        {
+            Click(this, e);
+            return;
+        }
+
         Validates.NotNull(PathShowingControl);
 
         ShowFolderBrowserDialogWithPreselectedPath(

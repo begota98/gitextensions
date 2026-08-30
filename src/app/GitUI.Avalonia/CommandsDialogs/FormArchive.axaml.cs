@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Platform.Storage;
 using GitCommands;
 using GitCommands.Git;
@@ -13,9 +13,7 @@ using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitUI.CommandsDialogs;
 
-// Twin of GitUI/CommandsDialogs/FormArchive.cs. The native Avalonia storage provider is
-// the only platform boundary; archive selection and command construction retain the original
-// code-behind shape.
+// The native Avalonia storage provider supplies the platform-specific archive picker.
 public sealed partial class FormArchive : GitModuleForm
 {
     private readonly TranslationString _saveFileDialogFilterZip =
@@ -48,6 +46,7 @@ public sealed partial class FormArchive : GitModuleForm
         set
         {
             _diffSelectedRevision = value;
+            ////commitSummaryUserControl2.Revision = _diffSelectedRevision;
             if (_diffSelectedRevision is null)
             {
                 const string defaultString = "...";
@@ -213,6 +212,7 @@ public sealed partial class FormArchive : GitModuleForm
 
         if (checkboxRevisionFilter.IsChecked == true)
         {
+            // 1. get all changed (and not deleted files) from selected to current revision
             IEnumerable<GitItemStatus> files = UICommands.Module
                 .GetDiffFilesWithUntracked(
                     DiffSelectedRevision?.Guid,
@@ -221,6 +221,9 @@ public sealed partial class FormArchive : GitModuleForm
                     noCache: false,
                     cancellationToken: default)
                 .Where(file => !file.IsDeleted);
+
+            // 2. wrap file names with ""
+            // 3. join together with space as separator
             return string.Join(" ", files.Select(file => file.Name.QuoteNE()));
         }
 

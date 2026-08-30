@@ -90,6 +90,27 @@ public sealed class RevisionGridSupportTests
         loading.IsAnimating.Should().BeFalse();
     }
 
+    [AvaloniaTest]
+    public void Loading_control_should_stretch_its_spinner_through_the_source_fill_layout()
+    {
+        LoadingControl loading = new();
+        Window window = new()
+        {
+            Width = 546,
+            Height = 323,
+            Content = loading,
+        };
+
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        WaitSpinner spinner = loading.Content.Should().BeOfType<WaitSpinner>().Subject;
+        spinner.Bounds.Size.Should().Be(loading.Bounds.Size);
+        spinner.Bounds.Width.Should().BeGreaterThan(32);
+        spinner.Bounds.Height.Should().BeGreaterThan(32);
+        window.Close();
+    }
+
     [Test]
     public void Navigation_history_should_walk_backward_forward_and_clear_forward_on_push()
     {
@@ -445,8 +466,8 @@ public sealed class RevisionGridSupportTests
         item.IsChecked.Should().BeTrue();
         item.Classes.Should().Contain("gitextensions-menu-command-toggle");
         Grid checkIcon = item.Icon.Should().BeOfType<Grid>().Subject;
-        checkIcon.Width.Should().Be(18.4);
-        checkIcon.Height.Should().Be(18.4);
+        checkIcon.Width.Should().Be(18);
+        checkIcon.Height.Should().Be(18);
 
         isChecked = false;
         command.SetCheckForRegisteredMenuItems();
@@ -457,15 +478,17 @@ public sealed class RevisionGridSupportTests
 
     [AvaloniaTest]
     [Category("P8.6h.3b.2b.2b.2b.5")]
-    public void View_menu_should_use_the_measured_ToolStrip_shared_width()
+    public void View_menu_should_size_from_its_current_content()
     {
         RevisionGridControl control = new();
 
-        control.ViewMenuItem.Items.OfType<MenuItem>().Should().OnlyContain(item => item.MinWidth == 425.6);
-        control.ViewMenuItem.Items.OfType<Control>().Should().OnlyContain(
-            item => item.Classes.Contains("revision-grid-view-menu-row"));
-        control.ViewMenuItem.Items.OfType<Separator>().Should().OnlyContain(
-            separator => separator.Width == 423.2 && separator.HorizontalAlignment == Avalonia.Layout.HorizontalAlignment.Center);
+        control.ViewMenuItem.Items.OfType<MenuItem>().Should().OnlyContain(item => double.IsNaN(item.Width));
+        control.ViewMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.SubmenuOpenedEvent));
+        double measuredWidth = control.ViewMenuItem.Items.OfType<MenuItem>().Select(item => item.Width).Distinct().Single();
+
+        measuredWidth.Should().BeGreaterThan(0);
+        control.ViewMenuItem.Items.OfType<MenuItem>().Should().OnlyContain(item => item.Width == measuredWidth);
+        control.ViewMenuItem.Items.OfType<Separator>().Should().OnlyContain(separator => double.IsNaN(separator.Width));
     }
 
     [AvaloniaTest]
@@ -491,10 +514,10 @@ public sealed class RevisionGridSupportTests
         item.Items[3].Should().BeOfType<MenuItem>().Which.Header.Should().Be(TranslatedStrings.Tags);
         item.Items[4].Should().BeOfType<MenuItem>().Which.Header.Should().Be("_2:   tag1");
         item.Items[6].Should().BeOfType<MenuItem>().Which.Header!.ToString().Should().StartWith("_Commit hash");
+        item.Items.OfType<MenuItem>().Select(menuItem => menuItem.Width).Distinct().Should().ContainSingle();
         item.Items.OfType<MenuItem>().Should().OnlyContain(
-            menuItem => menuItem.Padding == new Avalonia.Thickness(4, 1, 17.6, 1));
-        item.Items.OfType<Separator>().Should().OnlyContain(
-            separator => separator.Margin == new Avalonia.Thickness(1.6, 0, 0.8, 0));
+            menuItem => menuItem.Padding.Left == 0 && menuItem.Padding.Right == 0);
+        item.Items.OfType<Separator>().Should().OnlyContain(separator => separator.Margin == default);
     }
 
     [AvaloniaTest]

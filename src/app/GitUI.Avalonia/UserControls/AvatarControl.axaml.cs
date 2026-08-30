@@ -57,17 +57,13 @@ public sealed partial class AvatarControl : GitExtensionsControl
 
         clearImagecacheToolStripMenuItem.Click += OnClearCacheClick;
         registerGravatarToolStripMenuItem.Click += OnRegisterGravatarClick;
-        avatarProviderToolStripMenuItem.SubmenuOpened += AvatarProviderToolStripMenuItem_SubmenuOpened;
-        fallbackAvatarStyleToolStripMenuItem.SubmenuOpened += OnDefaultImageSubmenuOpened;
+        avatarProviderToolStripMenuItem.SubmenuOpened += avatarProviderToolStripMenuItem_DropDownOpening;
+        fallbackAvatarStyleToolStripMenuItem.SubmenuOpened += OnDefaultImageDropDownOpening;
         DetachedFromVisualTree += (_, _) => _cancellationTokenSequence.CancelCurrent();
 
         RefreshImage(null);
         InitializeComplete();
     }
-
-    public string? Email { get; private set; }
-
-    public string? AuthorName { get; private set; }
 
     public void ClearCache()
     {
@@ -79,31 +75,15 @@ public sealed partial class AvatarControl : GitExtensionsControl
         });
     }
 
+    public string? Email { get; private set; }
+
+    public string? AuthorName { get; private set; }
+
     public void LoadImage(string? email, string? name)
     {
         Email = email;
         AuthorName = name;
         ThreadHelper.FileAndForget(UpdateAvatarAsync);
-    }
-
-    private void AvatarProviderToolStripMenuItem_SubmenuOpened(object? sender, EventArgs e)
-    {
-        UpdateMenuItemSelection(avatarProviderToolStripMenuItem.Items, AppSettings.AvatarProvider);
-    }
-
-    private void OnClearCacheClick(object? sender, EventArgs e)
-    {
-        ClearCache();
-    }
-
-    private void OnDefaultImageSubmenuOpened(object? sender, EventArgs e)
-    {
-        UpdateMenuItemSelection(fallbackAvatarStyleToolStripMenuItem.Items, AppSettings.AvatarFallbackType);
-    }
-
-    private void OnRegisterGravatarClick(object? sender, EventArgs e)
-    {
-        OsShellUtil.OpenUrlInDefaultBrowser("https://www.gravatar.com");
     }
 
     private void RefreshImage(Bitmap? image)
@@ -133,6 +113,8 @@ public sealed partial class AvatarControl : GitExtensionsControl
         }
 
         CancellationToken token = _cancellationTokenSequence.Next();
+
+        // resize our control (I'm not using AutoSize for a reason)
         byte[]? imageData = await _avatarProvider.GetAvatarAsync(email, AuthorName, AppSettings.AuthorImageSizeInCommitInfo);
         Bitmap? image = AvatarImage.Decode(imageData);
 
@@ -146,6 +128,26 @@ public sealed partial class AvatarControl : GitExtensionsControl
 
             RefreshImage(image);
         });
+    }
+
+    private void OnClearCacheClick(object? sender, EventArgs e)
+    {
+        ClearCache();
+    }
+
+    private void OnRegisterGravatarClick(object? sender, EventArgs e)
+    {
+        OsShellUtil.OpenUrlInDefaultBrowser("https://www.gravatar.com");
+    }
+
+    private void OnDefaultImageDropDownOpening(object? sender, EventArgs e)
+    {
+        UpdateMenuItemSelection(fallbackAvatarStyleToolStripMenuItem.Items, AppSettings.AvatarFallbackType);
+    }
+
+    private void avatarProviderToolStripMenuItem_DropDownOpening(object? sender, EventArgs e)
+    {
+        UpdateMenuItemSelection(avatarProviderToolStripMenuItem.Items, AppSettings.AvatarProvider);
     }
 
     private static void UpdateMenuItemSelection<T>(IEnumerable<object?> menuItems, T currentValue)

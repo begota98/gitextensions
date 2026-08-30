@@ -7,8 +7,6 @@ using Size = System.Drawing.Size;
 
 namespace GitUI;
 
-// NOTE do not make this class abstract as it breaks the Avalonia designer
-
 /// <summary>Base class for a Git Extensions <see cref="Window"/>.</summary>
 /// <remarks>Includes support for font, hotkey, icon, translation, and position restore.</remarks>
 public class GitExtensionsForm : GitExtensionsFormBase
@@ -53,11 +51,16 @@ public class GitExtensionsForm : GitExtensionsFormBase
 
     protected override void OnOpened(EventArgs e)
     {
+        base.OnOpened(e);
+        CaptureRestoreBounds();
+    }
+
+    protected override void OnLoad(EventArgs e)
+    {
         RestorePosition();
 
         // Should be called after restoring position
-        base.OnOpened(e);
-        CaptureRestoreBounds();
+        base.OnLoad(e);
     }
 
     protected override void OnClosing(WindowClosingEventArgs e)
@@ -71,7 +74,7 @@ public class GitExtensionsForm : GitExtensionsFormBase
         base.OnClosing(e);
     }
 
-    /// <summary>Invoked at runtime during the <see cref="OnOpened"/> method.</summary>
+    /// <summary>Invoked at runtime during the <see cref="OnLoad"/> method.</summary>
     /// <remarks>In particular, this method is not invoked when running in a designer.</remarks>
     protected override void OnRuntimeLoad(EventArgs e)
     {

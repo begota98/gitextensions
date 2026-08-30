@@ -40,6 +40,8 @@ public sealed class AvatarMemoryCache : IAvatarProvider, IAvatarCacheCleaner
             }
         }
 
+        // The revision grid could trigger same request multiple times at the same time
+        // => Wait that the first finish and result is added to the cache.
         if (IsRequestInProgress(key))
         {
             for (int i = 0; i < 10_000; i++)
@@ -54,6 +56,8 @@ public sealed class AvatarMemoryCache : IAvatarProvider, IAvatarCacheCleaner
 
                 if (!IsRequestInProgress(key))
                 {
+                    // Early exit when the image is not in the cache and key is no more in the requests list
+                    // => the request has failed!
                     break;
                 }
 

@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Reflection;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
@@ -124,6 +124,7 @@ Diff selection:
     {
         ApplyEditorToSelectedScript();
 
+        // TODO: this is an abomination, the whole script persistence must be scorched and rewritten
         System.ComponentModel.BindingList<ScriptInfo> scripts = _scriptsManager.GetScripts();
         scripts.Clear();
         foreach (ScriptInfoProxy proxy in _scripts)
@@ -388,6 +389,29 @@ Diff selection:
         txtName.SelectAll();
     }
 
+    private void btnArgumentsHelp_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_argumentsCheatSheet?.IsVisible == true)
+        {
+            _argumentsCheatSheet.Activate();
+            return;
+        }
+
+        _argumentsCheatSheet = new SimpleHelpDisplayDialog
+        {
+            DialogTitle = _scriptSettingsPageHelpDisplayArgumentsHelp.Text,
+            ContentText = _scriptSettingsPageHelpDisplayContent.Text.Replace("\n", Environment.NewLine),
+        };
+        if (TopLevel.GetTopLevel(this) is Window owner)
+        {
+            _argumentsCheatSheet.Show(owner);
+        }
+        else
+        {
+            _argumentsCheatSheet.Show();
+        }
+    }
+
     private void btnDelete_Click(object? sender, RoutedEventArgs e)
     {
         if (SelectedScript is not ScriptInfoProxy script)
@@ -429,29 +453,6 @@ Diff selection:
     {
         ApplyEditorToSelectedScript();
         SetSelectedScript((lvScripts.SelectedItem as ListBoxItem)?.Tag as ScriptInfoProxy);
-    }
-
-    private void btnArgumentsHelp_Click(object? sender, RoutedEventArgs e)
-    {
-        if (_argumentsCheatSheet?.IsVisible == true)
-        {
-            _argumentsCheatSheet.Activate();
-            return;
-        }
-
-        _argumentsCheatSheet = new SimpleHelpDisplayDialog
-        {
-            DialogTitle = _scriptSettingsPageHelpDisplayArgumentsHelp.Text,
-            ContentText = _scriptSettingsPageHelpDisplayContent.Text.Replace("\n", Environment.NewLine),
-        };
-        if (TopLevel.GetTopLevel(this) is Window owner)
-        {
-            _argumentsCheatSheet.Show(owner);
-        }
-        else
-        {
-            _argumentsCheatSheet.Show();
-        }
     }
 
     private async Task BrowseFileAsync(TextBox target, string title, IReadOnlyList<FilePickerFileType> fileTypes)

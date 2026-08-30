@@ -5,6 +5,8 @@ namespace WinFormsParityCapture;
 internal static partial class NativeMethods
 {
     internal const int WmDpiChanged = 0x02E0;
+    internal const int WmDpiChangedBeforeParent = 0x02E2;
+    internal const int WmDpiChangedAfterParent = 0x02E3;
     internal const int WmMouseMove = 0x0200;
     internal const int WmLButtonDown = 0x0201;
     internal const int WmMouseLeave = 0x02A3;
@@ -53,13 +55,48 @@ internal static partial class NativeMethods
         return Rectangle.FromLTRB(rectangle.Left, rectangle.Top, rectangle.Right, rectangle.Bottom);
     }
 
+    internal static Rectangle GetComboBoxListRectangle(IntPtr handle)
+    {
+        ComboBoxInfo info = new() { Size = Marshal.SizeOf<ComboBoxInfo>() };
+        if (!GetComboBoxInfo(handle, ref info) || info.ListHandle == IntPtr.Zero)
+        {
+            throw new InvalidOperationException("GetComboBoxInfo did not expose the native list window.");
+        }
+
+        return GetWindowRectangle(info.ListHandle);
+    }
+
     internal static bool PrintWindowContent(IntPtr handle, IntPtr deviceContext) =>
         PrintWindow(handle, deviceContext, PwRenderFullContent);
 
     internal static void FocusWindow(IntPtr handle) => SetFocus(handle);
 
+    internal static Point GetCursorPosition()
+    {
+        if (!GetCursorPos(out NativePoint point))
+        {
+            throw new InvalidOperationException("GetCursorPos failed.");
+        }
+
+        return new Point(point.X, point.Y);
+    }
+
+    internal static void SetCursorPosition(Point point)
+    {
+        if (!SetCursorPos(point.X, point.Y))
+        {
+            throw new InvalidOperationException("SetCursorPos failed.");
+        }
+    }
+
     internal static void SendDpiChanged(IntPtr handle, int dpi, Rectangle suggestedBounds)
     {
+        IReadOnlyList<IntPtr> descendants = GetDescendantWindows(handle);
+        for (int index = descendants.Count - 1; index >= 0; index--)
+        {
+            SendDpiMessage(descendants[index], WmDpiChangedBeforeParent, dpi);
+        }
+
         NativeRectangle rectangle = new()
         {
             Left = suggestedBounds.Left,
@@ -69,6 +106,60 @@ internal static partial class NativeMethods
         };
         IntPtr wParam = (IntPtr)((dpi & 0xFFFF) | (dpi << 16));
         SendMessage(handle, WmDpiChanged, wParam, ref rectangle);
+
+        foreach (IntPtr descendant in descendants)
+        {
+            SendDpiMessage(descendant, WmDpiChangedAfterParent, dpi);
+        }
+    }
+
+    internal static IReadOnlyList<IntPtr> GetDescendantWindows(IntPtr handle)
+    {
+        List<IntPtr> descendants = [];
+        AddDescendantWindows(handle, descendants);
+        return descendants;
+    }
+
+    internal static void SendDpiChangedBeforeParentTree(IntPtr handle, int dpi)
+    {
+        List<IntPtr> windows = [handle, .. GetDescendantWindows(handle)];
+        for (int index = windows.Count - 1; index >= 0; index--)
+        {
+            SendDpiMessage(windows[index], WmDpiChangedBeforeParent, dpi);
+        }
+    }
+
+    internal static void SendDpiChangedAfterParentTree(IntPtr handle, int dpi)
+    {
+        SendDpiMessage(handle, WmDpiChangedAfterParent, dpi);
+        foreach (IntPtr descendant in GetDescendantWindows(handle))
+        {
+            SendDpiMessage(descendant, WmDpiChangedAfterParent, dpi);
+        }
+    }
+
+    private static void AddDescendantWindows(IntPtr parent, List<IntPtr> descendants)
+    {
+        const uint gwChild = 5;
+        const uint gwHwndNext = 2;
+
+        for (IntPtr child = GetWindow(parent, gwChild);
+             child != IntPtr.Zero;
+             child = GetWindow(child, gwHwndNext))
+        {
+            descendants.Add(child);
+            AddDescendantWindows(child, descendants);
+        }
+    }
+
+    private static void SendDpiMessage(IntPtr handle, int message, int dpi)
+    {
+        // WinForms deliberately accepts the target DPI in WM_DPICHANGED_BEFOREPARENT's
+        // otherwise-unused wParam for test-driven monitor transitions. A real PMv2 move
+        // updates GetDpiForWindow before sending the message; the fallback cannot change
+        // the physical monitor, so it supplies the same value through that supported path.
+        IntPtr wParam = (IntPtr)((dpi & 0xFFFF) | (dpi << 16));
+        SendMessage(handle, message, wParam, IntPtr.Zero);
     }
 
     internal static void SendMouseMessage(IntPtr handle, int message, int x, int y)
@@ -120,16 +211,31 @@ internal static partial class NativeMethods
 
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetComboBoxInfo(IntPtr comboBox, ref ComboBoxInfo info);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool PrintWindow(IntPtr window, IntPtr deviceContext, uint flags);
 
     [LibraryImport("user32.dll")]
     private static partial IntPtr SetFocus(IntPtr window);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetCursorPos(out NativePoint point);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetCursorPos(int x, int y);
 
     [LibraryImport("user32.dll", EntryPoint = "SendMessageW")]
     private static partial IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
 
     [LibraryImport("user32.dll", EntryPoint = "SendMessageW")]
     private static partial IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, ref NativeRectangle lParam);
+
+    [LibraryImport("user32.dll")]
+    private static partial IntPtr GetWindow(IntPtr window, uint command);
 
     [LibraryImport("user32.dll")]
     private static partial IntPtr MonitorFromWindow(IntPtr window, int flags);
@@ -157,5 +263,24 @@ internal static partial class NativeMethods
         public NativeRectangle Monitor;
         public NativeRectangle Work;
         public uint Flags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ComboBoxInfo
+    {
+        public int Size;
+        public NativeRectangle ItemRectangle;
+        public NativeRectangle ButtonRectangle;
+        public uint ButtonState;
+        public IntPtr ComboBoxHandle;
+        public IntPtr EditHandle;
+        public IntPtr ListHandle;
     }
 }

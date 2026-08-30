@@ -6,16 +6,13 @@ using Color = System.Drawing.Color;
 
 namespace GitUI.UserControls.RevisionGrid.Graph;
 
-// Twin of GitUI/UserControls/RevisionGrid/Graph/RevisionGraphLaneColor.cs with Avalonia
-// brushes instead of GDI brushes. Keep the lane-color selection logic in sync with upstream.
+// Avalonia brushes replace GDI brushes; keep lane-color selection aligned with the original.
 public static class RevisionGraphLaneColor
 {
     private static readonly object ThemeLock = new();
     private static ThemeSettings? _loadedThemeSettings;
     private static Color _nonRelativeColor;
     private static IBrush _nonRelativeBrush = Brushes.LightGray;
-
-    internal static readonly List<IBrush> PresetGraphBrushes = [];
 
     public static int GetColorForLane(int seed)
     {
@@ -40,6 +37,8 @@ public static class RevisionGraphLaneColor
             return _nonRelativeBrush;
         }
     }
+
+    internal static readonly List<IBrush> PresetGraphBrushes = [];
 
     public static IBrush GetBrushForLane(int laneColor)
     {

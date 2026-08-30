@@ -1,4 +1,4 @@
-﻿using System.Xml;
+using System.Xml;
 using System.Xml.Serialization;
 using GitCommands;
 using GitUI.CommandsDialogs;
@@ -40,8 +40,6 @@ public interface IHotkeySettingsManager : IHotkeySettingsLoader
     void SaveSettings(IEnumerable<HotkeySettings> settings);
 }
 
-// Reduced twin: preserves the original manager and persistence contract while publishing
-// defaults only for command groups whose Avalonia consumers are implemented.
 internal sealed class HotkeySettingsManager : IHotkeySettingsManager
 {
     private static readonly XmlSerializer _serializer = new(typeof(HotkeySettings[]), [typeof(HotkeyCommand)]);
@@ -55,15 +53,9 @@ internal sealed class HotkeySettingsManager : IHotkeySettingsManager
 
     public bool IsUniqueKey(WinFormsShims.Keys keyData) => _usedKeys.Contains(keyData);
 
-    public IReadOnlyList<HotkeyCommand> LoadHotkeys(string hotkeySettingsName)
-    {
-        HotkeySettings? settings = LoadSettings()
-            .FirstOrDefault(candidate => candidate.Name == hotkeySettingsName);
-        return settings?.Commands ?? [];
-    }
-
     public IReadOnlyList<HotkeySettings> LoadSettings()
     {
+        // Get the default settings
         IReadOnlyList<HotkeySettings> defaultSettings = CreateDefaultSettings();
         HotkeySettings[]? loadedSettings = LoadSerializedSettings();
 
@@ -128,6 +120,9 @@ internal sealed class HotkeySettingsManager : IHotkeySettingsManager
         }
     }
 
+    public IReadOnlyList<HotkeySettings> CreateDefaultSettings()
+        => CreateDefaultSettingsCore(_scriptsManager);
+
     private static Dictionary<string, HotkeyCommand> CreateCommandLookup(IEnumerable<HotkeySettings> settings)
     {
         Dictionary<string, HotkeyCommand> commands = [];
@@ -168,8 +163,12 @@ internal sealed class HotkeySettingsManager : IHotkeySettingsManager
     private static string CalcDictionaryKey(string settingName, int commandCode)
         => settingName + ":" + commandCode;
 
-    public IReadOnlyList<HotkeySettings> CreateDefaultSettings()
-        => CreateDefaultSettingsCore(_scriptsManager);
+    public IReadOnlyList<HotkeyCommand> LoadHotkeys(string hotkeySettingsName)
+    {
+        HotkeySettings? settings = LoadSettings()
+            .FirstOrDefault(candidate => candidate.Name == hotkeySettingsName);
+        return settings?.Commands ?? [];
+    }
 
     internal static IReadOnlyList<HotkeySettings> CreateDefaultSettingsCore(IScriptsManager? scriptsManager)
     {
@@ -205,6 +204,7 @@ internal sealed class HotkeySettingsManager : IHotkeySettingsManager
                 FormBrowse.HotkeySettingsName,
                 Hk(FormBrowse.Command.GitBash, WinFormsShims.Keys.Control | WinFormsShims.Keys.G),
                 Hk(FormBrowse.Command.OpenRepo, WinFormsShims.Keys.Control | WinFormsShims.Keys.O),
+                Hk(FormBrowse.Command.OpenSettings, WinFormsShims.Keys.Control | WinFormsShims.Keys.Oemcomma),
                 Hk(FormBrowse.Command.CloseRepository, WinFormsShims.Keys.Control | WinFormsShims.Keys.W),
                 Hk(FormBrowse.Command.FocusRevisionGrid, WinFormsShims.Keys.Control | WinFormsShims.Keys.D1),
                 Hk(FormBrowse.Command.FocusCommitInfo, WinFormsShims.Keys.Control | WinFormsShims.Keys.D2),
@@ -221,6 +221,7 @@ internal sealed class HotkeySettingsManager : IHotkeySettingsManager
                 Hk(FormBrowse.Command.FocusNextTab, WinFormsShims.Keys.Control | WinFormsShims.Keys.Tab),
                 Hk(FormBrowse.Command.FocusPrevTab, WinFormsShims.Keys.Control | WinFormsShims.Keys.Shift | WinFormsShims.Keys.Tab),
                 Hk(FormBrowse.Command.PullOrFetch, WinFormsShims.Keys.Control | WinFormsShims.Keys.Down),
+                Hk(FormBrowse.Command.QuickFetch, WinFormsShims.Keys.Control | WinFormsShims.Keys.Shift | WinFormsShims.Keys.Down),
                 Hk(FormBrowse.Command.Push, WinFormsShims.Keys.Control | WinFormsShims.Keys.Up),
                 Hk(FormBrowse.Command.CreateBranch, WinFormsShims.Keys.Control | WinFormsShims.Keys.B),
                 Hk(FormBrowse.Command.MergeBranches, WinFormsShims.Keys.Control | WinFormsShims.Keys.M),
@@ -325,9 +326,24 @@ internal sealed class HotkeySettingsManager : IHotkeySettingsManager
                 FileViewer.HotkeySettingsName,
                 Hk(FileViewer.Command.Find, WinFormsShims.Keys.Control | WinFormsShims.Keys.F),
                 Hk(FileViewer.Command.Replace, WinFormsShims.Keys.Control | WinFormsShims.Keys.H),
-                Hk(FileViewer.Command.FindNextOrOpenWithDifftool, WinFormsShims.Keys.F3),
-                Hk(FileViewer.Command.FindPrevious, WinFormsShims.Keys.Shift | WinFormsShims.Keys.F3),
-                Hk(FileViewer.Command.GoToLine, WinFormsShims.Keys.Control | WinFormsShims.Keys.G)),
+                Hk(FileViewer.Command.FindNextOrOpenWithDifftool, OpenWithDifftoolHotkey),
+                Hk(FileViewer.Command.FindPrevious, WinFormsShims.Keys.Shift | OpenWithDifftoolHotkey),
+                Hk(FileViewer.Command.GoToLine, WinFormsShims.Keys.Control | WinFormsShims.Keys.G),
+                Hk(FileViewer.Command.IncreaseNumberOfVisibleLines, WinFormsShims.Keys.Control | WinFormsShims.Keys.Oemplus),
+                Hk(FileViewer.Command.DecreaseNumberOfVisibleLines, WinFormsShims.Keys.Control | WinFormsShims.Keys.OemMinus),
+                Hk(FileViewer.Command.NextChange, WinFormsShims.Keys.Alt | WinFormsShims.Keys.Down),
+                Hk(FileViewer.Command.PreviousChange, WinFormsShims.Keys.Alt | WinFormsShims.Keys.Up),
+                Hk(FileViewer.Command.ShowEntireFile, WinFormsShims.Keys.Control | WinFormsShims.Keys.E),
+                Hk(FileViewer.Command.ShowSyntaxHighlighting, WinFormsShims.Keys.X),
+                Hk(FileViewer.Command.ShowGitWordColoring, WinFormsShims.Keys.Control | WinFormsShims.Keys.D),
+                Hk(FileViewer.Command.ShowDifftastic, WinFormsShims.Keys.Control | WinFormsShims.Keys.T),
+                Hk(FileViewer.Command.TreatFileAsText, WinFormsShims.Keys.None),
+                Hk(FileViewer.Command.NextOccurrence, WinFormsShims.Keys.Alt | WinFormsShims.Keys.Right),
+                Hk(FileViewer.Command.PreviousOccurrence, WinFormsShims.Keys.Alt | WinFormsShims.Keys.Left),
+                Hk(FileViewer.Command.StageLines, WinFormsShims.Keys.S),
+                Hk(FileViewer.Command.UnstageLines, WinFormsShims.Keys.U),
+                Hk(FileViewer.Command.ResetLines, WinFormsShims.Keys.R),
+                Hk(FileViewer.Command.IgnoreAllWhitespace, WinFormsShims.Keys.Control | WinFormsShims.Keys.Shift | WinFormsShims.Keys.W)),
             new HotkeySettings(
                 FormSettings.HotkeySettingsName,
                 LoadScriptHotkeys()),

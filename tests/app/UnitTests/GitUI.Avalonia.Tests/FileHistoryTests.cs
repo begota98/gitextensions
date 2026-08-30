@@ -14,6 +14,7 @@ using GitExtensions.Extensibility.Translations;
 using GitExtUtils;
 using GitUI;
 using GitUI.CommandsDialogs;
+using GitUI.CommandsDialogs.BrowseDialog;
 using GitUI.Editor;
 using GitUIPluginInterfaces;
 using Microsoft.VisualStudio.Threading;
@@ -126,6 +127,31 @@ public sealed class FileHistoryTests
         form.FindControl<FileViewer>("Diff").Should().NotBeNull();
         form.FindControl<FileViewer>("View").Should().NotBeNull();
         form.FindControl<GitUI.Blame.BlameControl>("Blame").Should().NotBeNull();
+        form.FindControl<MenuItem>("manipulateCommitToolStripMenuItem").Should().NotBeNull();
+        form.FindControl<MenuItem>("revertCommitToolStripMenuItem").Should().NotBeNull();
+        form.FindControl<MenuItem>("cherryPickThisCommitToolStripMenuItem").Should().NotBeNull();
+    }
+
+    [AvaloniaTest]
+    public void FormFileHistory_should_expose_and_execute_the_original_git_command_log_toolbar_command()
+    {
+        FormGitCommandLog.TestAccessor.OpenInstance?.Close();
+        Dispatcher.UIThread.RunJobs();
+        FormFileHistory form = new();
+        Button commandLogButton = form.FindControl<Button>("gitcommandLogToolStripMenuItem")
+            ?? throw new AssertionException("The Git command log toolbar button was not created.");
+
+        ToolTip.GetTip(commandLogButton).Should().Be("Git command log");
+        commandLogButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Dispatcher.UIThread.RunJobs();
+
+        FormGitCommandLog commandLog = FormGitCommandLog.TestAccessor.OpenInstance
+            ?? throw new AssertionException("The toolbar command did not open the Git command log.");
+        commandLog.IsVisible.Should().BeTrue();
+
+        commandLog.Close();
+        form.Close();
+        Dispatcher.UIThread.RunJobs();
     }
 
     [AvaloniaTest]
@@ -144,6 +170,9 @@ public sealed class FileHistoryTests
         translation.Received(1).AddTranslationItem(nameof(FormFileHistory), "followFileHistoryToolStripMenuItem", "Text", "Detect and follow renames");
         translation.Received(1).AddTranslationItem(nameof(FormFileHistory), "showAuthorAvatarToolStripMenuItem", "Text", "Show author avatar");
         translation.Received(1).AddTranslationItem(nameof(FormFileHistory), "showFullHistoryToolStripMenuItem", "Text", "Show full history");
+        translation.Received(1).AddTranslationItem(nameof(FormFileHistory), "manipulateCommitToolStripMenuItem", "Text", "Manipulate commit");
+        translation.Received(1).AddTranslationItem(nameof(FormFileHistory), "revertCommitToolStripMenuItem", "Text", "Revert commit");
+        translation.Received(1).AddTranslationItem(nameof(FormFileHistory), "cherryPickThisCommitToolStripMenuItem", "Text", "Cherry pick commit");
         translation.Received(1).AddTranslationItem(nameof(FormFileHistory), "toolStripSplitLoad", "ToolTipText", "Load file history");
         translation.Received(1).AddTranslationItem(nameof(FormFileHistory), "ShowFullHistory", "ToolTipText", "Show Full History");
         translation.Received(1).AddTranslationItem(nameof(FormFileHistory), "CommitInfoTabPage", "Text", "Commit");

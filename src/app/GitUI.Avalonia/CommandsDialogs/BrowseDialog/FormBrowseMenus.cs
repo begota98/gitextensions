@@ -11,12 +11,14 @@ namespace GitUI.CommandsDialogs;
 /// Adds the revision-grid Navigate and View command sets to the Browse main menu.
 /// </summary>
 /// <remarks>
-/// This is the Avalonia twin of <c>CommandsDialogs/BrowseDialog/FormBrowseMenus.cs</c>.
 /// The revision grid remains the sole command/state owner; this class only creates and
 /// synchronizes additional menu-item presentations.
 /// </remarks>
 internal sealed class FormBrowseMenus : ITranslate, IDisposable
 {
+    /// <summary>
+        /// The menu to which we will be adding RevisionGrid command menus.
+        /// </summary>
     private readonly Menu _mainMenuStrip;
     private readonly RevisionGridControl _revisionGrid;
     private readonly Dictionary<MenuItem, MenuItem> _sourceItems = [];

@@ -8,17 +8,19 @@
         WindowDecorations="None"
         TransparencyLevelHint="Transparent"
         Background="Transparent"
+        Title=""
         WindowStartupLocation="CenterOwner">
   <Grid x:Name="tableLayoutPanel1"
-        RowDefinitions="22,*">
-    <Border BorderThickness="1"
-            BorderBrush="{DynamicResource ThemeBorderLowBrush}"
-            Background="{DynamicResource ThemeControlLowBrush}">
-      <TextBlock x:Name="lblEnterFileName"
-                 Padding="0,7,0,0"
-                 Text="Enter File Name" />
-    </Border>
-    <ContentControl x:Name="searchControlHost"
-                    Grid.Row="1" />
+        RowDefinitions="Auto,*">
+    <Label x:Name="lblEnterFileName"
+           Height="24"
+           Padding="0,7,0,0"
+           BorderThickness="1"
+           BorderBrush="{DynamicResource GitExtensionsControlBorderBrush}"
+           Background="{DynamicResource GitExtensionsControlBackgroundBrush}"
+           Content="Enter File Name"
+           HorizontalContentAlignment="Left"
+           VerticalContentAlignment="Top" />
+    <ContentControl Grid.Row="1" />
   </Grid>
 </Window>

@@ -10,8 +10,7 @@ using GitUI.Compat;
 
 namespace GitUI.CommandsDialogs.WorktreeDialog;
 
-// Twin of GitUI/CommandsDialogs/WorktreeDialog/FormManageWorktree.cs. The read-only
-// DataGridView becomes a typed ListBox with the original column translation identities.
+// The read-only DataGridView becomes a typed ListBox with the original column translations.
 public partial class FormManageWorktree : GitExtensionsDialog
 {
     private IReadOnlyList<GitWorktree>? _worktrees;
@@ -44,7 +43,7 @@ public partial class FormManageWorktree : GitExtensionsDialog
     {
         Worktrees.ItemTemplate = new FuncDataTemplate<GitWorktree>(CreateWorktreeRow, supportsRecycling: false);
         Worktrees.SelectionChanged += Worktrees_SelectionChanged;
-        Worktrees.DoubleTapped += WorktreesOnDoubleTapped;
+        Worktrees.DoubleTapped += WorktreesOnCellDoubleClick;
         Worktrees.KeyDown += Worktrees_KeyDown;
         buttonPruneWorktrees.Click += buttonPruneWorktrees_Click;
         buttonDeleteSelectedWorktree.Click += buttonDeleteSelectedWorktree_Click;
@@ -145,7 +144,7 @@ public partial class FormManageWorktree : GitExtensionsDialog
         OpenSelectedWorktree();
     }
 
-    private void WorktreesOnDoubleTapped(object? sender, TappedEventArgs e)
+    private void WorktreesOnCellDoubleClick(object? sender, TappedEventArgs e)
     {
         OpenSelectedWorktree();
     }

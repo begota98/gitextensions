@@ -23,11 +23,12 @@ using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitUI.Blame;
 
-// Twin of GitUI/UserControls/BlameControl.cs. The author gutter is a BlameAuthorMargin
-// inside the file editor instead of a second scroll-synchronised editor, so the
-// scroll-position handlers of the original have no twin.
+// The author gutter is a BlameAuthorMargin inside the file editor instead of a second
+// scroll-synchronised editor, so separate scroll-position handlers are unnecessary.
 public sealed partial class BlameControl : GitModuleControl
 {
+    public event EventHandler<CommandEventArgs>? CommandClick;
+
     /// <summary>
     /// Raised when the Escape key is pressed (and only when no selection exists, as the default behaviour of escape is to clear the selection).
     /// </summary>
@@ -79,6 +80,8 @@ public sealed partial class BlameControl : GitModuleControl
         BlameFile.SelectedLineChanged += SelectedLineChanged;
         BlameFile.DoubleTapped += ActiveTextAreaControlDoubleClick;
         BlameFile.EscapePressed += () => EscapePressed?.Invoke();
+
+        CommitInfo.CommandClicked += commitInfo_CommandClicked;
 
         contextMenu.Opening += contextMenu_Opened;
         blameRevisionToolStripMenuItem.Click += blameRevisionToolStripMenuItem_Click;
@@ -174,11 +177,9 @@ public sealed partial class BlameControl : GitModuleControl
         return menuItem;
     }
 
-    public void HideCommitInfo()
+    public void UpdateShowLineNumbers()
     {
-        CommitInfo.IsVisible = false;
-        splitContainer1.RowDefinitions[0].Height = new GridLength(0);
-        splitContainer1.RowDefinitions[1].Height = new GridLength(0);
+        BlameFile.TextEditor.ShowLineNumbers = AppSettings.BlameShowLineNumbers;
     }
 
     internal void CancelBackgroundTasks()
@@ -187,14 +188,17 @@ public sealed partial class BlameControl : GitModuleControl
         BlameAuthor.Clear();
     }
 
-    public void UpdateShowLineNumbers()
-    {
-        BlameFile.TextEditor.ShowLineNumbers = AppSettings.BlameShowLineNumbers;
-    }
-
     public int CurrentFileColumn => BlameFile.CurrentFileColumn;
 
     public int CurrentFileLine => BlameFile.CurrentFileLine;
+
+    public void HideCommitInfo()
+    {
+        CommitInfo.IsVisible = false;
+        splitContainer1.RowDefinitions[0].Height = new GridLength(0);
+        splitContainer1.RowDefinitions[1].Height = new GridLength(0);
+        CommitInfo.CommandClicked -= commitInfo_CommandClicked;
+    }
 
     public async Task LoadBlameAsync(
         GitRevision revision,
@@ -265,6 +269,11 @@ public sealed partial class BlameControl : GitModuleControl
         {
             _loading = false;
         }
+    }
+
+    private void commitInfo_CommandClicked(object? sender, CommandEventArgs e)
+    {
+        CommandClick?.Invoke(sender, e);
     }
 
     private void BlameAuthor_MouseLeave(object? sender, PointerEventArgs e)
@@ -574,6 +583,7 @@ public sealed partial class BlameControl : GitModuleControl
 
     private Color[] GetAgeBucketGradientColors()
     {
+        // Color chosen from: https://colorbrewer2.org/#type=sequential&scheme=Greens&n=7
         Color[] fallbacks =
         [
             Color.FromArgb(247, 252, 245),

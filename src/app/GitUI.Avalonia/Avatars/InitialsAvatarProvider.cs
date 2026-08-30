@@ -17,11 +17,9 @@ namespace GitUI.Avatars;
 /// </summary>
 public class InitialsAvatarProvider : IAvatarProvider
 {
-    private static readonly char[] _emailInitialSeparator = ['.', '-', '_'];
-
     private int _unkownCounter;
+    private static readonly char[] _emailInitialSeparator = ['.', '-', '_'];
     private FontFamily? _fontFamily;
-    private readonly (IBrush foregroundBrush, Avalonia.Media.Color backgroundColor)[] _avatarColors;
 
     public InitialsAvatarProvider()
     {
@@ -45,26 +43,14 @@ public class InitialsAvatarProvider : IAvatarProvider
 
     public bool PerformsIo => false;
 
-    protected internal (string initials, int hashCode) GetInitialsAndColorIndex(string email, string? name)
-    {
-        (string? selectedName, char[]? separator) = NameSelector(name, email);
-
-        if (selectedName is null)
-        {
-            return ("?", _unkownCounter++ % _avatarColors.Length);
-        }
-
-        string[] nameParts = selectedName.Split(separator);
-        string initials = GetInitialsFromNames(nameParts);
-        return (initials, GetDeterministicHashCode(email) % _avatarColors.Length);
-    }
-
-    public void UpdateFontsSettings()
-    {
-        string fontFamilyName = AppSettings.Font.FontFamily.Name;
-        _fontFamily = new FontFamily(fontFamilyName);
-    }
-
+    /// <summary>
+    /// Calculate the most simpler non-cryptographic deterministic hash (to get the same result every times it is calculated for the same string)
+    /// We just need an inexpensive way to convert a string to an integer, and calculating a hash is a good way to do it.
+    /// We are not using <c>GetHashCode()</c> because it returns a different value for each process.
+    /// Borrowed from https://stackoverflow.com/a/5155015
+    /// </summary>
+    /// <param name="str">The string to calculate a hash for.</param>
+    /// <returns>The calculated hash.</returns>
     private static int GetDeterministicHashCode(string str)
     {
         unchecked
@@ -79,10 +65,41 @@ public class InitialsAvatarProvider : IAvatarProvider
         }
     }
 
+    protected internal (string initials, int hashCode) GetInitialsAndColorIndex(string email, string? name)
+    {
+        (string? selectedName, char[]? separator) = NameSelector(name, email);
+
+        if (selectedName is null)
+        {
+            return ("?", _unkownCounter++ % _avatarColors.Length);
+        }
+
+        string[] nameParts = selectedName.Split(separator);
+        string initials = GetInitialsFromNames(nameParts);
+        return (initials, GetDeterministicHashCode(email) % _avatarColors.Length);
+    }
+
+    private static (string? name, char[]? separator) NameSelector(string? name, string? email)
+    {
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            return (name.Trim(), null);
+        }
+
+        if (!string.IsNullOrWhiteSpace(email))
+        {
+            string withoutDomain = email.LazySplit('@').First().TrimStart();
+            return (withoutDomain, _emailInitialSeparator);
+        }
+
+        return (null, null);
+    }
+
     private static string GetInitialsFromNames(string[]? possibleNames)
     {
         possibleNames = possibleNames?.Where(s => !string.IsNullOrWhiteSpace(s)).ToArray();
 
+        // if no valid name-elements are found, return acceptable fallback
         if (possibleNames?.Length is not > 0)
         {
             return "?";
@@ -97,10 +114,13 @@ public class InitialsAvatarProvider : IAvatarProvider
 
         string name = names[0];
 
+        // If only a single valid name-element is found ...
         if (names.Length == 1)
         {
+            // ... and that name-element is only a single character long ...
             if (name.Length == 1)
             {
+                // ... return that character as uppercase
                 return name.ToUpper();
             }
 
@@ -122,11 +142,15 @@ public class InitialsAvatarProvider : IAvatarProvider
                 return $"{upperChars[0]}{upperChars[^1]}";
             }
 
+            // return first letter upper-case and second letter original/lower case.
             return $"{char.ToUpper(name[0])}{name[1]}";
         }
 
+        // Return initials from first and last name-element as uppercase
         return $"{name[0]}{names[^1][0]}".ToUpper();
     }
+
+    private readonly (IBrush foregroundBrush, Avalonia.Media.Color backgroundColor)[] _avatarColors;
 
     private static (IBrush foregroundBrush, Avalonia.Media.Color backgroundColor) GetAvatarDrawingMaterial(string colorCode)
     {
@@ -173,22 +197,6 @@ public class InitialsAvatarProvider : IAvatarProvider
         }
     }
 
-    private static (string? name, char[]? separator) NameSelector(string? name, string? email)
-    {
-        if (!string.IsNullOrWhiteSpace(name))
-        {
-            return (name.Trim(), null);
-        }
-
-        if (!string.IsNullOrWhiteSpace(email))
-        {
-            string withoutDomain = email.LazySplit('@').First().TrimStart();
-            return (withoutDomain, _emailInitialSeparator);
-        }
-
-        return (null, null);
-    }
-
     private byte[] DrawText(string? text, IBrush foreColor, Avalonia.Media.Color backColor, int avatarSize)
     {
         Validates.NotNull(_fontFamily);
@@ -196,10 +204,14 @@ public class InitialsAvatarProvider : IAvatarProvider
 
         double initialFontSize = Math.Max(1, avatarSize * 0.7);
         FormattedText measuredText = CreateText(initialFontSize);
+
+        // Adjust font size based on the estimated measure of input text
         double ratio = Math.Min(
             avatarSize / Math.Max(measuredText.Width, 1),
             avatarSize / Math.Max(measuredText.Height, 1));
         FormattedText displayedText = CreateText(initialFontSize * Math.Min(ratio, 1));
+
+        // centering horizontally and vertically
         double xOffset = Math.Max((avatarSize - displayedText.Width) / 2, 0);
         double yOffset = Math.Max((avatarSize - displayedText.Height) / 2, 0);
 
@@ -220,5 +232,11 @@ public class InitialsAvatarProvider : IAvatarProvider
                 new Typeface(_fontFamily),
                 fontSize,
                 foreColor);
+    }
+
+    public void UpdateFontsSettings()
+    {
+        string fontFamilyName = AppSettings.Font.FontFamily.Name;
+        _fontFamily = new FontFamily(fontFamilyName);
     }
 }

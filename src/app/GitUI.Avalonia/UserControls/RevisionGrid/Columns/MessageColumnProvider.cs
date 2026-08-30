@@ -1,4 +1,4 @@
-﻿using System.Collections.Frozen;
+using System.Collections.Frozen;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
@@ -64,6 +64,14 @@ internal sealed class MessageColumnProvider : ColumnProvider
         Clear();
     }
 
+    public void ClearRefHighlight()
+    {
+        foreach (MessageCell cell in _grid.GetVisualDescendants().OfType<MessageCell>())
+        {
+            cell.ClearHighlight();
+        }
+    }
+
     public override void ApplySettings()
     {
         Column.IsVisible = true;
@@ -79,10 +87,61 @@ internal sealed class MessageColumnProvider : ColumnProvider
             AppSettings.ShowTags);
     }
 
-    public override void Clear()
+    public override bool TryGetToolTip(GitRevision revision, [NotNullWhen(returnValue: true)] out string? toolTip)
     {
-        _aheadBehindDataByLocalBranch = null;
-        _aheadBehindDataByRemoteBranch = null;
+        _toolTipBuilder.Clear();
+
+        if (!revision.IsArtificial && (revision.HasMultiLineMessage || revision.Refs.Count != 0))
+        {
+            // The body is not stored for older commits (to save memory)
+            string bodySummary = _gitRevisionSummaryBuilder.BuildSummary(GetBody(revision))
+                ?? revision.Subject + (revision.HasMultiLineMessage ? TranslatedStrings.BodyNotLoaded : "");
+            _toolTipBuilder.EnsureCapacity(bodySummary.Length + 10);
+            _toolTipBuilder.Append(bodySummary);
+
+            if (revision.Refs.Count != 0)
+            {
+                if (_toolTipBuilder.Length != 0)
+                {
+                    _toolTipBuilder.AppendLine();
+                    _toolTipBuilder.AppendLine();
+                }
+
+                foreach (IGitRef gitRef in SortRefs(revision.Refs))
+                {
+                    if (gitRef.IsBisectGood)
+                    {
+                        _toolTipBuilder.AppendLine(TranslatedStrings.MarkBisectAsGood);
+                    }
+                    else if (gitRef.IsBisectBad)
+                    {
+                        _toolTipBuilder.AppendLine(TranslatedStrings.MarkBisectAsBad);
+                    }
+                    else
+                    {
+                        _toolTipBuilder.Append('[').Append(gitRef.Name).Append(']');
+                        if (GetAheadBehindData(gitRef.IsRemote, gitRef.CompleteName) is { } data)
+                        {
+                            _toolTipBuilder.Append("   ").Append(data.ToDisplay(reverse: gitRef.IsRemote));
+                        }
+
+                        _toolTipBuilder.AppendLine();
+                    }
+                }
+            }
+
+            toolTip = _toolTipBuilder.ToString();
+            return true;
+        }
+
+        if (_settings.ShowGitStatusForArtificialCommits
+            && _grid.GetChangeCount(revision.ObjectId) is ArtificialCommitChangeCount changeCount)
+        {
+            toolTip = _toolTipBuilder.Append(changeCount.GetSummary()).ToString();
+            return true;
+        }
+
+        return base.TryGetToolTip(revision, out toolTip);
     }
 
     public override Control CreateCell()
@@ -193,61 +252,49 @@ internal sealed class MessageColumnProvider : ColumnProvider
         UpdateToolTip(panel, revision);
     }
 
-    public override bool TryGetToolTip(GitRevision revision, [NotNullWhen(returnValue: true)] out string? toolTip)
+    private static IReadOnlyList<IGitRef> SortRefs(IEnumerable<IGitRef> refs)
     {
-        _toolTipBuilder.Clear();
+        List<IGitRef> sortedRefs = [.. refs];
+        sortedRefs.Sort(CompareRefs);
+        return sortedRefs;
 
-        if (!revision.IsArtificial && (revision.HasMultiLineMessage || revision.Refs.Count != 0))
+        static int CompareRefs(IGitRef left, IGitRef right)
         {
-            // The body is not stored for older commits (to save memory)
-            string bodySummary = _gitRevisionSummaryBuilder.BuildSummary(GetBody(revision))
-                ?? revision.Subject + (revision.HasMultiLineMessage ? TranslatedStrings.BodyNotLoaded : "");
-            _toolTipBuilder.EnsureCapacity(bodySummary.Length + 10);
-            _toolTipBuilder.Append(bodySummary);
+            int result = GetRank(left).CompareTo(GetRank(right));
+            return result == 0
+                ? string.Compare(left.Name, right.Name, StringComparison.Ordinal)
+                : result;
+        }
 
-            if (revision.Refs.Count != 0)
+        static int GetRank(IGitRef gitRef)
+        {
+            if (gitRef.IsBisect)
             {
-                if (_toolTipBuilder.Length != 0)
-                {
-                    _toolTipBuilder.AppendLine();
-                    _toolTipBuilder.AppendLine();
-                }
-
-                foreach (IGitRef gitRef in SortRefs(revision.Refs))
-                {
-                    if (gitRef.IsBisectGood)
-                    {
-                        _toolTipBuilder.AppendLine(TranslatedStrings.MarkBisectAsGood);
-                    }
-                    else if (gitRef.IsBisectBad)
-                    {
-                        _toolTipBuilder.AppendLine(TranslatedStrings.MarkBisectAsBad);
-                    }
-                    else
-                    {
-                        _toolTipBuilder.Append('[').Append(gitRef.Name).Append(']');
-                        if (GetAheadBehindData(gitRef.IsRemote, gitRef.CompleteName) is { } data)
-                        {
-                            _toolTipBuilder.Append("   ").Append(data.ToDisplay(reverse: gitRef.IsRemote));
-                        }
-
-                        _toolTipBuilder.AppendLine();
-                    }
-                }
+                return 0;
             }
 
-            toolTip = _toolTipBuilder.ToString();
-            return true;
-        }
+            if (gitRef.IsSelected)
+            {
+                return 1;
+            }
 
-        if (_settings.ShowGitStatusForArtificialCommits
-            && _grid.GetChangeCount(revision.ObjectId) is ArtificialCommitChangeCount changeCount)
-        {
-            toolTip = _toolTipBuilder.Append(changeCount.GetSummary()).ToString();
-            return true;
-        }
+            if (gitRef.IsSelectedHeadMergeSource)
+            {
+                return 2;
+            }
 
-        return base.TryGetToolTip(revision, out toolTip);
+            if (gitRef.IsHead)
+            {
+                return 3;
+            }
+
+            if (gitRef.IsRemote)
+            {
+                return 4;
+            }
+
+            return 5;
+        }
     }
 
     private static double GetArtificialLabelWidth(MessageCell panel)
@@ -398,51 +445,84 @@ internal sealed class MessageColumnProvider : ColumnProvider
         return labels;
     }
 
-    private IGitRef? GetVirtualRef(IGitRef gitRef)
+    private (IGitRef GitRef, string Name)? GetVirtualRef(IGitRef gitRef)
     {
-        (string display, string trackedCompleteName) = GetAheadBehind(gitRef, withCounts: false);
+        (string display, string trackedCompleteName, bool isGone) = GetAheadBehind(gitRef, withCounts: false);
         if (display.Length == 0)
         {
             return null;
         }
 
-        return new VirtualRef(
-            display,
-            trackedCompleteName,
-            gitRef.TrackingRemote,
-            gitRef.CompleteName,
-            gitRef.Module)
-        {
-            IsHead = gitRef.IsRemote,
-            IsRemote = !gitRef.IsRemote,
-        };
+        return (new NestledVirtualRef(gitRef, trackedCompleteName, trackingBranchIsGone: isGone), display);
     }
 
-    private (string Display, string TrackedCompleteName) GetAheadBehind(IGitRef gitRef, bool withCounts = true)
+    private string[] GetCommitMessageLines(GitRevision revision)
+        => GetBody(revision)?.Split(Delimiters.LineFeed, StringSplitOptions.RemoveEmptyEntries) ?? [revision.Subject];
+
+    private string? GetBody(GitRevision revision)
+    {
+        if (revision.Body is null)
+        {
+            if (_commitDataManager is not null
+                && (_settings.ShowCommitBodyInRevisionGrid || _settings.ShowGitNotes || _settings.NotesInSeparateColumn))
+            {
+                _commitDataManager.InitiateDelayedLoadingOfDetails(revision);
+            }
+
+            return null;
+        }
+
+        return _settings.NotesInSeparateColumn
+            ? revision.Body
+            : UIExtensions.FormatBodyAndNotes(revision.Body, revision.Notes);
+    }
+
+    public override void Clear()
+    {
+        _aheadBehindDataByLocalBranch = null;
+        _aheadBehindDataByRemoteBranch = null;
+    }
+
+    /// <summary>
+        ///  Returns a tuple of the ahead/behind indicator for a local or remote branch ref label
+        ///  and the <see cref="IGitRef.CompleteName"/> of the tracked (for a local ref) or tracking (for a remote ref) branch.
+        /// </summary>
+        /// <remarks>
+        ///  Uses <see cref="AheadBehindData.ToDisplay"/> for consistent formatting with the push button and left panel.
+        ///  When rendering a local branch's tracked remote as a virtual label, the perspective is inverted: what the local branch
+        ///  is ahead of the remote appears as the remote being behind, and vice versa — so <see cref="AheadBehindData.BehindCount"/>
+        ///  and <see cref="AheadBehindData.AheadCount"/> are swapped before formatting.
+        ///  Returns an empty display string for untracked refs or when the provider is unavailable.
+        /// </remarks>
+    private (string Display, string TrackedCompleteName, bool IsGone) GetAheadBehind(IGitRef gitRef, bool withCounts = true)
     {
         _aheadBehindDataByLocalBranch ??= _aheadBehindDataProvider?.GetData()
             ?? FrozenDictionary<string, AheadBehindData>.Empty;
 
         if (gitRef.IsRemote)
         {
+            // Match the remote ref via AheadBehindData.RemoteRef, which holds the full refs/remotes/… name
+            // regardless of whether the remote branch is named differently from the local tracking branch.
             _aheadBehindDataByRemoteBranch ??= _aheadBehindDataByLocalBranch.Values
                 .DistinctBy(data => data.RemoteRef)
                 .ToFrozenDictionary(data => data.RemoteRef, data => data);
 
             if (_aheadBehindDataByRemoteBranch.TryGetValue(gitRef.CompleteName, out AheadBehindData aheadBehind))
             {
-                return (aheadBehind.ToDisplay(withCounts), GitRefName.RefsHeadsPrefix + aheadBehind.Branch);
+                return (aheadBehind.ToDisplay(withCounts), GitRefName.RefsHeadsPrefix + aheadBehind.Branch, aheadBehind.AheadCount == AheadBehindData.Gone);
             }
         }
         else if (_aheadBehindDataByLocalBranch.TryGetValue(gitRef.Name, out AheadBehindData aheadBehind))
         {
-            return (aheadBehind.ToDisplay(withCounts, reverse: true), aheadBehind.RemoteRef);
+            // This info is displayed in a virtual remote ref label.
+            // From the remote ref's perspective, ahead/behind are swapped relative to the local branch.
+            return (aheadBehind.ToDisplay(withCounts, reverse: true), aheadBehind.RemoteRef, aheadBehind.AheadCount == AheadBehindData.Gone);
         }
 
-        return (string.Empty, string.Empty);
+        return (string.Empty, string.Empty, false);
     }
 
-    private AheadBehindData? GetAheadBehindData(bool isRemote, string completeName)
+    internal AheadBehindData? GetAheadBehindData(bool isRemote, string completeName)
     {
         _aheadBehindDataByLocalBranch ??= _aheadBehindDataProvider?.GetData()
             ?? FrozenDictionary<string, AheadBehindData>.Empty;
@@ -465,72 +545,6 @@ internal sealed class MessageColumnProvider : ColumnProvider
             : null;
     }
 
-    private static IReadOnlyList<IGitRef> SortRefs(IEnumerable<IGitRef> refs)
-    {
-        List<IGitRef> sortedRefs = [.. refs];
-        sortedRefs.Sort(CompareRefs);
-        return sortedRefs;
-
-        static int CompareRefs(IGitRef left, IGitRef right)
-        {
-            int result = GetRank(left).CompareTo(GetRank(right));
-            return result == 0
-                ? string.Compare(left.Name, right.Name, StringComparison.Ordinal)
-                : result;
-        }
-
-        static int GetRank(IGitRef gitRef)
-        {
-            if (gitRef.IsBisect)
-            {
-                return 0;
-            }
-
-            if (gitRef.IsSelected)
-            {
-                return 1;
-            }
-
-            if (gitRef.IsSelectedHeadMergeSource)
-            {
-                return 2;
-            }
-
-            if (gitRef.IsHead)
-            {
-                return 3;
-            }
-
-            if (gitRef.IsRemote)
-            {
-                return 4;
-            }
-
-            return 5;
-        }
-    }
-
-    private string? GetBody(GitRevision revision)
-    {
-        if (revision.Body is null)
-        {
-            if (_commitDataManager is not null
-                && (_settings.ShowCommitBodyInRevisionGrid || _settings.ShowGitNotes || _settings.NotesInSeparateColumn))
-            {
-                _commitDataManager.InitiateDelayedLoadingOfDetails(revision);
-            }
-
-            return null;
-        }
-
-        return _settings.NotesInSeparateColumn
-            ? revision.Body
-            : UIExtensions.FormatBodyAndNotes(revision.Body, revision.Notes);
-    }
-
-    private string[] GetCommitMessageLines(GitRevision revision)
-        => GetBody(revision)?.Split(Delimiters.LineFeed, StringSplitOptions.RemoveEmptyEntries) ?? [revision.Subject];
-
     private string? GetRefToolTip(IGitRef? gitRef)
     {
         if (gitRef is null)
@@ -539,10 +553,13 @@ internal sealed class MessageColumnProvider : ColumnProvider
         }
 
         StringBuilder toolTip = new();
-        if (gitRef.Guid is null)
+        if (gitRef is NestledVirtualRef aheadBehindRef)
         {
-            bool realRefIsRemote = !gitRef.IsRemote;
-            string realRefCompleteName = gitRef.MergeWith;
+            bool realRefIsRemote = !aheadBehindRef.IsRemote;
+            string realRefLocalName = aheadBehindRef.MergeWith;
+            string realRefCompleteName = realRefIsRemote
+                ? GitRefName.GetFullRemoteName(realRefLocalName, aheadBehindRef.TrackingRemote)
+                : GitRefName.GetFullBranchName(realRefLocalName);
             string realRefName = RemovePrefix(
                 realRefCompleteName,
                 realRefIsRemote ? GitRefName.RefsRemotesPrefix : GitRefName.RefsHeadsPrefix);
@@ -688,6 +705,7 @@ internal sealed class MessageColumnProvider : ColumnProvider
             {
                 _highlightedLabel.IsHighlighted = false;
                 _highlightedLabel = null;
+                _provider._grid.UpdateLaneHighlight(gitRef: null, revision: Revision);
             }
 
             Cursor = null;
@@ -709,6 +727,7 @@ internal sealed class MessageColumnProvider : ColumnProvider
                 {
                     label.IsHighlighted = true;
                     Cursor = HandCursor;
+                    _provider._grid.UpdateLaneHighlight(label.GitRef, Revision);
                 }
             }
 
@@ -720,54 +739,10 @@ internal sealed class MessageColumnProvider : ColumnProvider
         private void OnDoubleTapped(object? sender, TappedEventArgs e)
         {
             if (HitTest(e.GetPosition) is { GitRef: not null } label
-                && _provider._grid.GoToRelatedRef(label.GitRef))
+                && _provider._grid.TryGoToRelatedRef(label.GitRef))
             {
                 e.Handled = true;
             }
         }
-    }
-
-    private sealed class VirtualRef(
-        string name,
-        string completeName,
-        string remote,
-        string mergeWith,
-        IGitModule module) : IGitRef
-    {
-        public string Name => name;
-        public ObjectId ObjectId => throw new NotSupportedException();
-        public string? Guid => null;
-        public IGitModule Module => module;
-        public string CompleteName => completeName;
-        public string Remote => remote;
-        public string LocalName => Name;
-        public bool IsRemote { get; init; }
-        public bool IsHead { get; init; }
-        public bool IsTag => false;
-        public bool IsBisect => false;
-        public bool IsBisectGood => false;
-        public bool IsBisectBad => false;
-        public bool IsStash => false;
-        public bool IsDereference => false;
-        public bool IsSelected { get; set; }
-        public bool IsSelectedHeadMergeSource { get; set; }
-        public string MergeWith
-        {
-            get => mergeWith;
-            set => throw new NotSupportedException();
-        }
-
-        public string TrackingRemote
-        {
-            get => string.Empty;
-            set => throw new NotSupportedException();
-        }
-
-        public bool IsTrackingRemote(IGitRef? remote) => false;
-
-        public override bool Equals(object? obj)
-            => obj is VirtualRef other && CompleteName == other.CompleteName;
-
-        public override int GetHashCode() => completeName.GetHashCode();
     }
 }

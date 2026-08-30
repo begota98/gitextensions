@@ -13,15 +13,10 @@ internal abstract class BaseRevisionNode : Node
         ObjectId = gitRef?.ObjectId ?? default;
     }
 
-    public string FullPath { get; }
-
+    /// <summary>
+        /// Short name of the branch/branch path. <example>"issue1344"</example>.
+        /// </summary>
     public string Name => GetName(FullPath);
-
-    public IGitRef? GitRef { get; }
-
-    public ObjectId ObjectId { get; protected init; }
-
-    public override string SearchText => FullPath;
 
     protected string ParentPath
     {
@@ -31,6 +26,20 @@ internal abstract class BaseRevisionNode : Node
             return separator < 0 ? string.Empty : FullPath[..separator];
         }
     }
+
+    public IGitRef? GitRef { get; }
+
+    /// <summary>
+        /// Full path of the branch. <example>"issues/issue1344"</example>.
+        /// </summary>
+    public string FullPath { get; }
+
+    public override string SearchText => FullPath;
+
+    /// <summary>
+        /// ObjectId for nodes with a revision.
+        /// </summary>
+    public ObjectId ObjectId { get; protected init; }
 
     public bool Rebase()
         => UICommands.StartRebaseDialog(Owner, FullPath);

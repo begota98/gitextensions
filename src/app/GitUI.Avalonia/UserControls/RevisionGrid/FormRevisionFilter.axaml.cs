@@ -6,9 +6,8 @@ using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitUI.UserControls.RevisionGrid;
 
-// Twin of GitUI/UserControls/RevisionGrid/FormRevisionFilter.cs. The original mutates the
-// shared FilterInfo only when OK is pressed; retaining that boundary also lets quick filters
-// and the advanced dialog continue to describe one revision-grid state.
+// The shared FilterInfo is mutated only when OK is pressed, allowing quick filters and the
+// advanced dialog to continue describing one revision-grid state.
 public partial class FormRevisionFilter : GitExtensionsDialog
 {
     private readonly FilterInfo _filterInfo;
@@ -136,6 +135,8 @@ public partial class FormRevisionFilter : GitExtensionsDialog
     private void option_CheckedChanged(object? sender, EventArgs e)
     {
         UpdateFilters();
+
+        // If CommitsLimitCheck was changed, the displayed value may need to be updated too
         if (ReferenceEquals(sender, CommitsLimitCheck) && CommitsLimitCheck.IsChecked != true)
         {
             _NO_TRANSLATE_CommitsLimit.Value = _filterInfo.CommitsLimitDefault;

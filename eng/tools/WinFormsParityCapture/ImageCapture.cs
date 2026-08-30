@@ -6,11 +6,14 @@ namespace WinFormsParityCapture;
 
 internal static class ImageCapture
 {
-    public static CaptureImageResult Capture(Control root, IReadOnlyList<ToolStripDropDown> popups)
+    public static CaptureImageResult Capture(
+        Control root,
+        IReadOnlyList<ToolStripDropDown> popups,
+        IReadOnlyList<ComboBoxPopup> comboBoxPopups)
     {
-        if (popups.Count > 0)
+        if (popups.Count > 0 || comboBoxPopups.Count > 0 || RequiresScreenGrab(root))
         {
-            return CaptureScreen(root, popups);
+            return CaptureScreen(root, popups, comboBoxPopups);
         }
 
         if (root is Form form)
@@ -90,7 +93,10 @@ internal static class ImageCapture
             "The owning window and DrawToBitmap both returned blank client content.");
     }
 
-    private static CaptureImageResult CaptureScreen(Control root, IReadOnlyList<ToolStripDropDown> popups)
+    private static CaptureImageResult CaptureScreen(
+        Control root,
+        IReadOnlyList<ToolStripDropDown> popups,
+        IReadOnlyList<ComboBoxPopup> comboBoxPopups)
     {
         Rectangle primaryBounds = GetPrimaryScreenBounds(root);
         Rectangle bounds = primaryBounds;
@@ -99,8 +105,17 @@ internal static class ImageCapture
             bounds = Rectangle.Union(bounds, popup.Bounds);
         }
 
-        int maximumExpectedWidth = primaryBounds.Width + popups.Sum(popup => popup.Width);
-        int maximumExpectedHeight = primaryBounds.Height + popups.Sum(popup => popup.Height);
+        foreach (ComboBoxPopup popup in comboBoxPopups)
+        {
+            bounds = Rectangle.Union(bounds, popup.Bounds);
+        }
+
+        int maximumExpectedWidth = primaryBounds.Width
+            + popups.Sum(popup => popup.Width)
+            + comboBoxPopups.Sum(popup => popup.Bounds.Width);
+        int maximumExpectedHeight = primaryBounds.Height
+            + popups.Sum(popup => popup.Height)
+            + comboBoxPopups.Sum(popup => popup.Bounds.Height);
         if (bounds.Width > maximumExpectedWidth || bounds.Height > maximumExpectedHeight)
         {
             throw new CaptureStateUnsupportedException(
@@ -154,6 +169,23 @@ internal static class ImageCapture
         root is Form form
             ? NativeMethods.GetWindowRectangle(form.Handle)
             : root.RectangleToScreen(root.ClientRectangle);
+
+    // Native WebBrowser content is rendered by its own child window and PrintWindow can return
+    // the containing form with that region silently blank. Capture the real visible desktop pixels.
+    internal static bool RequiresScreenGrab(Control root)
+        => EnumerateSelfAndDescendants(root).Any(control => control is WebBrowser && control.Visible);
+
+    private static IEnumerable<Control> EnumerateSelfAndDescendants(Control control)
+    {
+        yield return control;
+        foreach (Control child in control.Controls)
+        {
+            foreach (Control descendant in EnumerateSelfAndDescendants(child))
+            {
+                yield return descendant;
+            }
+        }
+    }
 
     private static void EnsureRenderedContent(Bitmap bitmap, string method)
     {

@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -36,14 +37,13 @@ internal static class CaptureRunner
         Directory.CreateDirectory(runtimeRoot);
 
         List<CaptureManifestEntry> entries = [];
+        int? captureResult = null;
+        ExceptionDispatchInfo? captureFailure = null;
         try
         {
             CopyRuntime(AppContext.BaseDirectory, runtimeRoot);
             string isolatedPlanPath = Path.Combine(runtimeRoot, Path.GetFileName(planPath));
-            if (!File.Exists(isolatedPlanPath))
-            {
-                File.Copy(planPath, isolatedPlanPath);
-            }
+            StageCapturePlan(planPath, isolatedPlanPath);
 
             foreach (CaptureComponentPlan component in components)
             {
@@ -132,12 +132,34 @@ internal static class CaptureRunner
             string manifestPath = Path.Combine(outputPath, "manifest.json");
             File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest, ManifestJsonOptions) + Environment.NewLine);
             Console.WriteLine($"Capture manifest written to {manifestPath}");
-            return entries.Any(entry => entry.Status == CaptureStateStatus.Failed) ? 1 : 0;
+            captureResult = entries.Any(entry => entry.Status == CaptureStateStatus.Failed) ? 1 : 0;
         }
-        finally
+        catch (Exception ex)
+        {
+            captureFailure = ExceptionDispatchInfo.Capture(ex);
+        }
+
+        try
         {
             DeleteIsolationRoot(isolationRoot);
         }
+        catch (Exception cleanupException) when (captureFailure is not null)
+        {
+            throw new AggregateException(
+                "The capture failed and its isolated runtime could not be removed.",
+                captureFailure.SourceException,
+                cleanupException);
+        }
+
+        captureFailure?.Throw();
+        return captureResult
+            ?? throw new InvalidOperationException("The capture did not produce an exit result.");
+    }
+
+    // parity-scaffolding: the isolated worker must consume the caller's exact plan, even when its name matches the packaged default.
+    internal static void StageCapturePlan(string planPath, string isolatedPlanPath)
+    {
+        File.Copy(planPath, isolatedPlanPath, overwrite: true);
     }
 
     public static int CaptureWorker(CaptureOptions options)
@@ -167,13 +189,15 @@ internal static class CaptureRunner
         try
         {
             using WinFormsBootstrap bootstrap = WinFormsBootstrap.Create(repositoryPath, profile, theme, isolationRoot);
-            using Control root = ComponentFactory.Create(component, bootstrap.Commands);
+            using Control root = ComponentFactory.Create(component, bootstrap.Commands, state);
+            IReadOnlyDictionary<object, ControlTreeReader.FontBaseline> fontBaselines =
+                ControlTreeReader.CaptureFontBaselines(root);
             PrepareControl(root, bootstrap.Commands, component, monitor, scale, dpiMode);
             PumpUntilReady(root);
             int actualDpi = root.DeviceDpi;
             entries.Add(actualDpi != scale * 96 / 100
                 ? Unsupported(componentType, theme.Id, scale, state.Id, $"The WinForms DPI-change path reported {actualDpi} DPI instead of {scale * 96 / 100} DPI.")
-                : CaptureState(bootstrap, root, componentType, theme, scale, dpiMode, state, outputPath));
+                : CaptureState(bootstrap, root, component, theme, scale, dpiMode, state, outputPath, fontBaselines));
             Application.DoEvents();
             bootstrap.ThrowIfThreadException();
             ComponentFactory.CleanupBeforeDispose(root);
@@ -306,19 +330,26 @@ internal static class CaptureRunner
     private static CaptureManifestEntry CaptureState(
         WinFormsBootstrap bootstrap,
         Control root,
-        string componentType,
+        CaptureComponentPlan component,
         CaptureThemePlan theme,
         int scale,
         CaptureDpiMode dpiMode,
         CaptureStatePlan state,
-        string outputRoot)
+        string outputRoot,
+        IReadOnlyDictionary<object, ControlTreeReader.FontBaseline>? fontBaselines = null)
     {
+        string componentType = component.TypeName;
         try
         {
             bootstrap.ThrowIfThreadException();
-            using ControlStateDriver driver = ApplyVerifiedCaptureState(root, bootstrap.Commands, state);
+            using ControlStateDriver driver = ApplyVerifiedCaptureState(root, bootstrap.Commands, component, state);
+            if (dpiMode == CaptureDpiMode.DpiChangeMessage)
+            {
+                EnsureManagedControlDpi(root, root.DeviceDpi);
+            }
+
             bootstrap.ThrowIfThreadException();
-            using CaptureImageResult image = ImageCapture.Capture(root, driver.Popups);
+            using CaptureImageResult image = ImageCapture.Capture(root, driver.Popups, driver.ComboBoxPopups);
             string relativeDirectory = Path.Combine(Sanitize(componentType), Sanitize(theme.Id), scale.ToString(CultureInfo.InvariantCulture));
             string absoluteDirectory = Path.Combine(outputRoot, relativeDirectory);
             Directory.CreateDirectory(absoluteDirectory);
@@ -329,13 +360,18 @@ internal static class CaptureRunner
             image.Bitmap.Save(imagePath);
 
             int dpi = root.DeviceDpi;
-            ControlTreeReader reader = new(root, dpi);
+            ControlTreeReader reader = new(root, dpi, fontBaselines);
             List<CaptureSurface> surfaces =
             [
                 reader.ReadPrimary(root, image.PrimaryScreenBounds)
             ];
             surfaces.AddRange(driver.Popups.Select((popup, index) =>
                 reader.ReadPopup(popup, index, image.PrimaryScreenBounds.Location)));
+            surfaces.AddRange(driver.ComboBoxPopups.Select((popup, index) =>
+                reader.ReadComboBoxPopup(
+                    popup,
+                    driver.Popups.Count + index,
+                    image.PrimaryScreenBounds.Location)));
 
             string themePath = Path.Combine(AppContext.BaseDirectory, "Themes", theme.File);
             string relativeImagePath = Path.GetRelativePath(outputRoot, imagePath).Replace('\\', '/');
@@ -415,13 +451,15 @@ internal static class CaptureRunner
     private static ControlStateDriver ApplyVerifiedCaptureState(
         Control root,
         IGitUICommands commands,
+        CaptureComponentPlan component,
         CaptureStatePlan state)
     {
         const int maximumAttempts = 3;
         CaptureStateNotReadyException? lastException = null;
         for (int attempt = 1; attempt <= maximumAttempts; attempt++)
         {
-            ComponentFactory.PrepareCaptureState(root, commands);
+            ComponentFactory.PrepareCaptureState(root, commands, state);
+            ComponentFactory.ApplyTextValues(root, component);
             ControlStateDriver? driver = null;
             try
             {
@@ -489,7 +527,7 @@ internal static class CaptureRunner
         return options;
     }
 
-    private static void DeleteIsolationRoot(string isolationRoot)
+    internal static void DeleteIsolationRoot(string isolationRoot)
     {
         string fullRoot = Path.GetFullPath(isolationRoot);
         string expectedParent = Path.TrimEndingDirectorySeparator(Path.Combine(Path.GetTempPath(), "GitExtensions.WinFormsParityCapture"))
@@ -499,9 +537,21 @@ internal static class CaptureRunner
             throw new InvalidOperationException($"Refusing to remove unexpected isolation path '{fullRoot}'.");
         }
 
-        if (Directory.Exists(fullRoot))
+        const int deleteAttempts = 20;
+        for (int attempt = 1; Directory.Exists(fullRoot); attempt++)
         {
-            Directory.Delete(fullRoot, recursive: true);
+            try
+            {
+                Directory.Delete(fullRoot, recursive: true);
+            }
+            catch (Exception ex) when (
+                ex is IOException or UnauthorizedAccessException
+                && attempt < deleteAttempts)
+            {
+                // Windows can retain the just-exited apphost mapping briefly. Give the OS and
+                // antivirus scanner a bounded opportunity to release it before abandoning cleanup.
+                Thread.Sleep(100);
+            }
         }
     }
 
@@ -598,16 +648,91 @@ internal static class CaptureRunner
             return;
         }
 
-        Rectangle currentBounds = NativeMethods.GetWindowRectangle(root.FindForm()?.Handle ?? root.Handle);
-        double factor = (double)targetDpi / currentDpi;
-        Rectangle suggestedBounds = new(
-            currentBounds.X,
-            currentBounds.Y,
-            Math.Max(1, (int)Math.Round(currentBounds.Width * factor)),
-            Math.Max(1, (int)Math.Round(currentBounds.Height * factor)));
-        NativeMethods.SendDpiChanged(root.FindForm()?.Handle ?? root.Handle, targetDpi, suggestedBounds);
+        Control window = root.FindForm() ?? root;
+        Rectangle currentBounds = NativeMethods.GetWindowRectangle(window.Handle);
+        Rectangle suggestedBounds = CalculateDpiChangedBounds(
+            currentBounds,
+            window.ClientSize,
+            currentDpi,
+            targetDpi);
+        NativeMethods.SendDpiChanged(window.Handle, targetDpi, suggestedBounds);
         Application.DoEvents();
+
+        EnsureManagedControlDpi(window, targetDpi);
     }
+
+    internal static void EnsureManagedControlDpi(Control window, int targetDpi)
+    {
+        Control[] mismatchedControls = EnumerateControls(window)
+            .Where(control => control.IsHandleCreated && control.DeviceDpi != targetDpi)
+            .ToArray();
+        Control[] mismatchedRoots = mismatchedControls
+            .Where(control => control.Parent is null || !mismatchedControls.Contains(control.Parent))
+            .ToArray();
+        foreach (Control control in mismatchedRoots)
+        {
+            // A message-only fallback cannot change the physical monitor context inherited by
+            // HWNDs that WinForms creates or recreates during the parent transition. Deliver the
+            // same PMv2 child callbacks to each such subtree and refuse evidence if it stays stale.
+            NativeMethods.SendDpiChangedBeforeParentTree(control.Handle, targetDpi);
+            NativeMethods.SendDpiChangedAfterParentTree(control.Handle, targetDpi);
+        }
+
+        Application.DoEvents();
+        string[] remaining = EnumerateControls(window)
+            .Where(control => control.IsHandleCreated && control.DeviceDpi != targetDpi)
+            .Select(control => $"{control.Name} ({control.GetType().Name}: {control.DeviceDpi} DPI)")
+            .ToArray();
+        if (remaining.Length != 0)
+        {
+            throw new CaptureStateUnsupportedException(
+                "The WinForms DPI-change path left managed child windows at another DPI: "
+                + string.Join(", ", remaining));
+        }
+    }
+
+    private static IEnumerable<Control> EnumerateControls(Control root)
+    {
+        yield return root;
+        foreach (Control child in root.Controls)
+        {
+            foreach (Control descendant in EnumerateControls(child))
+            {
+                yield return descendant;
+            }
+        }
+    }
+
+    internal static Rectangle CalculateDpiChangedBounds(
+        Rectangle windowBounds,
+        Size clientSize,
+        int currentDpi,
+        int targetDpi)
+    {
+        if (currentDpi <= 0 || targetDpi <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                currentDpi <= 0 ? nameof(currentDpi) : nameof(targetDpi),
+                "DPI must be positive.");
+        }
+
+        int nonClientWidth = Math.Max(0, windowBounds.Width - clientSize.Width);
+        int nonClientHeight = Math.Max(0, windowBounds.Height - clientSize.Height);
+        int targetClientWidth = ScalePixel(clientSize.Width, currentDpi, targetDpi);
+        int targetClientHeight = ScalePixel(clientSize.Height, currentDpi, targetDpi);
+        return new Rectangle(
+            windowBounds.Location,
+            new Size(
+                checked(targetClientWidth + nonClientWidth),
+                checked(targetClientHeight + nonClientHeight)));
+    }
+
+    private static int ScalePixel(int value, int currentDpi, int targetDpi) =>
+        Math.Max(
+            1,
+            checked((int)Math.Round(
+                value * (double)targetDpi / currentDpi,
+                MidpointRounding.AwayFromZero)));
 
     private sealed class CaptureHostForm(IGitUICommands commands) : Form, IGitUICommandsSource, IGitModuleForm
     {

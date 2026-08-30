@@ -1,9 +1,11 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using GitCommands;
 using GitUI.Compat;
 using DrawingColor = System.Drawing.Color;
@@ -25,7 +27,7 @@ public partial class SearchControl : UserControl
 
     protected ListBox SearchResultListBox => listBoxSearchResult;
 
-    protected Border SearchTextBoxBorder => searchBoxBorder;
+    protected Border SearchTextBoxBorder => (Border)txtSearchBox.Parent!;
 }
 
 public partial class SearchControl<T> : SearchControl, IDisposable where T : class
@@ -42,6 +44,8 @@ public partial class SearchControl<T> : SearchControl, IDisposable where T : cla
 
     public event Action? OnCancelled;
 
+    public event EventHandler? TextChanged;
+
     [AllowNull]
     public string Text
     {
@@ -53,7 +57,6 @@ public partial class SearchControl<T> : SearchControl, IDisposable where T : cla
     {
         SearchTextBox.LostFocus += delegate { CloseDropDownWhenLostFocus(); };
         SearchResultListBox.LostFocus += delegate { CloseDropDownWhenLostFocus(); };
-        SearchTextBox.SelectAll();
 
         _getCandidates = getCandidates;
         _onSizeChanged = onSizeChanged;
@@ -76,6 +79,16 @@ public partial class SearchControl<T> : SearchControl, IDisposable where T : cla
     public void FocusSearchBox()
     {
         SearchTextBox.Focus();
+    }
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+
+        // Avalonia cannot focus an unattached control; preserve the original Select() at the attachment boundary.
+        Dispatcher.UIThread.Post(
+            () => SearchTextBox.Focus(),
+            DispatcherPriority.Input);
     }
 
     public void CloseDropdown()
@@ -146,20 +159,40 @@ public partial class SearchControl<T> : SearchControl, IDisposable where T : cla
 
         SearchResultListBox.IsVisible = true;
 
-        double width = 300;
+        double renderScale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1;
+        Typeface typeface = new(
+            SearchTextBox.FontFamily,
+            SearchTextBox.FontStyle,
+            SearchTextBox.FontWeight,
+            SearchTextBox.FontStretch);
+        double width = 300 / renderScale;
         foreach (object? item in SearchResultListBox.Items)
         {
-            TextBlock measuredText = new() { Text = Convert.ToString(item) };
-            measuredText.Measure(AvaloniaSize.Infinity);
-            width = Math.Max(width, measuredText.DesiredSize.Width + 12);
+            FormattedText measuredText = new(
+                Convert.ToString(item) ?? string.Empty,
+                CultureInfo.CurrentUICulture,
+                FlowDirection.LeftToRight,
+                typeface,
+                SearchTextBox.FontSize,
+                foreground: null);
+            width = Math.Max(width, Math.Ceiling(measuredText.WidthIncludingTrailingWhitespace * renderScale) / renderScale);
         }
 
-        double itemHeight = Math.Max(20, SearchTextBox.FontSize * 1.5);
-        double listHeight = Math.Min(800, itemHeight * (SearchResultListBox.ItemCount + 1));
+        // WinForms assigns this runtime popup size in physical pixels; Avalonia sizes in DIPs.
+        double lineHeight = SearchTextBox.FontSize;
+        if (FontManager.Current.TryGetGlyphTypeface(typeface, out GlyphTypeface? glyphTypeface))
+        {
+            FontMetrics metrics = glyphTypeface.Metrics;
+            lineHeight = metrics.LineSpacing * SearchTextBox.FontSize / metrics.DesignEmHeight;
+        }
+
+        // Avalonia may substitute a shorter platform font; preserve the WinForms 96-DPI default row height while allowing configured fonts to grow.
+        double itemHeight = Math.Max(16, Math.Ceiling(lineHeight * renderScale) / renderScale);
+        double listHeight = Math.Min(800 / renderScale, itemHeight * (SearchResultListBox.ItemCount + 1));
         SearchResultListBox.Width = width;
         SearchResultListBox.Height = listHeight;
 
-        _onSizeChanged(new AvaloniaSize(width, listHeight + Math.Max(23, SearchTextBox.Bounds.Height)));
+        _onSizeChanged(new AvaloniaSize(width, listHeight + Math.Max(22, SearchTextBox.Bounds.Height)));
     }
 
     public T? SelectedItem => (T?)SearchResultListBox.SelectedItem;
@@ -173,6 +206,7 @@ public partial class SearchControl<T> : SearchControl, IDisposable where T : cla
 
     private void txtSearchBox_TextChange(object? sender, EventArgs e)
     {
+        TextChanged?.Invoke(this, e);
         if (_isUpdatingTextFromCode)
         {
             _isUpdatingTextFromCode = false;

@@ -242,6 +242,22 @@ public sealed class ParityDiffRunnerTests
     }
 
     [Test]
+    public void Run_should_scope_repeated_private_field_names_to_their_named_control_owners()
+    {
+        using ParityDiffFixture fixture = new();
+        CaptureDocument reference = PutTargetInDistinctNamedOwners(fixture.CreateDocument("light"));
+        CaptureDocument candidate = PutTargetInDistinctNamedOwners(fixture.CreateDocument("light"));
+        fixture.WriteCaptureSet("reference", [reference]);
+        fixture.WriteCaptureSet("candidate", [candidate]);
+
+        ParityDiffResult result = fixture.Run();
+
+        CaptureComparison comparison = result.Captures.Should().ContainSingle().Subject;
+        comparison.Status.Should().Be("compared");
+        comparison.Findings.Should().NotContain(finding => finding.Code == "control.duplicateIdentity");
+    }
+
+    [Test]
     public void Run_should_apply_ssim_and_per_pixel_channel_budgets()
     {
         using ParityDiffFixture fixture = new();
@@ -260,6 +276,39 @@ public sealed class ParityDiffRunnerTests
             ?? throw new InvalidOperationException("A compared capture must include pixel metrics.");
         pixels.MaximumChannelDelta.Should().Be(255);
         pixels.DifferentPixelFraction.Should().Be(1);
+    }
+
+    [Test]
+    [Category("P8_6i")]
+    public void Run_should_compare_primary_client_pixels_without_discarding_full_window_chrome()
+    {
+        using ParityDiffFixture fixture = new();
+        CaptureDocument reference = WithPrimarySurface(
+            fixture.CreateDocument("light"),
+            imageWidth: 3,
+            imageHeight: 3,
+            rootBounds: new CaptureRectangle { X = 1, Y = 1, Width = 1, Height = 1 });
+        CaptureDocument candidate = WithPrimarySurface(
+            fixture.CreateDocument("light"),
+            imageWidth: 1,
+            imageHeight: 1,
+            rootBounds: new CaptureRectangle { X = 0, Y = 0, Width = 1, Height = 1 });
+        fixture.WriteCaptureSet("reference", [reference]);
+        fixture.WriteCaptureSet("candidate", [candidate]);
+
+        CaptureComparison comparison = fixture.Run().Captures.Should().ContainSingle().Subject;
+
+        comparison.Findings.Should().NotContain(finding => finding.Code.StartsWith("image.", StringComparison.Ordinal));
+        comparison.Findings.Should().NotContain(
+            finding => finding.Path == "surface[primary]/root/boundsDip"
+                && (finding.Code == "geometry.x" || finding.Code == "geometry.y"));
+        PixelMetrics pixels = comparison.Pixels
+            ?? throw new InvalidOperationException("A compared capture must include pixel metrics.");
+        pixels.ReferenceWidth.Should().Be(1);
+        pixels.ReferenceHeight.Should().Be(1);
+        pixels.CandidateWidth.Should().Be(1);
+        pixels.CandidateHeight.Should().Be(1);
+        pixels.Ssim.Should().Be(1);
     }
 
     [Test]
@@ -286,18 +335,26 @@ public sealed class ParityDiffRunnerTests
     public void Run_should_compare_popup_surface_pixels_independently_of_aggregate_canvas_placement()
     {
         using ParityDiffFixture fixture = new();
-        CaptureDocument reference = AddPopupSurface(
-            fixture.CreateDocument("light"),
-            imageWidth: 3,
-            imageHeight: 2,
-            primaryScreenBounds: new CaptureRectangle { X = 10, Y = 20, Width = 2, Height = 2 },
-            popupScreenBounds: new CaptureRectangle { X = 12, Y = 20, Width = 1, Height = 1 });
-        CaptureDocument candidate = AddPopupSurface(
-            fixture.CreateDocument("light"),
-            imageWidth: 2,
-            imageHeight: 2,
-            primaryScreenBounds: new CaptureRectangle { X = 0, Y = 0, Width = 2, Height = 2 },
-            popupScreenBounds: new CaptureRectangle { X = 1, Y = 0, Width = 1, Height = 1 });
+        CaptureDocument reference = WithSurfaceRootOrigin(
+            AddPopupSurface(
+                fixture.CreateDocument("light"),
+                imageWidth: 3,
+                imageHeight: 2,
+                primaryScreenBounds: new CaptureRectangle { X = 10, Y = 20, Width = 2, Height = 2 },
+                popupScreenBounds: new CaptureRectangle { X = 12, Y = 20, Width = 1, Height = 1 }),
+            "popup:0",
+            x: 8,
+            y: 31);
+        CaptureDocument candidate = WithSurfaceRootOrigin(
+            AddPopupSurface(
+                fixture.CreateDocument("light"),
+                imageWidth: 2,
+                imageHeight: 2,
+                primaryScreenBounds: new CaptureRectangle { X = 0, Y = 0, Width = 2, Height = 2 },
+                popupScreenBounds: new CaptureRectangle { X = 1, Y = 0, Width = 1, Height = 1 }),
+            "popup:0",
+            x: 0,
+            y: 0);
         fixture.WriteCaptureSet("reference", [reference]);
         fixture.WriteCaptureSet("candidate", [candidate]);
 
@@ -307,10 +364,44 @@ public sealed class ParityDiffRunnerTests
         comparison.Findings.Should().BeEmpty();
         PixelMetrics pixels = comparison.Pixels
             ?? throw new InvalidOperationException("A compared capture must include pixel metrics.");
-        pixels.ReferenceWidth.Should().Be(1);
-        pixels.ReferenceHeight.Should().Be(1);
-        pixels.CandidateWidth.Should().Be(1);
-        pixels.CandidateHeight.Should().Be(1);
+        pixels.ReferenceWidth.Should().Be(2);
+        pixels.ReferenceHeight.Should().Be(3);
+        pixels.CandidateWidth.Should().Be(2);
+        pixels.CandidateHeight.Should().Be(3);
+        pixels.Ssim.Should().Be(1);
+    }
+
+    [Test]
+    [Category("P8_6i")]
+    public void Run_should_compare_full_primary_surface_when_legacy_client_bounds_are_invalid()
+    {
+        using ParityDiffFixture fixture = new();
+        CaptureDocument reference = WithPrimaryRootBounds(
+            AddPopupSurface(
+                fixture.CreateDocument("light"),
+                imageWidth: 3,
+                imageHeight: 2,
+                primaryScreenBounds: new CaptureRectangle { X = 10, Y = 20, Width = 2, Height = 2 },
+                popupScreenBounds: new CaptureRectangle { X = 12, Y = 20, Width = 1, Height = 1 }),
+            new CaptureRectangle { X = 99, Y = 99, Width = 1, Height = 1 });
+        CaptureDocument candidate = WithPrimaryRootBounds(
+            AddPopupSurface(
+                fixture.CreateDocument("light"),
+                imageWidth: 3,
+                imageHeight: 2,
+                primaryScreenBounds: new CaptureRectangle { X = 0, Y = 0, Width = 2, Height = 2 },
+                popupScreenBounds: new CaptureRectangle { X = 2, Y = 0, Width = 1, Height = 1 }),
+            new CaptureRectangle { X = 99, Y = 99, Width = 1, Height = 1 });
+        fixture.WriteCaptureSet("reference", [reference]);
+        fixture.WriteCaptureSet("candidate", [candidate]);
+
+        PixelMetrics pixels = fixture.Run().Captures.Should().ContainSingle().Which.Pixels
+            ?? throw new InvalidOperationException("A compared capture must include pixel metrics.");
+
+        pixels.ReferenceWidth.Should().Be(2);
+        pixels.ReferenceHeight.Should().Be(3);
+        pixels.CandidateWidth.Should().Be(2);
+        pixels.CandidateHeight.Should().Be(3);
         pixels.Ssim.Should().Be(1);
     }
 
@@ -352,6 +443,71 @@ public sealed class ParityDiffRunnerTests
         };
     }
 
+    private static CaptureDocument WithPrimarySurface(
+        CaptureDocument document,
+        int imageWidth,
+        int imageHeight,
+        CaptureRectangle rootBounds)
+    {
+        CaptureSurface surface = document.Surfaces.Single();
+        return document with
+        {
+            Image = document.Image with { WidthPx = imageWidth, HeightPx = imageHeight },
+            Surfaces =
+            [
+                surface with
+                {
+                    ScreenBoundsPx = new CaptureRectangle
+                    {
+                        X = 0,
+                        Y = 0,
+                        Width = imageWidth,
+                        Height = imageHeight
+                    },
+                    Root = surface.Root with
+                    {
+                        BoundsPx = rootBounds,
+                        BoundsDip = new CaptureRectangleF
+                        {
+                            X = rootBounds.X,
+                            Y = rootBounds.Y,
+                            Width = rootBounds.Width,
+                            Height = rootBounds.Height
+                        },
+                        ClientSizePx = new CaptureSize { Width = rootBounds.Width, Height = rootBounds.Height }
+                    }
+                }
+            ]
+        };
+    }
+
+    private static CaptureDocument WithPrimaryRootBounds(CaptureDocument document, CaptureRectangle rootBounds)
+    {
+        CaptureSurface[] surfaces = document.Surfaces
+            .Select(surface => surface.Role == "primary"
+                ? surface with { Root = surface.Root with { BoundsPx = rootBounds } }
+                : surface)
+            .ToArray();
+        return document with { Surfaces = surfaces };
+    }
+
+    private static CaptureDocument WithSurfaceRootOrigin(CaptureDocument document, string role, int x, int y)
+    {
+        CaptureSurface[] surfaces = document.Surfaces
+            .Select(surface => surface.Role == role
+                ? surface with
+                {
+                    Root = surface.Root with
+                    {
+                        BoundsPx = surface.Root.BoundsPx with { X = x, Y = y },
+                        BoundsDip = surface.Root.BoundsDip with { X = x, Y = y },
+                    }
+                }
+                : surface)
+            .ToArray();
+        return document with { Surfaces = surfaces };
+    }
+
     private static CaptureDocument RepeatTarget(CaptureDocument document, int count)
     {
         CaptureSurface surface = document.Surfaces.Single();
@@ -368,6 +524,44 @@ public sealed class ParityDiffRunnerTests
                         Children = Enumerable.Range(1, count)
                             .Select(index => target with { Id = $"{target.Id}/{index}" })
                             .ToArray()
+                    }
+                }
+            ]
+        };
+    }
+
+    private static CaptureDocument PutTargetInDistinctNamedOwners(CaptureDocument document)
+    {
+        CaptureSurface surface = document.Surfaces.Single();
+        CaptureNode root = surface.Root;
+        CaptureNode target = root.Children.Single();
+        CaptureNode owner = target with
+        {
+            Id = "root/folderBrowserButtonUrl",
+            FieldName = "folderBrowserButtonUrl",
+            Name = "folderBrowserButtonUrl",
+            ControlKind = "userControl",
+            Children = [target with { Id = "root/folderBrowserButtonUrl/btnTarget" }]
+        };
+        return document with
+        {
+            Surfaces =
+            [
+                surface with
+                {
+                    Root = root with
+                    {
+                        Children =
+                        [
+                            owner,
+                            owner with
+                            {
+                                Id = "root/folderBrowserButtonPushUrl",
+                                FieldName = "folderBrowserButtonPushUrl",
+                                Name = "folderBrowserButtonPushUrl",
+                                Children = [target with { Id = "root/folderBrowserButtonPushUrl/btnTarget" }]
+                            }
+                        ]
                     }
                 }
             ]

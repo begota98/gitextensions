@@ -19,9 +19,9 @@ namespace GitUI.CommandsDialogs.Menus;
 internal sealed class WorkingDirectoryToolStripSplitButton : IconSplitButton, ITranslate
 {
     private const string TranslationCategory = nameof(FormBrowse);
+    private static readonly TranslationString _noWorkingFolderText = new("No working directory");
 
     private static readonly TranslationString _configureWorkingDirMenu = new("Co&nfigure this menu...");
-    private static readonly TranslationString _noWorkingFolderText = new("No working directory");
     private static readonly TranslationString _repositorySearchPlaceholder = new("Search repositories...");
     private static readonly TranslationString _toolTip = new("""
         Change working directory
@@ -546,7 +546,6 @@ internal sealed class WorkingDirectoryToolStripSplitButton : IconSplitButton, IT
     {
         TranslationUtils.AddTranslationItemsFromFields(TranslationCategory, this, translation);
         translation.AddTranslationItem(TranslationCategory, "tsmiFavouriteRepositories", "Text", "&Favorite repositories");
-        translation.AddTranslationItem(TranslationCategory, "closeToolStripMenuItem", "Text", "&Close (go to Dashboard)");
     }
 
     internal void TranslateControlItems(ITranslation translation)

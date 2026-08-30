@@ -23,8 +23,12 @@ using GitExtensions.ParityCapture;
 using GitExtUtils.GitUI.Theming;
 using GitUI;
 using GitUI.CommandsDialogs;
+using GitUI.CommandsDialogs.AboutBoxDialog;
+using GitUI.CommandsDialogs.BrowseDialog;
+using GitUI.CommandsDialogs.CommitDialog;
 using GitUI.CommandsDialogs.SettingsDialog.Pages;
 using GitUI.Compat;
+using GitUI.HelperDialogs;
 using GitUI.SpellChecker;
 using GitUI.UserControls;
 using GitUIPluginInterfaces;
@@ -40,6 +44,206 @@ public sealed partial class ParityScreenshotTests
     private const string CaptureScaleEnvironmentVariable = "GITEXT_CAPTURE_PARITY_SCALE";
     private const string CaptureThemeEnvironmentVariable = "GITEXT_CAPTURE_PARITY_THEME";
     private const string P02Category = "P0_2";
+
+    [Test]
+    [Category(P02Category)]
+    public void Generic_search_capture_hosts_should_use_the_declared_shell_sizes()
+    {
+        GetCaptureSize(typeof(SearchControl<string>)).Should().Be((64, 23));
+        GetCaptureSize(typeof(SearchWindow<string>)).Should().Be((325, 213));
+    }
+
+    [Test]
+    [Category(P02Category)]
+    public void Diff_patch_capture_hosts_should_use_96_dpi_designer_dimensions()
+    {
+        GetCaptureSize(typeof(BranchSelector)).Should().Be((325, 54));
+        GetCaptureSize(typeof(FormDiff)).Should().Be((1042, 685));
+        // WinForms AutoSize contracts the 110-pixel Designer client to 106 pixels with the runtime font.
+        GetCaptureSize(typeof(FormCompareToBranch)).Should().Be((434, 106));
+        GetCaptureSize(typeof(FormFormatPatch)).Should().Be((824, 532));
+    }
+
+    [Test]
+    [Category(P02Category)]
+    public void Commit_capture_host_should_use_the_96_dpi_designer_client_size()
+    {
+        GetCaptureSize(typeof(FormCommit)).Should().Be((918, 644));
+    }
+
+    [Test]
+    [Category(P02Category)]
+    public void Blame_log_capture_hosts_should_use_96_dpi_designer_dimensions()
+    {
+        GetCaptureSize(typeof(FormBlame)).Should().Be((784, 762));
+        GetCaptureSize(typeof(FormLog)).Should().Be((750, 529));
+        GetCaptureSize(typeof(FormGitCommandLog)).Should().Be((659, 470));
+    }
+
+    [Test]
+    [Category(P02Category)]
+    public void Ignore_editor_capture_hosts_should_use_96_dpi_designer_dimensions()
+    {
+        GetCaptureSize(typeof(FormAddToGitIgnore)).Should().Be((599, 341));
+        GetCaptureSize(typeof(FormGitIgnore)).Should().Be((634, 623));
+        GetCaptureSize(typeof(FormGitAttributes)).Should().Be((634, 474));
+        GetCaptureSize(typeof(FormMailMap)).Should().Be((634, 474));
+    }
+
+    [Test]
+    [Category(P02Category)]
+    public void Repository_maintenance_capture_hosts_should_use_native_96_dpi_client_dimensions()
+    {
+        GetCaptureSize(typeof(FormCleanupRepository)).Should().Be((434, 582));
+        GetCaptureSize(typeof(FormBisect)).Should().Be((248, 169));
+        GetCaptureSize(typeof(FormSparseWorkingCopy)).Should().Be((784, 561));
+    }
+
+    [Test]
+    [Category(P02Category)]
+    public void Branch_operation_capture_hosts_should_use_native_96_dpi_runtime_dimensions()
+    {
+        GetCaptureSize(typeof(FormDeleteRemoteBranch)).Should().Be((403, 167));
+        GetCaptureSize(typeof(FormResetAnotherBranch)).Should().Be((545, 347));
+    }
+
+    [Test]
+    [Category(P02Category)]
+    public void Remote_operation_capture_hosts_should_use_native_96_dpi_client_dimensions()
+    {
+        GetCaptureSize(typeof(FormPull)).Should().Be((941, 525));
+        GetCaptureSize(typeof(FormPush)).Should().Be((584, 290));
+        GetCaptureSize(typeof(FormRemotes)).Should().Be((934, 306));
+    }
+
+    [Test]
+    [Category(P02Category)]
+    public void Commit_template_settings_capture_host_should_use_native_96_dpi_runtime_dimensions()
+    {
+        GetCaptureSize(typeof(FormCommitTemplateSettings)).Should().Be((698, 361));
+    }
+
+    [Test]
+    [Category(P02Category)]
+    public void Settings_shell_capture_host_should_use_native_96_dpi_client_dimensions()
+    {
+        GetCaptureSize(typeof(FormSettings)).Should().Be((958, 746));
+    }
+
+    [Test]
+    [Category(P02Category)]
+    public void Help_about_capture_hosts_should_use_native_96_dpi_runtime_dimensions()
+    {
+        GetCaptureSize(typeof(FormAbout)).Should().Be((601, 318));
+        GetCaptureSize(typeof(EnvironmentInfo)).Should().Be((137, 78));
+        GetCaptureSize(typeof(FormCommandlineHelp)).Should().Be((394, 662));
+        GetCaptureSize(typeof(FormDonate)).Should().Be((508, 237));
+        GetCaptureSize(typeof(FormChangeLog)).Should().Be((849, 411));
+        GetCaptureSize(typeof(FormOpenDirectory)).Should().Be((615, 77));
+        GetCaptureSize(typeof(FormContributors)).Should().Be((624, 442));
+    }
+
+    [Test]
+    [Category(P02Category)]
+    public void Settings_page_capture_hosts_should_use_native_96_dpi_runtime_dimensions()
+    {
+        GetCaptureSize(typeof(BlameViewerSettingsPage)).Should().Be((341, 272));
+        GetCaptureSize(typeof(CommitDialogSettingsPage)).Should().Be((1014, 950));
+        GetCaptureSize(typeof(FormBrowseRepoSettingsPage)).Should().Be((738, 438));
+        GetCaptureSize(typeof(ShellExtensionSettingsPage)).Should().Be((1502, 331));
+        GetCaptureSize(typeof(FormChooseTranslation)).Should().Be((816, 578));
+    }
+
+    [AvaloniaTest]
+    [Category(P02Category)]
+    public void Avalonia_tree_reader_should_measure_named_controls_from_their_nearest_semantic_owner()
+    {
+        Window window = new() { Width = 320, Height = 160 };
+        Canvas layout = new() { Margin = new Thickness(32, 24, 0, 0) };
+        Button command = new() { Name = "btnCommand", Width = 75, Height = 25 };
+        layout.Children.Add(command);
+        window.Content = layout;
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        CaptureSurface surface = new AvaloniaControlTreeReader(window, renderScale: 1)
+            .ReadPrimary(window, new PixelSize(320, 160));
+        CaptureNode commandNode = Flatten(surface.Root).Single(node => node.FieldName == command.Name);
+
+        commandNode.BoundsDip.Should().Be(
+            new CaptureRectangleF { X = 32, Y = 24, Width = 75, Height = 25 });
+        window.Close();
+    }
+
+    [AvaloniaTest]
+    [Category(P02Category)]
+    public void Avalonia_tree_reader_should_emit_source_root_and_text_client_semantics()
+    {
+        TextBox editor = new() { Name = "txtValue", Width = 100, Height = 23 };
+        Window window = new() { Width = 320, Height = 160, Content = editor };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        CaptureSurface surface = new AvaloniaControlTreeReader(window, renderScale: 1)
+            .ReadPrimary(window, new PixelSize(320, 160));
+        CaptureNode editorNode = surface.Root.Children.Should().ContainSingle().Subject;
+
+        surface.Root.TabIndex.Should().Be(0);
+        surface.Root.TabStop.Should().BeTrue();
+        editorNode.FieldName.Should().Be(editor.Name);
+        editorNode.ClientSizeDip.Should().Be(new CaptureSizeF { Width = 96, Height = 19 });
+        editorNode.ClientSizePx.Should().Be(new CaptureSize { Width = 96, Height = 19 });
+        window.Close();
+    }
+
+    [AvaloniaTest]
+    [Category(P02Category)]
+    public void Avalonia_tree_reader_should_emit_label_and_group_text_without_template_children()
+    {
+        Label label = new() { Name = "lblValue", Content = "_Value" };
+        StackPanel content = new() { Name = "contentPanel", Children = { label } };
+        GroupBox group = new() { Name = "valueGroup", Header = "Group", Content = content };
+        Window window = new() { Width = 320, Height = 160, Content = group };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        CaptureSurface surface = new AvaloniaControlTreeReader(window, renderScale: 1)
+            .ReadPrimary(window, new PixelSize(320, 160));
+        CaptureNode groupNode = Flatten(surface.Root).Single(node => node.FieldName == group.Name);
+        CaptureNode labelNode = Flatten(surface.Root).Single(node => node.FieldName == label.Name);
+
+        groupNode.Text.Should().Be("Group");
+        groupNode.Children.Should().ContainSingle(node => node.FieldName == content.Name);
+        labelNode.Text.Should().Be("&Value");
+        labelNode.Children.Should().BeEmpty();
+        window.Close();
+    }
+
+    [AvaloniaTest]
+    [Category(P02Category)]
+    public void Avalonia_tree_reader_should_emit_selected_tab_content_once_under_its_tab_item()
+    {
+        TextBox editor = new() { Name = "txtEditor", Text = "Content" };
+        TabItem firstTab = new() { Name = "tabPage1", Header = "First", Content = editor };
+        TabItem secondTab = new() { Name = "tabPage2", Header = "Second", Content = new TextBlock { Text = "Other" } };
+        TabControl tabs = new() { Name = "tabControl1" };
+        tabs.Items.Add(firstTab);
+        tabs.Items.Add(secondTab);
+        tabs.SelectedItem = firstTab;
+        Window window = new() { Width = 320, Height = 160, Content = tabs };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        CaptureSurface surface = new AvaloniaControlTreeReader(window, renderScale: 1)
+            .ReadPrimary(window, new PixelSize(320, 160));
+        CaptureNode[] nodes = Flatten(surface.Root).ToArray();
+
+        nodes.Select(node => node.FieldName ?? node.Type).Should().ContainSingle(
+            name => name == editor.Name,
+            string.Join(", ", nodes.Select(node => $"{node.Id}={node.FieldName ?? node.Type}")));
+        nodes.Single(node => node.FieldName == editor.Name).Id.Should().Contain("/tabPage1/");
+        window.Close();
+    }
 
     [Test]
     [Category(P02Category)]
@@ -60,6 +264,45 @@ public sealed partial class ParityScreenshotTests
             .TextValues["Branches"].Should().Be("feature/visual-parity");
         plan.Components.Single(component => component.TypeName.EndsWith("FormFormatPatch", StringComparison.Ordinal))
             .TextValues["OutputPath"].Should().Be("patch-output");
+    }
+
+    [AvaloniaTest]
+    [Category(P02Category)]
+    public void Capture_text_seeding_should_preserve_composite_editors()
+    {
+        EditNetSpell editor = new() { Name = "bodyEditor" };
+        CaptureComponentPlan component = new()
+        {
+            TypeName = typeof(EditNetSpell).FullName!,
+            TextValues = new Dictionary<string, string> { [editor.Name] = "Parity body" },
+            States = [new CaptureStatePlan { Id = "normal", Kind = CaptureStateKind.Normal }],
+        };
+        TextBox textBox = editor.GetTestAccessor().TextBox;
+        object? content = editor.Content;
+
+        ApplyTextValues(editor, component);
+
+        editor.Text.Should().Be("Parity body");
+        editor.GetTestAccessor().TextBox.Should().BeSameAs(textBox);
+        editor.Content.Should().BeSameAs(content);
+    }
+
+    [AvaloniaTest]
+    [Category(P02Category)]
+    public void Capture_text_seeding_should_close_an_editable_combo_popup()
+    {
+        ComboBox comboBox = new() { Name = "Branches", IsEditable = true, IsDropDownOpen = true };
+        CaptureComponentPlan component = new()
+        {
+            TypeName = typeof(ComboBox).FullName!,
+            TextValues = new Dictionary<string, string> { [comboBox.Name] = "feature/reset-target" },
+            States = [new CaptureStatePlan { Id = "normal", Kind = CaptureStateKind.Normal }],
+        };
+
+        ApplyTextValues(comboBox, component);
+
+        comboBox.Text.Should().Be("feature/reset-target");
+        comboBox.IsDropDownOpen.Should().BeFalse();
     }
 
     [AvaloniaTest]
@@ -130,7 +373,9 @@ public sealed partial class ParityScreenshotTests
         MenuItem command = new() { Name = "command", Header = "_Commit & __literal" };
         ContextMenu menu = new() { ItemsSource = new[] { command } };
         Button owner = new() { Name = "owner", Content = "_Open & __literal", ContextMenu = menu };
-        window.Content = owner;
+        Label literal = new() { Name = "literal", Content = new TextBlock { Text = "literal_value" } };
+        TranslationCompat.SetConvertMnemonics(literal, false);
+        window.Content = new StackPanel { Children = { owner, literal } };
         window.Show();
         menu.Open(owner);
         Dispatcher.UIThread.RunJobs();
@@ -141,6 +386,7 @@ public sealed partial class ParityScreenshotTests
         CaptureSurface popup = reader.ReadSurface(popupRoot, "popup:0", new PixelRect(0, 0, 320, 160));
 
         Flatten(primary.Root).Single(node => node.FieldName == "owner").Text.Should().Be("&Open && _literal");
+        Flatten(primary.Root).Single(node => node.FieldName == "literal").Text.Should().Be("literal_value");
         Flatten(popup.Root).Single(node => node.Name == "command").Text.Should().Be("&Commit && _literal");
         primary.Root.Text.Should().BeEmpty("WinForms records controls without a text property as empty text");
         Control overlayHost = window.GetVisualDescendants().OfType<Control>()
@@ -403,6 +649,51 @@ public sealed partial class ParityScreenshotTests
 
         menuWindow.Close();
 
+        Window comboWindow = new() { Width = 320, Height = 180 };
+        ComboBox comboBox = new()
+        {
+            Name = "cbxTarget",
+            ItemsSource = new[] { "main", "feature/visual-parity" },
+            SelectedIndex = 0,
+            Width = 220,
+        };
+        comboWindow.Content = comboBox;
+        comboWindow.Show();
+        Dispatcher.UIThread.RunJobs();
+        using (AvaloniaControlStateDriver comboDriver = AvaloniaControlStateDriver.Apply(
+                   comboWindow,
+                   new CaptureStatePlan
+                   {
+                       Id = "combo.open",
+                       Kind = CaptureStateKind.MenuOpen,
+                       TargetField = comboBox.Name,
+                   }))
+        {
+            comboBox.IsDropDownOpen.Should().BeTrue();
+            (comboDriver.PopupSurfaceRoots.Count + comboDriver.ExternalTopLevels.Count).Should().BeGreaterThan(0);
+            Control popupRoot = comboDriver.PopupSurfaceRoots.Should().ContainSingle().Subject;
+            popupRoot.Bounds.Height.Should().Be(32);
+            CaptureNode popupNode = new AvaloniaControlTreeReader(comboWindow, renderScale: 1)
+                .ReadSurface(popupRoot, "popup:0", new PixelRect(0, 0, 220, 32))
+                .Root;
+            popupNode.BorderWidthDip.Should().Be(1);
+            popupNode.BoundsDip.Height.Should().Be(32);
+            popupNode.ClientSizeDip.Height.Should().Be(32);
+            popupNode.Anchor.Should().BeEmpty();
+            popupNode.Dock.Should().BeNull();
+            popupNode.Children.Should().HaveCount(2);
+            popupNode.Children.Should().OnlyContain(item => item.ControlKind == "listItem"
+                                                          && item.BoundsDip.Height == 15
+                                                          && item.Margin!.Dip.Left == 0
+                                                          && item.Margin.Dip.Top == 0
+                                                          && item.Margin.Dip.Right == 0
+                                                          && item.Margin.Dip.Bottom == 0
+                                                          && item.Children.Count == 0);
+        }
+
+        comboBox.IsDropDownOpen.Should().BeFalse();
+        comboWindow.Close();
+
         Window longMenuWindow = new() { Width = 240, Height = 100 };
         Button longMenuOwner = new() { Name = "btnLongMenu", Content = "Long menu" };
         longMenuOwner.ContextMenu = new ContextMenu
@@ -525,6 +816,31 @@ public sealed partial class ParityScreenshotTests
         applyUnsupported.Should().Throw<AvaloniaCaptureStateUnsupportedException>()
             .WithMessage("*ToggleButton*");
         unsupportedWindow.Close();
+    }
+
+    [AvaloniaTest]
+    [Category(P02Category)]
+    public void Avalonia_state_driver_should_drive_the_single_toggle_inside_a_composite_control()
+    {
+        GitUI.UserControls.Settings.SettingsCheckBox composite = new();
+        Window window = new() { Width = 240, Height = 100, Content = composite };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        CheckBox checkBox = composite.GetTestAccessor().CheckBox;
+
+        using (AvaloniaControlStateDriver.Apply(
+                   composite,
+                   new CaptureStatePlan
+                   {
+                       Id = "checked",
+                       Kind = CaptureStateKind.Checked,
+                   }))
+        {
+            checkBox.IsChecked.Should().BeTrue();
+        }
+
+        checkBox.IsChecked.Should().BeFalse();
+        window.Close();
     }
 
     [AvaloniaTest]
@@ -731,7 +1047,7 @@ public sealed partial class ParityScreenshotTests
         CaptureStatePlan state,
         string outputRoot)
     {
-        Control view = CreateView(context, descriptor.ViewType);
+        Control view = CreateView(context, descriptor.ViewType, state);
         Control captureHost = view;
         bool cropToComponent = false;
         (double width, double height) = GetCaptureSize(captureHost.GetType());
@@ -765,9 +1081,10 @@ public sealed partial class ParityScreenshotTests
         window.Height = height;
         window.SizeToContent = SizeToContent.Manual;
         window.RequestedThemeVariant = Application.Current?.RequestedThemeVariant;
-        if (descriptor.ViewType == typeof(RevisionGridControl)
+        bool requiresExtendedPopupViewport = descriptor.ViewType == typeof(RevisionGridControl)
             && state.Kind == CaptureStateKind.MenuOpen
-            && state.TargetField == "viewToolStripMenuItem")
+            && state.TargetField == "viewToolStripMenuItem";
+        if (requiresExtendedPopupViewport)
         {
             // parity-scaffolding: Size the headless screen before Show; its overlay cannot grow
             // after realization, while the real desktop submenu is taller than the component.
@@ -775,6 +1092,7 @@ public sealed partial class ParityScreenshotTests
             view.Height = height;
             view.HorizontalAlignment = HorizontalAlignment.Left;
             view.VerticalAlignment = VerticalAlignment.Top;
+            window.Width = 1200;
             window.Height = 900;
         }
 
@@ -782,6 +1100,10 @@ public sealed partial class ParityScreenshotTests
         {
             PrepareView(captureHost, context);
             window.Show();
+            // parity-scaffolding: A form may restore its persisted bounds during OnOpened;
+            // the paired plan's declared size remains authoritative for every state.
+            window.Width = requiresExtendedPopupViewport ? 1200 : width;
+            window.Height = requiresExtendedPopupViewport ? 900 : height;
             window.SetRenderScaling(renderScale);
             if (!isWindow)
             {
@@ -795,7 +1117,15 @@ public sealed partial class ParityScreenshotTests
 
             ApplyTextValues(view, component);
 
-            await WaitForAsyncViewsAsync(captureHost);
+            await WaitForAsyncViewsAsync(captureHost, context, state);
+            PrepareRepositoryHostCaptureState(captureHost, state);
+            foreach (ChecklistSettingsPage checklist in new[] { captureHost }
+                         .Concat(captureHost.GetLogicalDescendants().OfType<Control>())
+                         .OfType<ChecklistSettingsPage>())
+            {
+                SeedChecklist(checklist);
+            }
+
             // parity-scaffolding: Async loaders may replace seeded text; the capture plan remains authoritative.
             ApplyTextValues(view, component);
             if (view is RevisionGridControl revisionGrid)
@@ -838,6 +1168,10 @@ public sealed partial class ParityScreenshotTests
                 fileStatusList.GetTestAccessor().UpdateContextMenu().Should().BeFalse();
             }
 
+            // parity-scaffolding: Each planned state owns a fresh headless window; activate it
+            // before driving focus so a previously closed capture cannot retain the input root.
+            window.Activate();
+            Dispatcher.UIThread.RunJobs();
             using AvaloniaControlStateDriver driver = AvaloniaControlStateDriver.Apply(view, state);
             using WriteableBitmap primaryFrame = CaptureRenderedFrame(window);
             PixelRect primarySurfaceBounds = cropToComponent
@@ -992,6 +1326,8 @@ public sealed partial class ParityScreenshotTests
         }
         finally
         {
+            ReleaseRepositoryHostCaptureFixture(view);
+            await DrainRepositoryHostCaptureAsync(view);
             window.Close();
             if (!ReferenceEquals(window, captureHost) && captureHost is IDisposable disposableHost)
             {
@@ -1239,9 +1575,19 @@ public sealed partial class ParityScreenshotTests
                 // parity-scaffolding: Seeds editable Avalonia combo boxes from the shared capture plan.
                 case ComboBox comboBox when comboBox.IsEditable:
                     comboBox.Text = text;
+                    comboBox.IsDropDownOpen = false;
+                    break;
+                // parity-scaffolding: Preserve the composite editor's visual tree while seeding
+                // its product text boundary; assigning Content would replace its native TextBox.
+                case EditNetSpell editNetSpell:
+                    editNetSpell.Text = text;
                     break;
                 case TextBox textBox:
                     textBox.Text = text;
+                    break;
+                // parity-scaffolding: Seeds read-only Avalonia text surfaces from the shared capture plan.
+                case TextBlock textBlock:
+                    textBlock.Text = text;
                     break;
                 case ContentControl contentControl:
                     contentControl.Content = text;

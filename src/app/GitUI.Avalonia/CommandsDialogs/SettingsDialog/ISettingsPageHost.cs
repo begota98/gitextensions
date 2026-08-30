@@ -6,8 +6,14 @@ public interface ISettingsPageHost
 {
     void GotoPage(SettingsPageReference settingsPageReference);
 
+    /// <summary>
+        /// needed by ChecklistSettingsPage (TODO: needed here?).
+        /// </summary>
     void SaveAll();
 
+    /// <summary>
+        /// needed by ChecklistSettingsPage (TODO: needed here?).
+        /// </summary>
     void LoadAll();
 
     CheckSettingsLogic CheckSettingsLogic { get; }
@@ -15,8 +21,6 @@ public interface ISettingsPageHost
 
 public class SettingsPageHostMock(CheckSettingsLogic checkSettingsLogic) : ISettingsPageHost
 {
-    public CheckSettingsLogic CheckSettingsLogic { get; } = checkSettingsLogic;
-
     public void GotoPage(SettingsPageReference settingsPageReference)
     {
     }
@@ -28,4 +32,6 @@ public class SettingsPageHostMock(CheckSettingsLogic checkSettingsLogic) : ISett
     public void LoadAll()
     {
     }
+
+    public CheckSettingsLogic CheckSettingsLogic { get; } = checkSettingsLogic;
 }

@@ -33,6 +33,7 @@ public sealed class CommonLogic : Translate
 
     private CommonLogic()
     {
+        // For translation only
         Module = null!;
     }
 
@@ -66,19 +67,13 @@ public sealed class CommonLogic : Translate
             new SettingsSource<IConfigValueStore>(systemGitConfigSettings));
     }
 
-    public string? GetGlobalEditor()
-    {
-        return GetEditorOptions().FirstOrDefault(option => !string.IsNullOrEmpty(option));
-
-        IEnumerable<string?> GetEditorOptions()
-        {
-            yield return Environment.GetEnvironmentVariable(PresetGitEditorEnvVariableName);
-            yield return GitConfigSettingsSet.GlobalSettings.GetValue("core.editor");
-            yield return Environment.GetEnvironmentVariable("VISUAL");
-            yield return Environment.GetEnvironmentVariable(AmbientGitEditorEnvVariableName);
-        }
-    }
-
+    /// <summary>
+        /// Reads the registry key.
+        /// </summary>
+        /// <param name="root">Registry root</param>
+        /// <param name="subkey">Registry subkey</param>
+        /// <param name="key">Registry key, specify <see langword="null"/> to read default key</param>
+        /// <returns>registry value or empty string in case of error</returns>
     [SupportedOSPlatform("windows")]
     public static string GetRegistryValue(RegistryKey root, string subkey, string? key = null)
     {
@@ -98,6 +93,19 @@ public sealed class CommonLogic : Translate
         }
 
         return value ?? string.Empty;
+    }
+
+    public string? GetGlobalEditor()
+    {
+        return GetEditorOptions().FirstOrDefault(option => !string.IsNullOrEmpty(option));
+
+        IEnumerable<string?> GetEditorOptions()
+        {
+            yield return Environment.GetEnvironmentVariable(PresetGitEditorEnvVariableName);
+            yield return GitConfigSettingsSet.GlobalSettings.GetValue("core.editor");
+            yield return Environment.GetEnvironmentVariable("VISUAL");
+            yield return Environment.GetEnvironmentVariable(AmbientGitEditorEnvVariableName);
+        }
     }
 
     public static void FillEncodings(ComboBox combo)

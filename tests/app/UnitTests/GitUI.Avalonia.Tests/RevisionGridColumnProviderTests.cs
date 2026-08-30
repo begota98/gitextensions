@@ -1,4 +1,4 @@
-﻿using Avalonia.Controls;
+using Avalonia.Controls;
 using Avalonia.Headless.NUnit;
 using Avalonia.Styling;
 using Avalonia.Threading;
@@ -54,7 +54,7 @@ public sealed class RevisionGridColumnProviderTests
         control.ColumnProviders.Select(provider => provider.Index).Should().Equal(Enumerable.Range(0, 8));
         control.ColumnProviders[3].Column.IsAvailable.Should().BeTrue();
         control.ColumnProviders[7].Column.IsAvailable.Should().BeFalse();
-        control.ColumnProviders[3].Column.Width.Should().Be(new GridLength(24));
+        control.ColumnProviders[3].Column.Width.Should().Be(new GridLength(32));
         control.ColumnProviders[6].Column.Resizable.Should().BeFalse();
         control.ColumnProviders[7].Column.Width.Should().Be(new GridLength(150));
         control.ColumnProviders[7].Column.Resizable.Should().BeTrue();
@@ -154,7 +154,7 @@ public sealed class RevisionGridColumnProviderTests
                     new GridLength(22),
                     new GridLength(1, GridUnitType.Star),
                     new GridLength(50),
-                    new GridLength(25.6),
+                    new GridLength(26),
                     new GridLength(0),
                     new GridLength(130),
                     new GridLength(60),
@@ -269,7 +269,12 @@ public sealed class RevisionGridColumnProviderTests
                 ];
                 labels.Select(label => label.Label).Should().Equal("main", "↓");
                 labels.Should().OnlyContain(label => label.Fill);
-                labels.Single(label => label.Label == "↓").IsDashed.Should().BeTrue();
+                RevisionGridRefRenderer.RefLabelControl virtualLabel = labels.Single(label => label.Label == "↓");
+                virtualLabel.IsDashed.Should().BeTrue();
+                NestledVirtualRef nestledRef = virtualLabel.GitRef.Should().BeOfType<NestledVirtualRef>().Subject;
+                nestledRef.CompleteName.Should().Be("refs/remotes/origin/main");
+                nestledRef.IsRemote.Should().BeTrue();
+                nestledRef.TrackingBranchIsGone.Should().BeFalse();
                 ((RevisionGraphColumnProvider)control.ColumnProviders[0]).RevisionGraphDrawStyle
                     .Should().Be(RevisionGraphDrawStyle.Normal);
             }

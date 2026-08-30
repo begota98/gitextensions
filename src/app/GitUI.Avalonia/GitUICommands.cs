@@ -1,7 +1,10 @@
+﻿using System.Collections.Immutable;
+using System.ComponentModel.Design;
 using System.Text;
 using Avalonia.Controls.ApplicationLifetimes;
 using GitCommands;
 using GitCommands.Git;
+using GitCommands.Settings;
 using GitExtensions.Extensibility;
 using GitExtensions.Extensibility.Git;
 using GitExtensions.Extensibility.Plugins;
@@ -22,10 +25,6 @@ using Window = Avalonia.Controls.Window;
 
 namespace GitUI;
 
-// Twin of GitUI/GitUICommands.cs. Members are implemented as their dialogs get ported;
-// everything else throws NotImplementedException naming the member, so a missing port
-// surfaces clearly instead of failing silently.
-
 /// <summary>Contains methods to invoke Git Extensions forms, dialogs, etc.</summary>
 public sealed class GitUICommands : IGitUICommands
 {
@@ -37,7 +36,10 @@ public sealed class GitUICommands : IGitUICommands
 
     private readonly IServiceProvider _serviceProvider;
     private readonly ICommitTemplateManager _commitTemplateManager;
+    private readonly IFullPathResolver _fullPathResolver;
     private readonly IFindFilePredicateProvider _findFilePredicateProvider;
+
+    public static IServiceProvider EmptyServiceProvider = new ServiceContainer();
 
     public IGitModule Module { get; private set; }
     public ILockableNotifier RepoChangedNotifier { get; }
@@ -52,6 +54,7 @@ public sealed class GitUICommands : IGitUICommands
         Module = module;
 
         _commitTemplateManager = new CommitTemplateManager(() => module);
+        _fullPathResolver = new FullPathResolver(() => Module.WorkingDir);
         _findFilePredicateProvider = new FindFilePredicateProvider();
         RepoChangedNotifier = new ActionNotifier(
             () => InvokeEvent(null, PostRepositoryChanged));
@@ -90,41 +93,99 @@ public sealed class GitUICommands : IGitUICommands
 
     public object? GetService(Type serviceType) => _serviceProvider.GetService(serviceType);
 
-    public IGitUICommands WithGitModule(IGitModule module) => new GitUICommands(_serviceProvider, module);
-
-    public IGitUICommands WithWorkingDirectory(string? workingDirectory)
-        => new GitUICommands(_serviceProvider, new GitModule(this.GetRequiredService<IGitExecutorProvider>(), workingDirectory));
-
-    /// <summary>Launches a new Git Extensions Avalonia process.</summary>
-    public static IProcess Launch(string arguments, string workingDir = "")
-        => new Executable(Application.ExecutablePath, workingDir).Start(arguments);
-
-    /// <summary>Launches the repository browser in a new process.</summary>
-    internal static void LaunchBrowse(string workingDir = "", ObjectId selectedId = default, ObjectId firstId = default)
+    private bool RequiresValidWorkingDir(object? owner)
     {
-        if (!Directory.Exists(workingDir))
+        if (!Module.IsValidGitWorkingDir())
         {
-            MessageBoxes.GitExtensionsDirectoryDoesNotExist(owner: null, workingDir);
-            return;
+            MessageBoxes.NotValidGitDirectory(owner as IWin32Window);
+            return false;
         }
 
-        StringBuilder arguments = new("browse");
-        if (selectedId.IsZero)
-        {
-            selectedId = firstId;
-            firstId = default;
-        }
+        return true;
+    }
 
-        if (!selectedId.IsZero)
+    public void StartBatchFileProcessDialog(string batchFile)
+    {
+        bool useWindowsBatch = OperatingSystem.IsWindows();
+        string extension = useWindowsBatch ? ".cmd" : ".sh";
+        string tempFile = Path.Join(Path.GetTempPath(), $"GitExtensions-{Guid.NewGuid():N}{extension}");
+
+        try
         {
-            arguments.Append(" -commit=").Append(selectedId);
-            if (!firstId.IsZero)
+            FileStreamOptions streamOptions = new()
             {
-                arguments.Append(',').Append(firstId);
+                Access = FileAccess.Write,
+                Mode = FileMode.CreateNew,
+                Options = FileOptions.SequentialScan,
+                Share = FileShare.None,
+            };
+            if (!useWindowsBatch)
+            {
+                streamOptions.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
             }
-        }
 
-        Launch(arguments.ToString(), workingDir);
+            using (FileStream stream = new(tempFile, streamOptions))
+            using (StreamWriter writer = new(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+            {
+                if (useWindowsBatch)
+                {
+                    writer.WriteLine("@prompt $G");
+                }
+
+                writer.Write(batchFile);
+            }
+
+            string process = useWindowsBatch
+                ? Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe"
+                : "/bin/sh";
+            ArgumentString arguments = useWindowsBatch
+                ? $"/D /C {tempFile.Quote()}"
+                : tempFile.Quote();
+            IWin32Window? owner = null;
+            if (AvaloniaApplication.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            {
+                owner = desktop.Windows.FirstOrDefault(window => window.IsActive) as IWin32Window
+                    ?? desktop.MainWindow as IWin32Window;
+            }
+
+            FormProcess.ShowDialog(
+                owner,
+                this,
+                arguments,
+                Module.WorkingDir,
+                input: null,
+                useDialogSettings: true,
+                process: process);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    public bool StartGitCommandProcessDialog(IWin32Window? owner, ArgumentString arguments)
+    {
+        return FormProcess.ShowDialog(owner, this, arguments, Module.WorkingDir, input: null, useDialogSettings: true);
+    }
+
+    public bool StartDeleteRemoteBranchDialog(IWin32Window? owner, string remoteBranch)
+    {
+        return DoActionOnRepo(owner, action: () =>
+        {
+            using CommandsDialogs.FormDeleteRemoteBranch form = new(this, remoteBranch);
+            form.ShowDialog(owner);
+            return true;
+        }, changesRepo: false);
+    }
+
+    public bool StartCheckoutRevisionDialog(IWin32Window? owner, string? revision = null)
+    {
+        return DoActionOnRepo(owner, action: () =>
+        {
+            using FormCheckoutRevision form = new(this);
+            form.SetRevision(revision);
+            return form.ShowDialog(owner) == DialogResult.OK;
+        }, preEvent: PreCheckoutRevision, postEvent: PostCheckoutRevision);
     }
 
     public bool StartCommandLineProcessDialog(IWin32Window? owner, IGitCommand command)
@@ -146,9 +207,17 @@ public sealed class GitUICommands : IGitUICommands
         return FormProcess.ShowDialog(owner, this, arguments, Module.WorkingDir, input: null, useDialogSettings: true, process: command);
     }
 
-    public bool StartGitCommandProcessDialog(IWin32Window? owner, ArgumentString arguments)
+    public bool StartResetCurrentBranchDialog(IWin32Window? owner, string branch)
     {
-        return FormProcess.ShowDialog(owner, this, arguments, Module.WorkingDir, input: null, useDialogSettings: true);
+        ObjectId objectId = Module.RevParse(branch);
+        if (objectId.IsZero)
+        {
+            MessageBoxes.Show($"Branch \"{branch}\" could not be resolved.", TranslatedStrings.Error, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+
+        using FormResetCurrentBranch form = FormResetCurrentBranch.Create(this, Module.GetRevision(objectId));
+        return form.ShowDialog(owner) == DialogResult.OK;
     }
 
     public bool StashSave(IWin32Window? owner, bool includeUntrackedFiles, bool keepIndex = false, string message = "", IReadOnlyList<string>? selectedFiles = null)
@@ -219,26 +288,70 @@ public sealed class GitUICommands : IGitUICommands
         return DoActionOnRepo(owner, Action);
     }
 
-    private bool InvokeEvent(IWin32Window? ownerForm, EventHandler<GitUIEventArgs>? gitUIEventHandler)
+    public bool WorktreeDelete(IWin32Window? owner, string worktreePath)
     {
-        try
+        return DoActionOnRepo(owner, action: () =>
         {
-            GitUIEventArgs eventArgs = new(ownerForm, this);
-            gitUIEventHandler?.Invoke(this, eventArgs);
-            return !eventArgs.Cancel;
-        }
-        catch (Exception ex)
+            TaskDialogButton result = TaskDialog.ShowDialog(owner!, new TaskDialogPage
+            {
+                Text = string.Format(TranslatedStrings.DeleteWorktreeConfirmation, worktreePath),
+                Caption = TranslatedStrings.DeleteWorktreeCaption,
+                Heading = TranslatedStrings.CannotBeUndone,
+                Buttons = { TaskDialogButton.Yes, TaskDialogButton.No },
+                Icon = TaskDialogIcon.Warning,
+                SizeToContent = true,
+            });
+
+            if (result != TaskDialogButton.Yes)
+            {
+                return false;
+            }
+
+            if (!worktreePath.TryDeleteDirectory(out string? errorMessage))
+            {
+                TaskDialog.ShowDialog(owner!, new TaskDialogPage
+                {
+                    Text = $"{string.Format(TranslatedStrings.DeleteWorktreeFailed, worktreePath)}\n{errorMessage}",
+                    Caption = TranslatedStrings.Error,
+                    Icon = TaskDialogIcon.Error,
+                    SizeToContent = true,
+                });
+
+                return false;
+            }
+
+            StartCommandLineProcessDialog(owner, command: null, "worktree prune");
+            return true;
+        });
+    }
+
+    public bool WorktreeSwitch(IWin32Window? owner, string worktreePath)
+    {
+        if (!MessageBoxes.ConfirmSuppressible(owner, string.Format(TranslatedStrings.SwitchWorktreeConfirmation, worktreePath), TranslatedStrings.SwitchWorktreeCaption, AppSettings.DontConfirmSwitchWorktree))
         {
-            MessageBoxes.ShowError(ownerForm, $"{ex.Message}{Environment.NewLine}{ex.StackTrace}", "Error");
             return false;
         }
+
+        if (!Directory.Exists(worktreePath))
+        {
+            return false;
+        }
+
+        if (FindFormBrowse(owner) is FormBrowse browse)
+        {
+            browse.SetWorkingDir(Path.GetFullPath(worktreePath));
+        }
+
+        return true;
     }
 
-    private void InvokePostEvent(IWin32Window? ownerForm, bool actionDone, EventHandler<GitUIPostActionEventArgs>? gitUIEventHandler)
-    {
-        gitUIEventHandler?.Invoke(this, new GitUIPostActionEventArgs(ownerForm, this, actionDone));
-    }
-
+    /// <param name="requiresValidWorkingDir">If action requires valid working directory.</param>
+    /// <param name="owner">Owner window.</param>
+    /// <param name="changesRepo">if successfully done action changes repo state.</param>
+    /// <param name="preEvent">Event invoked before performing action.</param>
+    /// <param name="postEvent">Event invoked after performing action.</param>
+    /// <param name="action">Action to do. Return true to indicate that the action was successfully done.</param>
+    /// <returns>true if action was successfully done, false otherwise.</returns>
     private bool DoActionOnRepo(
         IWin32Window? owner,
         Func<bool> action,
@@ -251,7 +364,7 @@ public sealed class GitUICommands : IGitUICommands
         RepoChangedNotifier.Lock();
         try
         {
-            if (requiresValidWorkingDir && !Module.IsValidGitWorkingDir())
+            if (requiresValidWorkingDir && !RequiresValidWorkingDir(owner))
             {
                 return false;
             }
@@ -272,6 +385,8 @@ public sealed class GitUICommands : IGitUICommands
         }
         finally
         {
+            // The action may not have required a valid working directory to run, but if there isn't one,
+            // we shouldn't send a "repo changed" notify.
             bool requestNotify = actionDone && changesRepo && Module.IsValidGitWorkingDir();
             RepoChangedNotifier.UnLock(requestNotify);
         }
@@ -282,25 +397,21 @@ public sealed class GitUICommands : IGitUICommands
     private static NotImplementedException NotPorted(string member)
         => new($"{member} is not ported to the Avalonia UI yet.");
 
-    private void WrapRepoHostingCall(string name, IRepositoryHostPlugin gitHoster, Action<IRepositoryHostPlugin> call)
+    public bool WorktreeCreate(IWin32Window? owner, string mainWorktreePath)
     {
-        if (!gitHoster.ConfigurationOk)
+        return DoActionOnRepo(owner, action: () =>
         {
-            GitUIEventArgs eventArgs = new(null, this);
-            gitHoster.Execute(eventArgs);
-        }
+            using FormCreateWorktree form = new(this, mainWorktreePath);
+            if (form.ShowDialog(owner) != DialogResult.OK)
+            {
+                return false;
+            }
 
-        if (gitHoster.ConfigurationOk)
-        {
-            try
-            {
-                call(gitHoster);
-            }
-            catch (Exception ex)
-            {
-                ShowRepositoryHostingError(name, ex);
-            }
-        }
+            // Offer to switch to the freshly created worktree, mirroring the clone flow.
+            WorktreeSwitch(owner, form.WorktreeDirectory);
+
+            return true;
+        });
     }
 
     private static void ShowRepositoryHostingError(string name, Exception exception)
@@ -316,53 +427,34 @@ public sealed class GitUICommands : IGitUICommands
             MessageBoxIcon.Error);
     }
 
-    public void OpenWithDifftool(IWin32Window? owner, IReadOnlyList<GitRevision?> revisions, string fileName, string? oldFileName, RevisionDiffKind diffKind, bool isTracked, string? customTool = null)
+    private static FormBrowse? FindFormBrowse(IWin32Window? window)
     {
-        // Note: Order in revisions is that first clicked is last in array.
-        if (!RevisionDiffInfoProvider.TryGet(revisions, diffKind, out string? firstRevision, out string? secondRevision, out string? error))
+        if (window is FormBrowse browse)
         {
-            MessageBoxes.Show(owner, error, TranslatedStrings.Error, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return browse;
         }
-        else
+
+        if (window is Avalonia.Controls.WindowBase avaloniaWindow)
         {
-            Module.OpenWithDifftool(fileName, oldFileName, firstRevision, secondRevision, isTracked: isTracked, customTool: customTool);
-        }
-    }
-
-    #region Not ported yet
-
-    public void AddCommitTemplate(string key, Func<string> addingText, Image? icon, bool isRegex = false)
-    {
-        _commitTemplateManager.Register(key, addingText, icon, isRegex);
-    }
-
-    public void AddUpstreamRemote(IWin32Window? owner, IRepositoryHostPlugin gitHoster)
-    {
-        WrapRepoHostingCall(
-            TranslatedStrings.AddUpstreamRemote,
-            gitHoster,
-            hoster =>
+            while (avaloniaWindow.Owner is not null)
             {
-                if (owner is FormBrowse formBrowse)
+                if (avaloniaWindow.Owner is FormBrowse ownerBrowse)
                 {
-                    formBrowse.QueueRepositoryHostOperation(
-                        (mainThreadFactory, cancellationToken) =>
-                            AddUpstreamRemoteAsync(
-                                owner,
-                                hoster,
-                                mainThreadFactory,
-                                cancellationToken));
+                    return ownerBrowse;
                 }
-                else
-                {
-                    ThreadHelper.FileAndForget(
-                        () => AddUpstreamRemoteAsync(
-                            owner,
-                            hoster,
-                            ThreadHelper.JoinableTaskFactory,
-                            CancellationToken.None));
-                }
-            });
+
+                avaloniaWindow = avaloniaWindow.Owner;
+            }
+        }
+
+        return null;
+    }
+
+    public void ShowModelessForm(IWin32Window? owner, bool requiresValidWorkingDir, EventHandler<GitUIEventArgs>? preEvent, EventHandler<GitUIPostActionEventArgs>? postEvent, Func<Form> provideForm) => throw NotPorted(nameof(ShowModelessForm));
+
+    public bool StartCheckoutRemoteBranch(IWin32Window? owner, string branch)
+    {
+        return StartCheckoutBranch(owner, branch, true);
     }
 
     private async Task AddUpstreamRemoteAsync(
@@ -406,442 +498,56 @@ public sealed class GitUICommands : IGitUICommands
         }
     }
 
-    public IGitRemoteCommand CreateRemoteCommand() => throw NotPorted(nameof(CreateRemoteCommand));
+    /// <summary>Launches a new Git Extensions Avalonia process.</summary>
+    public static IProcess Launch(string arguments, string workingDir = "")
+        => new Executable(Application.ExecutablePath, workingDir).Start(arguments);
     public bool DoActionOnRepo(Func<bool> action)
         => DoActionOnRepo(owner: null, action, requiresValidWorkingDir: false);
-    public void RaisePostBrowseInitialize(IWin32Window? owner) => InvokeEvent(owner, PostBrowseInitialize);
-    public void RaisePostRegisterPlugin(IWin32Window? owner) => InvokeEvent(owner, PostRegisterPlugin);
-    public void RemoveCommitTemplate(string key)
+
+    /// <summary>
+    /// Launch FormBrowse in a new GE instance.
+    /// </summary>
+    /// <param name="workingDir">The working directory for the new process.</param>
+    /// <param name="selectedId">The optional commit to be selected.</param>
+    /// <param name="firstId">The first commit to be selected, the first commit in a diff.</param>
+    internal static void LaunchBrowse(string workingDir = "", ObjectId selectedId = default, ObjectId firstId = default)
     {
-        _commitTemplateManager.Unregister(key);
-    }
-
-    public bool RunCommand(IReadOnlyList<string> args)
-    {
-        IReadOnlyDictionary<string, string?> arguments = InitializeArguments(args);
-
-        if (args.Count <= 1)
+        if (!Directory.Exists(workingDir))
         {
-            return false;
+            MessageBoxes.GitExtensionsDirectoryDoesNotExist(owner: null, workingDir);
+            return;
         }
 
-        string command = args[1];
-        if (command == "difftool" && args.Count <= 2)
+        StringBuilder arguments = new("browse");
+        if (selectedId.IsZero)
         {
-            MessageBoxes.Show("Cannot open difftool, there is no file selected.", "Difftool", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return false;
-        }
-
-        if (command is BlameHistoryCommand or FileHistoryCommand && args.Count <= 2)
-        {
-            MessageBoxes.Show("Cannot open blame / file history, there is no file selected.", "Blame / file history", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return false;
-        }
-
-        if (command == "blame" && args.Count <= 2)
-        {
-            MessageBoxes.Show("Cannot open blame, there is no file selected.", "Blame", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return false;
-        }
-
-        if (command == "fileeditor" && args.Count <= 2)
-        {
-            MessageBoxes.Show("Cannot open file editor, there is no file selected.", "File editor", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return false;
-        }
-
-        return RunCommandBasedOnArgument(args, arguments);
-    }
-
-    // Please update FormCommandlineHelp if you add or change commands.
-    private bool RunCommandBasedOnArgument(IReadOnlyList<string> args, IReadOnlyDictionary<string, string?> arguments)
-    {
-        string command = args[1];
-        switch (command)
-        {
-            case "about":
-                using (CommandsDialogs.FormAbout aboutForm = new())
-                {
-                    aboutForm.ShowDialog(owner: null);
-                }
-
-                return true;
-            case "add":
-            case "addfiles":
-                return StartAddFilesDialog(owner: null, addFiles: args.Count < 3 ? "." : string.Join(' ', args.Skip(2).Select(file => file.Quote())));
-            case "apply":
-            case "applypatch":
-                return StartApplyPatchDialog(null, args.Count == 3 ? args[2] : string.Empty);
-            case "blame": // filename
-                return RunBlameCommand(args);
-            case "branch":
-                return StartCreateBranchDialog();
-            case "browse":
-                return RunBrowseCommand(args);
-            case "checkout":
-            case "checkoutbranch":
-                return StartCheckoutBranch(null);
-            case "checkoutrevision":
-                return StartCheckoutRevisionDialog(null);
-            case "cherry":
-                return StartCherryPickDialog();
-            case "cleanup":
-                return StartCleanupRepositoryDialog();
-            case "clone":
-                return StartCloneDialog(null, args.Count > 2 ? args[2] : null);
-            case "commit":
-                return Commit(arguments);
-            case "difftool" when args.Count > 2:
-                try
-                {
-                    Module.OpenWithDifftool(args[2]);
-                    return true;
-                }
-                catch
-                {
-                    return false;
-                }
-
-            case BlameHistoryCommand:
-            case FileHistoryCommand:
-                return RunFileHistoryCommand(args, showBlame: command == BlameHistoryCommand);
-            case "fileeditor":
-                return StartFileEditorDialog(args[2]);
-            case "init":
-                return StartInitializeDialog(null, args.Count > 2 ? args[2] : null);
-            case "merge":
-                arguments.TryGetValue("branch", out string? branch);
-                return StartMergeBranchDialog(null, branch);
-            case "mergeconflicts":
-            case "mergetool":
-                return RunMergeToolOrConflictCommand(arguments);
-            case "openrepo":
-                return RunOpenRepoCommand(args);
-            case "pull":
-                return Pull(arguments);
-            case "push":
-                return Push(arguments);
-            case "rebase":
-                arguments.TryGetValue("branch", out string? onto);
-                return StartRebaseDialog(owner: null, onto);
-            case "remotes":
-                return StartRemotesDialog(owner: null);
-            case "settings":
-                return StartSettingsDialog(owner: null);
-            case "searchfile":
-                return RunSearchFileCommand();
-            case "stash":
-                return StartStashDialog();
-            case "synchronize":
-                bool commitSucceeded = Commit(arguments);
-                bool pullSucceeded = Pull(arguments);
-                bool pushSucceeded = Push(arguments);
-                return commitSucceeded && pullSucceeded && pushSucceeded;
-            case "tag":
-                return StartCreateTagDialog();
-            case "viewdiff":
-                return StartCompareRevisionsDialog();
-            case "viewpatch":
-                return StartViewPatchDialog(args.Count == 3 ? args[2] : string.Empty);
-            case "usage":
-            case "help":
-                return ShowCommandlineHelp();
-            default:
-                if (command.StartsWith("git://") || command.StartsWith("http://") || command.StartsWith("https://"))
-                {
-                    return StartCloneDialog(null, command, openedFromProtocolHandler: true);
-                }
-
-                const string GitHubWindowsPrefix = "github-windows://openRepo/";
-                const string GitHubMacPrefix = "github-mac://openRepo/";
-                if (command.StartsWith(GitHubWindowsPrefix))
-                {
-                    return StartCloneDialog(null, command.Replace(GitHubWindowsPrefix, string.Empty), openedFromProtocolHandler: true);
-                }
-
-                if (command.StartsWith(GitHubMacPrefix))
-                {
-                    return StartCloneDialog(null, command.Replace(GitHubMacPrefix, string.Empty), openedFromProtocolHandler: true);
-                }
-
-                string? dir = !string.IsNullOrWhiteSpace(command) && File.Exists(command) ? Path.GetDirectoryName(command) : command;
-                if (args.Count == 2 && Directory.Exists(dir))
-                {
-                    return WithWorkingDirectory(dir).StartBrowseDialog(owner: null);
-                }
-
-                string message = $"The command \"{command}\" is not available in the Avalonia port yet.";
-                Console.Error.WriteLine(message);
-                MessageBoxes.ShowError(owner: null, message, "Unsupported command");
-                return false;
-        }
-    }
-
-    private static bool ShowCommandlineHelp()
-    {
-        using CommandsDialogs.FormCommandlineHelp form = new();
-        form.ShowDialog(owner: null);
-        return true;
-    }
-
-    private bool RunSearchFileCommand()
-    {
-        using SearchWindow<string> searchWindow = new(FindFileMatches);
-        searchWindow.ShowDialog();
-        if (searchWindow.SelectedItem is not null)
-        {
-            // We need to return the file that has been found, the visual studio plugin uses the return value
-            // to open the selected file.
-            Console.WriteLine(Path.Combine(Module.WorkingDir, searchWindow.SelectedItem));
-            return true;
-        }
-
-        return false;
-    }
-
-    private bool RunBrowseCommand(IReadOnlyList<string> args)
-    {
-        string commit = GetParameterOrEmptyStringAsDefault(args, "-commit");
-        BrowseArguments browseArguments = new()
-        {
-            RevFilter = GetParameterOrEmptyStringAsDefault(args, "-filter"),
-            PathFilter = GetParameterOrEmptyStringAsDefault(args, PathFilterArg),
-            IsFileHistoryMode = args.Any(arg => arg.StartsWith(PathFilterArg))
-        };
-
-        if (commit == string.Empty)
-        {
-            return StartBrowseDialog(owner: null, browseArguments);
-        }
-
-        if (!TryGetObjectIds(commit, Module, out ObjectId selectedId, out ObjectId firstId))
-        {
-            Console.Error.WriteLine($"No commit found matching: {commit}");
-            return false;
-        }
-
-        return StartBrowseDialog(owner: null, browseArguments with
-        {
-            SelectedId = selectedId,
-            FirstId = firstId
-        });
-
-        static bool TryGetObjectIds(string value, IGitModule module, out ObjectId selectedId, out ObjectId firstId)
-        {
-            selectedId = default;
+            selectedId = firstId;
             firstId = default;
-            foreach (string part in value.LazySplit(','))
-            {
-                if (!module.TryResolvePartialCommitId(part, out ObjectId objectId))
-                {
-                    return false;
-                }
-
-                if (selectedId.IsZero)
-                {
-                    selectedId = objectId;
-                }
-                else if (firstId.IsZero)
-                {
-                    firstId = objectId;
-                    break;
-                }
-            }
-
-            return true;
         }
-    }
 
-    private static string GetParameterOrEmptyStringAsDefault(IReadOnlyList<string> args, string paramName)
-    {
-        string withEquals = paramName + "=";
-        for (int i = 2; i < args.Count; i++)
+        if (!selectedId.IsZero)
         {
-            string arg = args[i];
-            if (arg.StartsWith(withEquals))
+            arguments.Append(" -commit=").Append(selectedId);
+            if (!firstId.IsZero)
             {
-                return arg.Replace(withEquals, string.Empty);
+                arguments.Append(',').Append(firstId);
             }
         }
 
-        return string.Empty;
+        Launch(arguments.ToString(), workingDir);
     }
 
-    private bool RunOpenRepoCommand(IReadOnlyList<string> args)
+    public bool StartCompareRevisionsDialog(IWin32Window? owner = null)
     {
-        IGitUICommands commands = this;
-        if (args.Count > 2 && File.Exists(args[2]))
+        bool Action()
         {
-            string? path = File.ReadAllText(args[2]).Trim().LazySplit('\n').FirstOrDefault();
-            if (Directory.Exists(path))
-            {
-                commands = WithWorkingDirectory(path);
-            }
+            using CommandsDialogs.FormLog form = new(this);
+            return form.ShowDialog(owner) == DialogResult.OK;
         }
 
-        return commands.StartBrowseDialog(owner: null, new BrowseArguments
-        {
-            RevFilter = GetParameterOrEmptyStringAsDefault(args, "-filter"),
-            PathFilter = GetParameterOrEmptyStringAsDefault(args, PathFilterArg)
-        });
+        return DoActionOnRepo(owner, Action);
     }
 
-    private bool RunFileHistoryCommand(IReadOnlyList<string> args, bool showBlame)
-    {
-        string fileName = NormalizeFileName(args[2]);
-        if (string.IsNullOrWhiteSpace(fileName))
-        {
-            return false;
-        }
-
-        GitRevision? revision = null;
-        if (args.Count > 3)
-        {
-            if (!ObjectId.TryParse(args[3], out ObjectId objectId))
-            {
-                return false;
-            }
-
-            revision = new GitRevision(objectId);
-        }
-
-        bool filterByRevision = false;
-        if (args.Count > 4)
-        {
-            if (args[4] != FilterByRevisionArg)
-            {
-                return false;
-            }
-
-            filterByRevision = true;
-        }
-
-        if (AppSettings.UseBrowseForFileHistory.Value)
-        {
-            return StartBrowseDialog(owner: null, new BrowseArguments
-            {
-                RevFilter = filterByRevision ? revision?.ObjectId.ToString() : null,
-                PathFilter = fileName,
-                SelectedId = revision?.ObjectId ?? default,
-                IsFileHistoryMode = true
-            });
-        }
-
-        return DoActionOnRepo(owner: null, action: () =>
-        {
-            FormFileHistory form = new(this, fileName.QuoteNE(), revision, filterByRevision, showBlame);
-            ShowModelessWindow(form, owner: null);
-            return true;
-        }, changesRepo: false);
-    }
-
-    /// <returns>false on error.</returns>
-    private bool RunBlameCommand(IReadOnlyList<string> args)
-    {
-        string blameFileName = NormalizeFileName(args[2]);
-
-        int? initialLine = null;
-        if (args.Count > 3)
-        {
-            if (int.TryParse(args[3], out int temp))
-            {
-                initialLine = temp;
-            }
-        }
-
-        return DoActionOnRepo(owner: null, action: () =>
-        {
-            using CommandsDialogs.FormBlame frm = new(this, blameFileName, null, initialLine);
-            frm.ShowDialog(null);
-            return true;
-        }, changesRepo: false);
-    }
-
-    private string NormalizeFileName(string fileName)
-    {
-        fileName = fileName.ToPosixPath();
-        return string.IsNullOrEmpty(Module.WorkingDir) ? fileName : fileName.Replace(Module.WorkingDir.ToPosixPath(), string.Empty);
-    }
-
-    private bool RunMergeToolOrConflictCommand(IReadOnlyDictionary<string, string?> arguments)
-    {
-        if (!arguments.ContainsKey("quiet") || Module.InTheMiddleOfConflictedMerge())
-        {
-            return StartResolveConflictsDialog();
-        }
-
-        return true;
-    }
-
-    private static IReadOnlyDictionary<string, string?> InitializeArguments(IReadOnlyList<string> args)
-    {
-        Dictionary<string, string?> arguments = [];
-        for (int i = 2; i < args.Count; i++)
-        {
-            if (args[i].StartsWith("--") && i + 1 < args.Count && !args[i + 1].StartsWith("--"))
-            {
-                arguments.Add(args[i].TrimStart('-'), args[++i]);
-            }
-            else if (args[i].StartsWith("--"))
-            {
-                arguments.Add(args[i].TrimStart('-'), null);
-            }
-        }
-
-        return arguments;
-    }
-
-    private IEnumerable<string> FindFileMatches(string name)
-    {
-        IReadOnlyList<string> candidates = Module.GetFullTree("HEAD");
-
-        Func<string?, bool> predicate = _findFilePredicateProvider.Get(name, Module.WorkingDir);
-
-        return candidates.Where(predicate);
-    }
-
-    private bool Commit(IReadOnlyDictionary<string, string?> arguments)
-    {
-        arguments.TryGetValue("message", out string? overridingMessage);
-        return StartCommitDialog(null, overridingMessage, arguments.ContainsKey("quiet"));
-    }
-
-    private bool Push(IReadOnlyDictionary<string, string?> arguments)
-        => StartPushDialog(null, arguments.ContainsKey("quiet"));
-
-    private bool Pull(IReadOnlyDictionary<string, string?> arguments)
-    {
-        UpdateSettingsBasedOnArguments(arguments);
-        arguments.TryGetValue("remotebranch", out string? remoteBranch);
-        return arguments.ContainsKey("quiet")
-            ? StartPullDialogAndPullImmediately(remoteBranch: remoteBranch)
-            : StartPullDialog(remoteBranch: remoteBranch);
-    }
-
-    private static void UpdateSettingsBasedOnArguments(IReadOnlyDictionary<string, string?> arguments)
-    {
-        if (arguments.ContainsKey("merge"))
-        {
-            AppSettings.DefaultPullAction = GitPullAction.Merge;
-        }
-
-        if (arguments.ContainsKey("rebase"))
-        {
-            AppSettings.DefaultPullAction = GitPullAction.Rebase;
-        }
-
-        if (arguments.ContainsKey("fetch"))
-        {
-            AppSettings.DefaultPullAction = GitPullAction.Fetch;
-        }
-
-        if (arguments.ContainsKey("autostash"))
-        {
-            AppSettings.AutoStash = true;
-        }
-    }
-
-    public void ShowModelessForm(IWin32Window? owner, bool requiresValidWorkingDir, EventHandler<GitUIEventArgs>? preEvent, EventHandler<GitUIPostActionEventArgs>? postEvent, Func<Form> provideForm) => throw NotPorted(nameof(ShowModelessForm));
     public bool StartAddFilesDialog(IWin32Window? owner, string? addFiles = null)
     {
         bool Action()
@@ -854,16 +560,44 @@ public sealed class GitUICommands : IGitUICommands
         return DoActionOnRepo(owner, Action);
     }
 
-    public bool StartAddToGitIgnoreDialog(IWin32Window? owner, bool localExclude, params string[] filePattern)
+    public bool StartCleanupRepositoryDialog(IWin32Window? owner = null, string? path = null)
+    {
+        using CommandsDialogs.FormCleanupRepository form = new(this);
+        form.SetPathArgument(path);
+        form.ShowDialog(owner);
+
+        return true;
+    }
+
+    public bool StartSquashCommitDialog(IWin32Window? owner, GitRevision revision)
     {
         bool Action()
         {
-            using CommandsDialogs.FormAddToGitIgnore frm = new(this, localExclude, filePattern);
-            frm.ShowDialog(owner);
+            using CommandsDialogs.FormCommit form = new(this, CommandsDialogs.CommitKind.Squash, revision);
+            form.ShowDialog(owner);
             return true;
         }
 
-        return DoActionOnRepo(owner, Action, changesRepo: false, postEvent: PostEditGitIgnore);
+        return DoActionOnRepo(owner, Action);
+    }
+
+    private static bool ShowCommandlineHelp()
+    {
+        using CommandsDialogs.FormCommandlineHelp form = new();
+        form.ShowDialog(owner: null);
+        return true;
+    }
+
+    public bool StartFixupCommitDialog(IWin32Window? owner, GitRevision revision)
+    {
+        bool Action()
+        {
+            using CommandsDialogs.FormCommit form = new(this, CommandsDialogs.CommitKind.Fixup, revision);
+            form.ShowDialog(owner);
+            return true;
+        }
+
+        return DoActionOnRepo(owner, Action);
     }
 
     public bool StartAmendCommitDialog(IWin32Window? owner, GitRevision revision)
@@ -878,25 +612,217 @@ public sealed class GitUICommands : IGitUICommands
         return DoActionOnRepo(owner, Action);
     }
 
-    public bool StartApplyPatchDialog(IWin32Window? owner, string? patchFile = null)
+    public bool StartCommitDialog(IWin32Window? owner, string? commitMessage = null, bool showOnlyWhenChanges = false)
     {
+        if (Module.IsBareRepository())
+        {
+            return false;
+        }
+
         return DoActionOnRepo(owner, action: () =>
         {
-            using CommandsDialogs.FormApplyPatch form = new(this);
-            if (Directory.Exists(patchFile!))
+            if (showOnlyWhenChanges && Module.GetAllChangedFilesWithSubmodulesStatus(CancellationToken.None).Count == 0)
             {
-                form.SetPatchDir(patchFile!);
-            }
-            else
-            {
-                form.SetPatchFile(patchFile ?? string.Empty);
+                return true;
             }
 
+            using CommandsDialogs.FormCommit form = new(this, commitMessage: commitMessage);
             form.ShowDialog(owner);
             return true;
-        }, changesRepo: false);
+        }, changesRepo: false, preEvent: PreCommit, postEvent: PostCommit);
     }
 
+    public bool StartInitializeDialog(IWin32Window? owner = null, string? dir = null, EventHandler<GitModuleEventArgs>? gitModuleChanged = null)
+    {
+        bool Action()
+        {
+            dir ??= Module.IsValidGitWorkingDir() ? Module.WorkingDir : string.Empty;
+
+            CommandsDialogs.FormInit frm = new(this, dir, gitModuleChanged);
+            frm.ShowDialog(owner);
+            return true;
+        }
+
+        return DoActionOnRepo(owner, Action, requiresValidWorkingDir: false, changesRepo: false);
+    }
+
+    public bool StartPullDialog(IWin32Window? owner = null, string? remoteBranch = null, string? remote = null, GitPullAction pullAction = GitPullAction.None)
+        => StartPullDialogInternal(owner, pullOnShow: false, out _, remoteBranch, remote, pullAction);
+
+    private bool StartPullDialogInternal(
+        IWin32Window? owner,
+        bool pullOnShow,
+        out bool pullCompleted,
+        string? remoteBranch,
+        string? remote,
+        GitPullAction pullAction)
+    {
+        bool pulled = false;
+        bool done = DoActionOnRepo(owner, action: () =>
+        {
+            using CommandsDialogs.FormPull form = new(this, remoteBranch, remote, pullAction);
+            DialogResult result = pullOnShow
+                ? form.PullAndShowDialogWhenFailed(owner, remote, pullAction)
+                : form.ShowDialog(owner);
+            pulled = result == DialogResult.OK && !form.ErrorOccurred;
+            return result == DialogResult.OK;
+        });
+
+        pullCompleted = pulled;
+        return done;
+    }
+
+    public bool StartFormCommitDiff(ObjectId objectId)
+    {
+        bool Action()
+        {
+            using FormCommitDiff viewPatch = new(this, objectId);
+            viewPatch.ShowDialog(null);
+            return true;
+        }
+
+        return DoActionOnRepo(null, Action, requiresValidWorkingDir: false, changesRepo: false);
+    }
+
+    public bool StartSparseWorkingCopyDialog(IWin32Window? owner)
+    {
+        bool Action()
+        {
+            using CommandsDialogs.FormSparseWorkingCopy form = new(this);
+            form.ShowDialog(owner);
+            return true;
+        }
+
+        return DoActionOnRepo(owner, Action, changesRepo: false);
+    }
+
+    public void AddCommitTemplate(string key, Func<string> addingText, Image? icon, bool isRegex = false)
+    {
+        _commitTemplateManager.Register(key, addingText, icon, isRegex);
+    }
+
+    public void RemoveCommitTemplate(string key)
+    {
+        _commitTemplateManager.Unregister(key);
+    }
+
+    public bool StartFormatPatchDialog(IWin32Window? owner = null)
+    {
+        bool Action()
+        {
+            using CommandsDialogs.FormFormatPatch form = new(this);
+            form.ShowDialog(owner);
+            return true;
+        }
+
+        return DoActionOnRepo(owner, Action, changesRepo: false);
+    }
+
+    public bool StartStashDialog(IWin32Window? owner = null, bool manageStashes = true, string? initialStash = null)
+    {
+        bool Action()
+        {
+            using FormStash form = new(this, initialStash) { ManageStashes = manageStashes };
+            form.ShowDialog(owner);
+            return true;
+        }
+
+        return DoActionOnRepo(owner, Action, changesRepo: false);
+    }
+
+    public bool StartRevertCommitDialog(IWin32Window? owner, GitRevision revision)
+    {
+        bool Action()
+        {
+            using CommandsDialogs.FormRevertCommit form = new(this, revision);
+            return form.ShowDialog(owner) == DialogResult.OK;
+        }
+
+        return DoActionOnRepo(owner, Action);
+    }
+
+    public bool StartResolveConflictsDialog(IWin32Window? owner = null, bool offerCommit = true)
+    {
+        bool Action()
+        {
+            using CommandsDialogs.FormResolveConflicts form = new(this, offerCommit);
+            form.ShowDialog(owner);
+            return true;
+        }
+
+        return DoActionOnRepo(owner, Action);
+    }
+
+    /// <summary>Start Merge dialog, using the specified branch.</summary>
+    /// <param name="owner">Owner of the dialog.</param>
+    /// <param name="branch">Branch to merge into the current branch.</param>
+    public bool StartMergeBranchDialog(IWin32Window? owner, string? branch)
+    {
+        bool Action()
+        {
+            using FormMergeBranch form = new(this, branch);
+            form.ShowDialog(owner);
+            return true;
+        }
+
+        return DoActionOnRepo(owner, Action, changesRepo: false);
+    }
+
+    public bool StartCreateTagDialog(IWin32Window? owner = null, GitRevision? revision = null)
+    {
+        if (revision?.IsArtificial is true)
+        {
+            return false;
+        }
+
+        return DoActionOnRepo(owner, action: () =>
+        {
+            using CommandsDialogs.FormCreateTag form = new(this, revision?.ObjectId ?? default);
+            return form.ShowDialog(owner) == DialogResult.OK;
+        });
+    }
+
+    public bool StartDeleteTagDialog(IWin32Window? owner, string? tag)
+    {
+        bool Action()
+        {
+            using CommandsDialogs.FormDeleteTag form = new(this, tag);
+            return form.ShowDialog(owner) == DialogResult.OK;
+        }
+
+        return DoActionOnRepo(owner, Action);
+    }
+
+    public bool StartEditGitIgnoreDialog(IWin32Window? owner, bool localExcludes)
+    {
+        bool Action()
+        {
+            using CommandsDialogs.FormGitIgnore form = new(this, localExcludes);
+            form.ShowDialog(owner);
+            return true;
+        }
+
+        return DoActionOnRepo(owner, Action, changesRepo: false, postEvent: PostEditGitIgnore);
+    }
+
+    public bool StartAddToGitIgnoreDialog(IWin32Window? owner, bool localExclude, params string[] filePattern)
+    {
+        bool Action()
+        {
+            using CommandsDialogs.FormAddToGitIgnore frm = new(this, localExclude, filePattern);
+            frm.ShowDialog(owner);
+            return true;
+        }
+
+        return DoActionOnRepo(owner, Action, changesRepo: false, postEvent: PostEditGitIgnore);
+    }
+
+    /// <summary>
+    /// Open the archive dialog.
+    /// </summary>
+    /// <param name="revision">Revision to create an archive from.</param>
+    /// <param name="revision2">Revision for differential archive.</param>
+    /// <param name="path">Files path for archive.</param>
     public bool StartArchiveDialog(IWin32Window? owner = null, GitRevision? revision = null, GitRevision? revision2 = null, string? path = null)
     {
         return DoActionOnRepo(owner, action: () =>
@@ -912,70 +838,29 @@ public sealed class GitUICommands : IGitUICommands
         }, changesRepo: false);
     }
 
-    public void StartBatchFileProcessDialog(string batchFile)
+    public bool StartMailMapDialog(IWin32Window? owner = null)
     {
-        bool useWindowsBatch = OperatingSystem.IsWindows();
-        string extension = useWindowsBatch ? ".cmd" : ".sh";
-        string tempFile = Path.Join(Path.GetTempPath(), $"GitExtensions-{Guid.NewGuid():N}{extension}");
-
-        try
+        bool Action()
         {
-            FileStreamOptions streamOptions = new()
-            {
-                Access = FileAccess.Write,
-                Mode = FileMode.CreateNew,
-                Options = FileOptions.SequentialScan,
-                Share = FileShare.None,
-            };
-            if (!useWindowsBatch)
-            {
-                streamOptions.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-            }
-
-            using (FileStream stream = new(tempFile, streamOptions))
-            using (StreamWriter writer = new(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
-            {
-                if (useWindowsBatch)
-                {
-                    writer.WriteLine("@prompt $G");
-                }
-
-                writer.Write(batchFile);
-            }
-
-            string process = useWindowsBatch
-                ? Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe"
-                : "/bin/sh";
-            ArgumentString arguments = useWindowsBatch
-                ? $"/D /C {tempFile.Quote()}"
-                : tempFile.Quote();
-            IWin32Window? owner = null;
-            if (AvaloniaApplication.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-            {
-                owner = desktop.Windows.FirstOrDefault(window => window.IsActive) as IWin32Window
-                    ?? desktop.MainWindow as IWin32Window;
-            }
-
-            FormProcess.ShowDialog(
-                owner,
-                this,
-                arguments,
-                Module.WorkingDir,
-                input: null,
-                useDialogSettings: true,
-                process: process);
+            using CommandsDialogs.FormMailMap form = new(this);
+            form.ShowDialog(owner);
+            return true;
         }
-        finally
-        {
-            File.Delete(tempFile);
-        }
+
+        return DoActionOnRepo(owner, Action, changesRepo: false);
     }
 
-    public bool StartBrowseDialog(IWin32Window? owner, BrowseArguments? args = null)
+    public bool StartVerifyDatabaseDialog(IWin32Window? owner = null)
     {
-        FormBrowse form = new(this, args ?? new BrowseArguments());
-        ShowModelessWindow(form, owner);
-        return true;
+        bool Action()
+        {
+            using FormVerify form = new(this);
+            form.ShowDialog(owner);
+            return true;
+        }
+
+        // TODO: move Notify to FormVerify and friends
+        return DoActionOnRepo(owner, Action);
     }
 
     public bool StartCheckoutBranch(IWin32Window? owner, IReadOnlyList<ObjectId>? containObjectIds)
@@ -990,19 +875,32 @@ public sealed class GitUICommands : IGitUICommands
         }, preEvent: PreCheckoutBranch, postEvent: PostCheckoutBranch);
     }
 
-    public bool StartCheckoutRemoteBranch(IWin32Window? owner, string branch)
+    /// <inheritdoc/>
+    public bool StartRemotesDialog(IWin32Window? owner, string? preselectRemote = null, string? preselectLocal = null)
     {
-        return StartCheckoutBranch(owner, branch, true);
+        bool Action()
+        {
+            CommandsDialogs.FormRemotes form = new(this)
+            {
+                PreselectRemoteOnLoad = preselectRemote,
+                PreselectLocalOnLoad = preselectLocal
+            };
+            form.ShowDialog(owner);
+            return true;
+        }
+
+        return DoActionOnRepo(owner, Action);
     }
 
-    public bool StartCheckoutRevisionDialog(IWin32Window? owner, string? revision = null)
+    public bool StartRebase(IWin32Window? owner, string onto)
     {
-        return DoActionOnRepo(owner, action: () =>
-        {
-            using FormCheckoutRevision form = new(this);
-            form.SetRevision(revision);
-            return form.ShowDialog(owner) == DialogResult.OK;
-        }, preEvent: PreCheckoutRevision, postEvent: PostCheckoutRevision);
+        return StartRebaseDialog(
+            owner,
+            from: string.Empty,
+            to: null,
+            onto,
+            interactive: false,
+            startRebaseImmediately: true);
     }
 
     public bool StartCherryPickDialog(IWin32Window? owner = null, GitRevision? revision = null)
@@ -1036,6 +934,8 @@ public sealed class GitUICommands : IGitUICommands
                     }
 
                     previousForm = form;
+
+                    // ReSharper disable once PossibleMultipleEnumeration
                     if (form.ShowDialog(owner) == DialogResult.OK)
                     {
                         repoChanged = true;
@@ -1060,13 +960,15 @@ public sealed class GitUICommands : IGitUICommands
         return DoActionOnRepo(owner, Action);
     }
 
-    public bool StartCleanupRepositoryDialog(IWin32Window? owner = null, string? path = null)
+    public bool StartTheContinueRebaseDialog(IWin32Window? owner)
     {
-        using CommandsDialogs.FormCleanupRepository form = new(this);
-        form.SetPathArgument(path);
-        form.ShowDialog(owner);
-
-        return true;
+        return StartRebaseDialog(
+            owner,
+            from: string.Empty,
+            to: null,
+            onto: null,
+            interactive: false,
+            startRebaseImmediately: false);
     }
 
     public bool StartCloneDialog(IWin32Window? owner, string url, EventHandler<GitModuleEventArgs> gitModuleChanged)
@@ -1086,40 +988,33 @@ public sealed class GitUICommands : IGitUICommands
         return DoActionOnRepo(owner, Action, requiresValidWorkingDir: false, changesRepo: false);
     }
 
-    public void StartCloneForkFromHoster(IWin32Window? owner, IRepositoryHostPlugin gitHoster, EventHandler<GitModuleEventArgs>? gitModuleChanged)
+    public bool StartInteractiveRebase(IWin32Window? owner, string onto)
     {
-        WrapRepoHostingCall(TranslatedStrings.ForkCloneRepo, gitHoster, gh =>
-        {
-            using ForkAndCloneForm frm = new(this, gh, gitModuleChanged);
-            frm.ShowDialog(owner);
-        });
+        return StartRebaseDialog(
+            owner,
+            from: string.Empty,
+            to: null,
+            onto,
+            interactive: true,
+            startRebaseImmediately: true);
     }
 
-    public bool StartCommitDialog(IWin32Window? owner, string? commitMessage = null, bool showOnlyWhenChanges = false)
+    public bool StartRebaseDialogWithAdvOptions(IWin32Window? owner, string onto, string from = "")
     {
-        if (Module.IsBareRepository())
-        {
-            return false;
-        }
-
-        return DoActionOnRepo(owner, action: () =>
-        {
-            if (showOnlyWhenChanges && Module.GetAllChangedFilesWithSubmodulesStatus(CancellationToken.None).Count == 0)
-            {
-                return true;
-            }
-
-            using CommandsDialogs.FormCommit form = new(this, commitMessage: commitMessage);
-            form.ShowDialog(owner);
-            return true;
-        }, changesRepo: false, preEvent: PreCommit, postEvent: PostCommit);
+        return StartRebaseDialog(
+            owner,
+            from,
+            to: null,
+            onto,
+            interactive: false,
+            startRebaseImmediately: false);
     }
 
-    public bool StartCompareRevisionsDialog(IWin32Window? owner = null)
+    public bool StartRenameDialog(IWin32Window? owner, string branch)
     {
         bool Action()
         {
-            using CommandsDialogs.FormLog form = new(this);
+            using CommandsDialogs.FormRenameBranch form = new(this, branch);
             return form.ShowDialog(owner) == DialogResult.OK;
         }
 
@@ -1204,18 +1099,16 @@ public sealed class GitUICommands : IGitUICommands
             });
     }
 
-    public bool StartCreateTagDialog(IWin32Window? owner = null, GitRevision? revision = null)
+    public bool StartSubmodulesDialog(IWin32Window? owner)
     {
-        if (revision?.IsArtificial is true)
+        bool Action()
         {
-            return false;
+            using FormSubmodules form = new(this);
+            form.ShowDialog(owner);
+            return true;
         }
 
-        return DoActionOnRepo(owner, action: () =>
-        {
-            using CommandsDialogs.FormCreateTag form = new(this, revision?.ObjectId ?? default);
-            return form.ShowDialog(owner) == DialogResult.OK;
-        });
+        return DoActionOnRepo(owner, Action);
     }
 
     public bool StartDeleteBranchDialog(IWin32Window? owner, string branch)
@@ -1233,68 +1126,57 @@ public sealed class GitUICommands : IGitUICommands
         }, changesRepo: false);
     }
 
-    public bool StartDeleteRemoteBranchDialog(IWin32Window? owner, string remoteBranch)
-    {
-        return DoActionOnRepo(owner, action: () =>
-        {
-            using CommandsDialogs.FormDeleteRemoteBranch form = new(this, remoteBranch);
-            form.ShowDialog(owner);
-            return true;
-        }, changesRepo: false);
-    }
-
-    public bool StartDeleteTagDialog(IWin32Window? owner, string? tag)
+    public bool StartUpdateSubmodulesDialog(IWin32Window? owner, string submoduleLocalPath = "")
     {
         bool Action()
         {
-            using CommandsDialogs.FormDeleteTag form = new(this, tag);
-            return form.ShowDialog(owner) == DialogResult.OK;
+            return FormProcess.ShowDialog(owner, this, arguments: Commands.SubmoduleUpdate(submoduleLocalPath), Module.WorkingDir, input: null, useDialogSettings: true);
+        }
+
+        return DoActionOnRepo(owner, Action, postEvent: PostUpdateSubmodules);
+    }
+
+    public bool StartUpdateSubmoduleDialog(IWin32Window? owner, string submoduleLocalPath, string submoduleParentPath)
+    {
+        bool Action()
+        {
+            // Execute the submodule update comment from the submodule's parent directory
+            return FormProcess.ShowDialog(owner, this, arguments: Commands.SubmoduleUpdate(submoduleLocalPath), submoduleParentPath, null, true);
+        }
+
+        return DoActionOnRepo(owner, Action, postEvent: PostUpdateSubmodules);
+    }
+
+    public bool StartSyncSubmodulesDialog(IWin32Window? owner)
+    {
+        bool Action()
+        {
+            return FormProcess.ShowDialog(owner, this, arguments: Commands.SubmoduleSync(""), Module.WorkingDir, input: null, useDialogSettings: true);
         }
 
         return DoActionOnRepo(owner, Action);
     }
 
-    public bool StartEditGitAttributesDialog(IWin32Window? owner = null)
+    public void UpdateSubmodules(IWin32Window? owner)
     {
-        bool Action()
+        if (!Module.HasSubmodules())
         {
-            using CommandsDialogs.FormGitAttributes form = new(this);
-            form.ShowDialog(owner);
-            return true;
+            return;
         }
 
-        return DoActionOnRepo(owner, Action, changesRepo: false);
-    }
+        bool updateSubmodules = AppSettings.UpdateSubmodulesOnCheckout ?? (AppSettings.DontConfirmUpdateSubmodulesOnCheckout ?? MessageBoxes.ConfirmUpdateSubmodules(owner));
 
-    public bool StartEditGitIgnoreDialog(IWin32Window? owner, bool localExcludes)
-    {
-        bool Action()
+        if (updateSubmodules)
         {
-            using CommandsDialogs.FormGitIgnore form = new(this, localExcludes);
-            form.ShowDialog(owner);
-            return true;
+            StartUpdateSubmodulesDialog(owner);
         }
-
-        return DoActionOnRepo(owner, Action, changesRepo: false, postEvent: PostEditGitIgnore);
     }
 
-    public bool StartFileEditorDialog(string? filename, bool showWarning = false, int? lineNumber = null)
-    {
-        using FormEditor formEditor = new(this, filename, showWarning, lineNumber: lineNumber);
-        return formEditor.ShowDialog() != DialogResult.Cancel;
-    }
+    public bool StartGeneralSettingsDialog(IWin32Window? owner)
+        => StartSettingsDialog(owner, CommandsDialogs.SettingsDialog.Pages.GeneralSettingsPage.GetPageReference());
 
-    public void StartFileHistoryDialog(IWin32Window? owner, string fileName, GitRevision? revision = null, bool filterByRevision = false, bool showBlame = false)
-    {
-        // The WinForms client launches a separate process (or reuses Browse) for file
-        // history; this twin opens the window in-process, non-modal like that process.
-        DoActionOnRepo(owner, action: () =>
-        {
-            CommandsDialogs.FormFileHistory form = new(this, fileName, revision, filterByRevision, showBlame);
-            ShowModelessWindow(form, owner);
-            return true;
-        }, changesRepo: false);
-    }
+    public bool StartPluginSettingsDialog(IWin32Window? owner)
+        => StartSettingsDialog(owner, CommandsDialogs.SettingsDialog.PluginsSettingsGroup.GetPageReference());
 
     private static void ShowModelessWindow(Window form, IWin32Window? owner)
     {
@@ -1317,35 +1199,69 @@ public sealed class GitUICommands : IGitUICommands
         }
     }
 
-    public bool StartFixupCommitDialog(IWin32Window? owner, GitRevision revision)
+    public bool StartRepoSettingsDialog(IWin32Window? owner) => StartSettingsDialog(owner);
+
+    /// <summary>
+    /// Open Browse - main GUI including dashboard.
+    /// </summary>
+    /// <param name="owner">current window owner.</param>
+    /// <param name="args">The start up arguments.</param>
+    public bool StartBrowseDialog(IWin32Window? owner, BrowseArguments? args = null)
     {
-        bool Action()
+        FormBrowse form = new(this, args ?? new BrowseArguments());
+        ShowModelessWindow(form, owner);
+        return true;
+    }
+
+    public void StartFileHistoryDialog(IWin32Window? owner, string fileName, GitRevision? revision = null, bool filterByRevision = false, bool showBlame = false)
+    {
+        // The WinForms client launches a separate process (or reuses Browse) for file
+        // history; Avalonia opens the window in-process and non-modal.
+        DoActionOnRepo(owner, action: () =>
         {
-            using CommandsDialogs.FormCommit form = new(this, CommandsDialogs.CommitKind.Fixup, revision);
+            CommandsDialogs.FormFileHistory form = new(this, fileName, revision, filterByRevision, showBlame);
+            ShowModelessWindow(form, owner);
+            return true;
+        }, changesRepo: false);
+    }
+
+    public void OpenWithDifftool(IWin32Window? owner, IReadOnlyList<GitRevision?> revisions, string fileName, string? oldFileName, RevisionDiffKind diffKind, bool isTracked, string? customTool = null)
+    {
+        // Note: Order in revisions is that first clicked is last in array
+        if (!RevisionDiffInfoProvider.TryGet(revisions, diffKind, out string? firstRevision, out string? secondRevision, out string? error))
+        {
+            MessageBoxes.Show(owner, error, TranslatedStrings.Error, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        else
+        {
+            Module.OpenWithDifftool(fileName, oldFileName, firstRevision, secondRevision, isTracked: isTracked, customTool: customTool);
+        }
+    }
+
+    public bool StartApplyPatchDialog(IWin32Window? owner, string? patchFile = null)
+    {
+        return DoActionOnRepo(owner, action: () =>
+        {
+            using CommandsDialogs.FormApplyPatch form = new(this);
+            if (Directory.Exists(patchFile!))
+            {
+                form.SetPatchDir(patchFile!);
+            }
+            else
+            {
+                form.SetPatchFile(patchFile ?? string.Empty);
+            }
+
             form.ShowDialog(owner);
             return true;
-        }
-
-        return DoActionOnRepo(owner, Action);
+        }, changesRepo: false);
     }
 
-    public bool StartFormCommitDiff(ObjectId objectId)
+    public bool StartEditGitAttributesDialog(IWin32Window? owner = null)
     {
         bool Action()
         {
-            using FormCommitDiff viewPatch = new(this, objectId);
-            viewPatch.ShowDialog(null);
-            return true;
-        }
-
-        return DoActionOnRepo(null, Action, requiresValidWorkingDir: false, changesRepo: false);
-    }
-
-    public bool StartFormatPatchDialog(IWin32Window? owner = null)
-    {
-        bool Action()
-        {
-            using CommandsDialogs.FormFormatPatch form = new(this);
+            using CommandsDialogs.FormGitAttributes form = new(this);
             form.ShowDialog(owner);
             return true;
         }
@@ -1353,91 +1269,63 @@ public sealed class GitUICommands : IGitUICommands
         return DoActionOnRepo(owner, Action, changesRepo: false);
     }
 
-    public bool StartGeneralSettingsDialog(IWin32Window? owner)
-        => StartSettingsDialog(owner, CommandsDialogs.SettingsDialog.Pages.GeneralSettingsPage.GetPageReference());
-    public bool StartInitializeDialog(IWin32Window? owner = null, string? dir = null, EventHandler<GitModuleEventArgs>? gitModuleChanged = null)
+    private bool InvokeEvent(IWin32Window? ownerForm, EventHandler<GitUIEventArgs>? gitUIEventHandler)
     {
-        bool Action()
+        try
         {
-            dir ??= Module.IsValidGitWorkingDir() ? Module.WorkingDir : string.Empty;
+            GitUIEventArgs eventArgs = new(ownerForm, this);
+            gitUIEventHandler?.Invoke(this, eventArgs);
+            return !eventArgs.Cancel;
+        }
+        catch (Exception ex)
+        {
+            MessageBoxes.ShowError(ownerForm, $"{ex.Message}{Environment.NewLine}{ex.StackTrace}", "Error");
+            return false;
+        }
+    }
 
-            CommandsDialogs.FormInit frm = new(this, dir, gitModuleChanged);
+    private void InvokePostEvent(IWin32Window? ownerForm, bool actionDone, EventHandler<GitUIPostActionEventArgs>? gitUIEventHandler)
+    {
+        gitUIEventHandler?.Invoke(this, new GitUIPostActionEventArgs(ownerForm, this, actionDone));
+    }
+
+    private void WrapRepoHostingCall(string name, IRepositoryHostPlugin gitHoster, Action<IRepositoryHostPlugin> call)
+    {
+        if (!gitHoster.ConfigurationOk)
+        {
+            GitUIEventArgs eventArgs = new(null, this);
+            gitHoster.Execute(eventArgs);
+        }
+
+        if (gitHoster.ConfigurationOk)
+        {
+            try
+            {
+                call(gitHoster);
+            }
+            catch (Exception ex)
+            {
+                ShowRepositoryHostingError(name, ex);
+            }
+        }
+    }
+
+    public void StartCloneForkFromHoster(IWin32Window? owner, IRepositoryHostPlugin gitHoster, EventHandler<GitModuleEventArgs>? gitModuleChanged)
+    {
+        WrapRepoHostingCall(TranslatedStrings.ForkCloneRepo, gitHoster, gh =>
+        {
+            using ForkAndCloneForm frm = new(this, gh, gitModuleChanged);
             frm.ShowDialog(owner);
-            return true;
-        }
-
-        return DoActionOnRepo(owner, Action, requiresValidWorkingDir: false, changesRepo: false);
+        });
     }
-
-    public bool StartInteractiveRebase(IWin32Window? owner, string onto)
-    {
-        return StartRebaseDialog(
-            owner,
-            from: string.Empty,
-            to: null,
-            onto,
-            interactive: true,
-            startRebaseImmediately: true);
-    }
-
-    public bool StartMailMapDialog(IWin32Window? owner = null)
-    {
-        bool Action()
-        {
-            using CommandsDialogs.FormMailMap form = new(this);
-            form.ShowDialog(owner);
-            return true;
-        }
-
-        return DoActionOnRepo(owner, Action, changesRepo: false);
-    }
-
-    public bool StartMergeBranchDialog(IWin32Window? owner, string? branch)
-    {
-        bool Action()
-        {
-            using FormMergeBranch form = new(this, branch);
-            form.ShowDialog(owner);
-            return true;
-        }
-
-        return DoActionOnRepo(owner, Action, changesRepo: false);
-    }
-
-    public bool StartPluginSettingsDialog(IWin32Window? owner)
-        => StartSettingsDialog(owner, CommandsDialogs.SettingsDialog.PluginsSettingsGroup.GetPageReference());
-
-    public bool StartPullDialog(IWin32Window? owner = null, string? remoteBranch = null, string? remote = null, GitPullAction pullAction = GitPullAction.None)
-        => StartPullDialogInternal(owner, pullOnShow: false, out _, remoteBranch, remote, pullAction);
 
     public bool StartPullDialogAndPullImmediately(IWin32Window? owner = null, string? remoteBranch = null, string? remote = null, GitPullAction pullAction = GitPullAction.None)
         => StartPullDialogAndPullImmediately(out _, owner, remoteBranch, remote, pullAction);
 
+    /// <param name="pullCompleted">true if pull completed with no errors.</param>
+    /// <returns>if revision grid should be refreshed.</returns>
     public bool StartPullDialogAndPullImmediately(out bool pullCompleted, IWin32Window? owner = null, string? remoteBranch = null, string? remote = null, GitPullAction pullAction = GitPullAction.None)
         => StartPullDialogInternal(owner, pullOnShow: true, out pullCompleted, remoteBranch, remote, pullAction);
-
-    private bool StartPullDialogInternal(
-        IWin32Window? owner,
-        bool pullOnShow,
-        out bool pullCompleted,
-        string? remoteBranch,
-        string? remote,
-        GitPullAction pullAction)
-    {
-        bool pulled = false;
-        bool done = DoActionOnRepo(owner, action: () =>
-        {
-            using CommandsDialogs.FormPull form = new(this, remoteBranch, remote, pullAction);
-            DialogResult result = pullOnShow
-                ? form.PullAndShowDialogWhenFailed(owner, remote, pullAction)
-                : form.ShowDialog(owner);
-            pulled = result == DialogResult.OK && !form.ErrorOccurred;
-            return result == DialogResult.OK;
-        });
-
-        pullCompleted = pulled;
-        return done;
-    }
 
     public void StartPullRequestsDialog(IWin32Window? owner, IRepositoryHostPlugin gitHoster)
     {
@@ -1454,6 +1342,35 @@ public sealed class GitUICommands : IGitUICommands
                 else
                 {
                     form.Show();
+                }
+            });
+    }
+
+    public void AddUpstreamRemote(IWin32Window? owner, IRepositoryHostPlugin gitHoster)
+    {
+        WrapRepoHostingCall(
+            TranslatedStrings.AddUpstreamRemote,
+            gitHoster,
+            hoster =>
+            {
+                if (owner is FormBrowse formBrowse)
+                {
+                    formBrowse.QueueRepositoryHostOperation(
+                        (mainThreadFactory, cancellationToken) =>
+                            AddUpstreamRemoteAsync(
+                                owner,
+                                hoster,
+                                mainThreadFactory,
+                                cancellationToken));
+                }
+                else
+                {
+                    ThreadHelper.FileAndForget(
+                        () => AddUpstreamRemoteAsync(
+                            owner,
+                            hoster,
+                            ThreadHelper.JoinableTaskFactory,
+                            CancellationToken.None));
                 }
             });
     }
@@ -1483,15 +1400,41 @@ public sealed class GitUICommands : IGitUICommands
         return done;
     }
 
-    public bool StartRebase(IWin32Window? owner, string onto)
+    public bool RunCommand(IReadOnlyList<string> args)
     {
-        return StartRebaseDialog(
-            owner,
-            from: string.Empty,
-            to: null,
-            onto,
-            interactive: false,
-            startRebaseImmediately: true);
+        IReadOnlyDictionary<string, string?> arguments = InitializeArguments(args);
+
+        if (args.Count <= 1)
+        {
+            return false;
+        }
+
+        string command = args[1];
+        if (command == "difftool" && args.Count <= 2)
+        {
+            MessageBoxes.Show("Cannot open difftool, there is no file selected.", "Difftool", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+
+        if (command is BlameHistoryCommand or FileHistoryCommand && args.Count <= 2)
+        {
+            MessageBoxes.Show("Cannot open blame / file history, there is no file selected.", "Blame / file history", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+
+        if (command == "blame" && args.Count <= 2)
+        {
+            MessageBoxes.Show("Cannot open blame, there is no file selected.", "Blame", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+
+        if (command == "fileeditor" && args.Count <= 2)
+        {
+            MessageBoxes.Show("Cannot open file editor, there is no file selected.", "File editor", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+
+        return RunCommandBasedOnArgument(args, arguments);
     }
 
     public bool StartRebaseDialog(
@@ -1523,45 +1466,255 @@ public sealed class GitUICommands : IGitUICommands
             startRebaseImmediately: false);
     }
 
-    public bool StartRebaseDialogWithAdvOptions(IWin32Window? owner, string onto, string from = "")
+    // Please update FormCommandlineHelp if you add or change commands.
+    private bool RunCommandBasedOnArgument(IReadOnlyList<string> args, IReadOnlyDictionary<string, string?> arguments)
     {
-        return StartRebaseDialog(
-            owner,
-            from,
-            to: null,
-            onto,
-            interactive: false,
-            startRebaseImmediately: false);
+        // Code should not contain multiple whitespace in a row
+        string command = args[1];
+        switch (command)
+        {
+            case "about":
+                using (CommandsDialogs.FormAbout aboutForm = new())
+                {
+                    aboutForm.ShowDialog(owner: null);
+                }
+
+                return true;
+            case "add":
+            case "addfiles":
+                // If filenames have been specified, quote them and pass them to the dialog, else pass '.' for current dir.
+                // If names of files or folders have been specified, pass them
+                return StartAddFilesDialog(owner: null, addFiles: args.Count < 3 ? "." : string.Join(' ', args.Skip(2).Select(file => file.Quote())));
+            case "apply":
+            case "applypatch":
+                return StartApplyPatchDialog(null, args.Count == 3 ? args[2] : string.Empty);
+            case "blame": // filename
+                return RunBlameCommand(args);
+            case "branch":
+                return StartCreateBranchDialog();
+            case "browse":
+                return RunBrowseCommand(args);
+            case "checkout":
+            case "checkoutbranch":
+                return StartCheckoutBranch(null);
+            case "checkoutrevision":
+                return StartCheckoutRevisionDialog(null);
+            case "cherry":
+                return StartCherryPickDialog();
+            case "cleanup":
+                return StartCleanupRepositoryDialog();
+            case "clone":
+                return RunCloneCommand(args);
+            case "commit":
+                return Commit(arguments);
+            case "difftool":
+                if (args.Count <= 2)
+                {
+                    return false;
+                }
+
+                try
+                {
+                    Module.OpenWithDifftool(args[2]);
+                    return true;
+                }
+                catch
+                {
+                    return false;
+                }
+
+            case BlameHistoryCommand:
+            case FileHistoryCommand:
+                return RunFileHistoryCommand(args, showBlame: command == BlameHistoryCommand);
+            case "fileeditor":
+                return StartFileEditorDialog(args[2]);
+            case "formatpatch":
+                return StartFormatPatchDialog();
+            case "gitignore":
+                return StartEditGitIgnoreDialog(null, localExcludes: false);
+            case "init":
+                return RunInitCommand(args);
+            case "merge":
+                return RunMergeCommand(arguments);
+            case "mergeconflicts":
+            case "mergetool":
+                return RunMergeToolOrConflictCommand(arguments);
+            case "openrepo":
+                return RunOpenRepoCommand(args);
+            case "pull":
+                return Pull(arguments);
+            case "push":
+                return Push(arguments);
+            case "rebase":
+                return RunRebaseCommand(arguments);
+            case "remotes":
+                return StartRemotesDialog(owner: null);
+            case "revert":
+            case "reset":
+                return StartResetChangesDialog(names: [.. args.Skip(2)]);
+            case "settings":
+                return StartSettingsDialog(owner: null);
+            case "searchfile":
+                return RunSearchFileCommand();
+            case "stash":
+                return StartStashDialog();
+            case "synchronize":
+                return RunSynchronizeCommand(arguments);
+            case "tag":
+                return StartCreateTagDialog();
+            case "viewdiff":
+                return StartCompareRevisionsDialog();
+            case "viewpatch":
+                return StartViewPatchDialog(args.Count == 3 ? args[2] : string.Empty);
+            case "uninstall":
+                return UninstallEditor();
+            case "usage":
+            case "help":
+                return ShowCommandlineHelp();
+            default:
+                if (command.StartsWith("git://") || command.StartsWith("http://") || command.StartsWith("https://"))
+                {
+                    return StartCloneDialog(null, command, openedFromProtocolHandler: true);
+                }
+
+                const string GitHubWindowsPrefix = "github-windows://openRepo/";
+                const string GitHubMacPrefix = "github-mac://openRepo/";
+                if (command.StartsWith(GitHubWindowsPrefix))
+                {
+                    return StartCloneDialog(null, command.Replace(GitHubWindowsPrefix, string.Empty), openedFromProtocolHandler: true);
+                }
+
+                if (command.StartsWith(GitHubMacPrefix))
+                {
+                    return StartCloneDialog(null, command.Replace(GitHubMacPrefix, string.Empty), openedFromProtocolHandler: true);
+                }
+
+                // User supplied a path. Open the repository if its a valid path
+                string? dir = !string.IsNullOrWhiteSpace(command) && File.Exists(command) ? Path.GetDirectoryName(command) : command;
+                if (args.Count == 2 && Directory.Exists(dir))
+                {
+                    return WithWorkingDirectory(dir).StartBrowseDialog(owner: null);
+                }
+
+                string message = $"The command \"{command}\" is not available in the Avalonia port yet.";
+                Console.Error.WriteLine(message);
+                MessageBoxes.ShowError(owner: null, message, "Unsupported command");
+                return false;
+        }
     }
 
-    public bool StartRemotesDialog(IWin32Window? owner, string? preselectRemote = null, string? preselectLocal = null)
+    private static bool UninstallEditor()
     {
-        bool Action()
+        GitConfigSettings globalSettings = new(new Executable(AppSettings.GitCommand), GitSettingLevel.Global);
+        string? coreEditor = globalSettings.GetValue("core.editor");
+        string? path = AppSettings.GetInstallDir().ToPosixPath();
+        if (path is not null && coreEditor?.Contains(path, StringComparison.InvariantCultureIgnoreCase) is true)
         {
-            CommandsDialogs.FormRemotes form = new(this)
-            {
-                PreselectRemoteOnLoad = preselectRemote,
-                PreselectLocalOnLoad = preselectLocal
-            };
-            form.ShowDialog(owner);
+            globalSettings.SetValue("core.editor", value: null);
+            globalSettings.Save();
+        }
+
+        return true;
+    }
+
+    private bool RunMergeCommand(IReadOnlyDictionary<string, string?> arguments)
+    {
+        arguments.TryGetValue("branch", out string? branch);
+        return StartMergeBranchDialog(null, branch);
+    }
+
+    private bool RunSearchFileCommand()
+    {
+        using SearchWindow<string> searchWindow = new(FindFileMatches);
+        searchWindow.ShowDialog();
+        if (searchWindow.SelectedItem is not null)
+        {
+            // We need to return the file that has been found, the visual studio plugin uses the return value
+            // to open the selected file.
+            Console.WriteLine(Path.Combine(Module.WorkingDir, searchWindow.SelectedItem));
             return true;
         }
 
-        return DoActionOnRepo(owner, Action);
+        return false;
     }
 
-    public bool StartRenameDialog(IWin32Window? owner, string branch)
+    private bool RunBrowseCommand(IReadOnlyList<string> args)
     {
-        bool Action()
+        string commit = GetParameterOrEmptyStringAsDefault(args, "-commit");
+        BrowseArguments browseArguments = new()
         {
-            using CommandsDialogs.FormRenameBranch form = new(this, branch);
-            return form.ShowDialog(owner) == DialogResult.OK;
+            RevFilter = GetParameterOrEmptyStringAsDefault(args, "-filter"),
+            PathFilter = GetParameterOrEmptyStringAsDefault(args, PathFilterArg),
+            IsFileHistoryMode = args.Any(arg => arg.StartsWith(PathFilterArg))
+        };
+
+        if (commit == string.Empty)
+        {
+            return StartBrowseDialog(owner: null, browseArguments);
         }
 
-        return DoActionOnRepo(owner, Action);
+        if (!TryGetObjectIds(commit, Module, out ObjectId selectedId, out ObjectId firstId))
+        {
+            Console.Error.WriteLine($"No commit found matching: {commit}");
+            return false;
+        }
+
+        return StartBrowseDialog(owner: null, browseArguments with
+        {
+            SelectedId = selectedId,
+            FirstId = firstId
+        });
+
+        static bool TryGetObjectIds(string value, IGitModule module, out ObjectId selectedId, out ObjectId firstId)
+        {
+            selectedId = default;
+            firstId = default;
+            foreach (string part in value.LazySplit(','))
+            {
+                if (!module.TryResolvePartialCommitId(part, out ObjectId objectId))
+                {
+                    return false;
+                }
+
+                if (selectedId.IsZero)
+                {
+                    selectedId = objectId;
+                }
+                else if (firstId.IsZero)
+                {
+                    firstId = objectId;
+
+                    // just ignore further commits
+                    break;
+                }
+            }
+
+            return true;
+        }
     }
 
-    public bool StartRepoSettingsDialog(IWin32Window? owner) => StartSettingsDialog(owner);
+    private static string GetParameterOrEmptyStringAsDefault(IReadOnlyList<string> args, string paramName)
+    {
+        string withEquals = paramName + "=";
+        for (int i = 2; i < args.Count; i++)
+        {
+            string arg = args[i];
+            if (arg.StartsWith(withEquals))
+            {
+                return arg.Replace(withEquals, string.Empty);
+            }
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>
+    /// Reset all changes to HEAD.
+    /// </summary>
+    /// <param name="owner">Owner window.</param>
+    /// <param name="workTreeFiles">Worktree files, to determine the status for the popup dialog.</param>
+    /// <param name="onlyWorkTree">Only reset worktree files.</param>
+    /// <returns><see langword="true"/> if executed.</returns>
     public bool StartResetChangesDialog(IWin32Window? owner, IReadOnlyCollection<GitItemStatus> workTreeFiles, bool onlyWorkTree)
     {
         // Show a form asking the user if they want to reset the changes.
@@ -1580,40 +1733,112 @@ public sealed class GitUICommands : IGitUICommands
         }
     }
 
-    public bool StartResetCurrentBranchDialog(IWin32Window? owner, string branch)
+    /// <summary>
+    ///  Resets changes of passed files or folders (with absolute or relative paths).<br/>
+    ///  If no <paramref name="names"/> are passed all changes are reset.
+    /// </summary>
+    /// <returns><see langword="false"/> if cancelled or if no items match.</returns>
+    private bool StartResetChangesDialog(string[] names)
     {
-        ObjectId objectId = Module.RevParse(branch);
-        if (objectId.IsZero)
+        ImmutableHashSet<string> relativeFilePaths = [.. names.Select(fileName => Path.GetRelativePath(Module.WorkingDir, fileName).ToPosixPath())];
+        ImmutableHashSet<string> relativeFolderPaths = [.. relativeFilePaths.Where(name => Directory.Exists(Path.Join(Module.WorkingDir, name)))];
+        bool allItems = relativeFolderPaths.Contains(".");
+        GitItemStatus[] selectedItems = [.. Module.GetAllChangedFilesWithSubmodulesStatus(cancellationToken: default)
+            .Where(item => allItems || relativeFilePaths.Contains(item.Name) || relativeFolderPaths.Any(folder => item.Path.Value.StartsWith(folder)))];
+
+        FormResetChanges.ActionEnum resetType = FormResetChanges.ShowResetDialog(
+            owner: null,
+            hasExistingFiles: selectedItems.Any(item => item.IsTracked),
+            hasNewFiles: selectedItems.Any(item => item.IsNew));
+
+        if (resetType == FormResetChanges.ActionEnum.Cancel)
         {
-            MessageBoxes.Show($"Branch \"{branch}\" could not be resolved.", TranslatedStrings.Error, MessageBoxButtons.OK, MessageBoxIcon.Error);
             return false;
         }
 
-        using FormResetCurrentBranch form = FormResetCurrentBranch.Create(this, Module.GetRevision(objectId));
-        return form.ShowDialog(owner) == DialogResult.OK;
-    }
-
-    public bool StartResolveConflictsDialog(IWin32Window? owner = null, bool offerCommit = true)
-    {
-        bool Action()
+        using (WaitCursorScope.Enter())
         {
-            using CommandsDialogs.FormResolveConflicts form = new(this, offerCommit);
-            form.ShowDialog(owner);
-            return true;
+            if (names.Length == 0)
+            {
+                return Module.ResetAllChanges(
+                    clean: resetType == FormResetChanges.ActionEnum.ResetAndDelete,
+                    onlyWorkTree: false);
+            }
+
+            if (selectedItems.Length == 0)
+            {
+                return false;
+            }
+
+            Module.ResetChanges(
+                resetId: default,
+                selectedItems,
+                resetAndDelete: resetType == FormResetChanges.ActionEnum.ResetAndDelete,
+                _fullPathResolver,
+                out StringBuilder output,
+                progressAction: null);
+            if (output.Length > 0)
+            {
+                MessageBoxes.Show(
+                    owner: null,
+                    output.ToString(),
+                    TranslatedStrings.ResetChangesCaption,
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
         }
 
-        return DoActionOnRepo(owner, Action);
+        return true;
     }
 
-    public bool StartRevertCommitDialog(IWin32Window? owner, GitRevision revision)
+    private bool RunOpenRepoCommand(IReadOnlyList<string> args)
     {
-        bool Action()
+        IGitUICommands commands = this;
+        if (args.Count > 2 && File.Exists(args[2]))
         {
-            using CommandsDialogs.FormRevertCommit form = new(this, revision);
-            return form.ShowDialog(owner) == DialogResult.OK;
+            string? path = File.ReadAllText(args[2]).Trim().LazySplit('\n').FirstOrDefault();
+            if (Directory.Exists(path))
+            {
+                commands = WithWorkingDirectory(path);
+            }
         }
 
-        return DoActionOnRepo(owner, Action);
+        return commands.StartBrowseDialog(owner: null, new BrowseArguments
+        {
+            RevFilter = GetParameterOrEmptyStringAsDefault(args, "-filter"),
+            PathFilter = GetParameterOrEmptyStringAsDefault(args, PathFilterArg)
+        });
+    }
+
+    private bool RunSynchronizeCommand(IReadOnlyDictionary<string, string?> arguments)
+    {
+        bool successful = true;
+        successful = Commit(arguments) && successful;
+        successful = Pull(arguments) && successful;
+        successful = Push(arguments) && successful;
+        return successful;
+    }
+
+    private bool RunRebaseCommand(IReadOnlyDictionary<string, string?> arguments)
+    {
+        arguments.TryGetValue("branch", out string? branch);
+        return StartRebaseDialog(owner: null, onto: branch);
+    }
+
+    public bool StartFileEditorDialog(string? filename, bool showWarning = false, int? lineNumber = null)
+    {
+        using FormEditor formEditor = new(this, filename, showWarning, lineNumber: lineNumber);
+        return formEditor.ShowDialog() != DialogResult.Cancel;
+    }
+
+    /// <summary>
+    /// Remove working directory from filename and convert to POSIX path.
+    /// This is to prevent filenames that are too long while there is room left when the workingdir was not in the path.
+    /// </summary>
+    private string NormalizeFileName(string fileName)
+    {
+        fileName = fileName.ToPosixPath();
+        return string.IsNullOrEmpty(Module.WorkingDir) ? fileName : fileName.Replace(Module.WorkingDir.ToPosixPath(), string.Empty);
     }
 
     public bool StartSettingsDialog(IGitPlugin gitPlugin)
@@ -1629,106 +1854,166 @@ public sealed class GitUICommands : IGitUICommands
 
     public bool StartSettingsDialog(Type pageType)
         => StartSettingsDialog(owner: null, new SettingsPageReferenceByType(pageType));
-    public bool StartSparseWorkingCopyDialog(IWin32Window? owner)
+
+    /// <returns>false on error.</returns>
+    private bool RunFileHistoryCommand(IReadOnlyList<string> args, bool showBlame)
     {
-        bool Action()
+        // Use the capitalization of the filename as passed because filenames in Git may differ from Windows file system.
+        string fileName = NormalizeFileName(args[2]);
+        if (string.IsNullOrWhiteSpace(fileName))
         {
-            using CommandsDialogs.FormSparseWorkingCopy form = new(this);
-            form.ShowDialog(owner);
+            return false;
+        }
+
+        GitRevision? revision = null;
+        if (args.Count > 3)
+        {
+            if (!ObjectId.TryParse(args[3], out ObjectId objectId))
+            {
+                return false;
+            }
+
+            revision = new GitRevision(objectId);
+        }
+
+        bool filterByRevision = false;
+        if (args.Count > 4)
+        {
+            if (args[4] != FilterByRevisionArg)
+            {
+                return false;
+            }
+
+            filterByRevision = true;
+        }
+
+        // Similar to StartFileHistoryDialog()
+        if (AppSettings.UseBrowseForFileHistory.Value)
+        {
+            // NOTE: fileHistoryFileName doesn't need to be quoted, as it the filter will get quoted
+            // when the filter gets set.
+            return StartBrowseDialog(owner: null, new BrowseArguments
+            {
+                RevFilter = filterByRevision ? revision?.ObjectId.ToString() : null,
+                PathFilter = fileName,
+                SelectedId = revision?.ObjectId ?? default,
+                IsFileHistoryMode = true
+            });
+        }
+
+        return DoActionOnRepo(owner: null, action: () =>
+        {
+            // NOTE: fileHistoryFileName must be quoted.
+            FormFileHistory form = new(this, fileName.QuoteNE(), revision, filterByRevision, showBlame);
+            ShowModelessWindow(form, owner: null);
             return true;
-        }
-
-        return DoActionOnRepo(owner, Action, changesRepo: false);
+        }, changesRepo: false);
     }
 
-    public bool StartSquashCommitDialog(IWin32Window? owner, GitRevision revision)
+    private bool RunCloneCommand(IReadOnlyList<string> args)
+        => StartCloneDialog(null, args.Count > 2 ? args[2] : null);
+
+    private bool RunInitCommand(IReadOnlyList<string> args)
+        => StartInitializeDialog(null, args.Count > 2 ? args[2] : null);
+
+    /// <returns>false on error.</returns>
+    private bool RunBlameCommand(IReadOnlyList<string> args)
     {
-        bool Action()
+        string blameFileName = NormalizeFileName(args[2]);
+
+        int? initialLine = null;
+        if (args.Count > 3)
         {
-            using CommandsDialogs.FormCommit form = new(this, CommandsDialogs.CommitKind.Squash, revision);
-            form.ShowDialog(owner);
+            if (int.TryParse(args[3], out int temp))
+            {
+                initialLine = temp;
+            }
+        }
+
+        return DoActionOnRepo(owner: null, action: () =>
+        {
+            using CommandsDialogs.FormBlame frm = new(this, blameFileName, null, initialLine);
+            frm.ShowDialog(null);
             return true;
-        }
-
-        return DoActionOnRepo(owner, Action);
+        }, changesRepo: false);
     }
 
-    public bool StartStashDialog(IWin32Window? owner = null, bool manageStashes = true, string? initialStash = null)
+    private bool RunMergeToolOrConflictCommand(IReadOnlyDictionary<string, string?> arguments)
     {
-        bool Action()
+        if (!arguments.ContainsKey("quiet") || Module.InTheMiddleOfConflictedMerge())
         {
-            using FormStash form = new(this, initialStash) { ManageStashes = manageStashes };
-            form.ShowDialog(owner);
-            return true;
+            return StartResolveConflictsDialog();
         }
 
-        return DoActionOnRepo(owner, Action, changesRepo: false);
+        return true;
     }
 
-    public bool StartSubmodulesDialog(IWin32Window? owner)
+    private static IReadOnlyDictionary<string, string?> InitializeArguments(IReadOnlyList<string> args)
     {
-        bool Action()
+        Dictionary<string, string?> arguments = [];
+        for (int i = 2; i < args.Count; i++)
         {
-            using FormSubmodules form = new(this);
-            form.ShowDialog(owner);
-            return true;
+            if (args[i].StartsWith("--") && i + 1 < args.Count && !args[i + 1].StartsWith("--"))
+            {
+                arguments.Add(args[i].TrimStart('-'), args[++i]);
+            }
+            else if (args[i].StartsWith("--"))
+            {
+                arguments.Add(args[i].TrimStart('-'), null);
+            }
         }
 
-        return DoActionOnRepo(owner, Action);
+        return arguments;
     }
 
-    public bool StartSyncSubmodulesDialog(IWin32Window? owner)
+    private IEnumerable<string> FindFileMatches(string name)
     {
-        bool Action()
+        IReadOnlyList<string> candidates = Module.GetFullTree("HEAD");
+
+        Func<string?, bool> predicate = _findFilePredicateProvider.Get(name, Module.WorkingDir);
+
+        return candidates.Where(predicate);
+    }
+
+    private bool Commit(IReadOnlyDictionary<string, string?> arguments)
+    {
+        arguments.TryGetValue("message", out string? overridingMessage);
+        return StartCommitDialog(null, overridingMessage, arguments.ContainsKey("quiet"));
+    }
+
+    private bool Push(IReadOnlyDictionary<string, string?> arguments)
+        => StartPushDialog(null, arguments.ContainsKey("quiet"));
+
+    private bool Pull(IReadOnlyDictionary<string, string?> arguments)
+    {
+        UpdateSettingsBasedOnArguments(arguments);
+        arguments.TryGetValue("remotebranch", out string? remoteBranch);
+        return arguments.ContainsKey("quiet")
+            ? StartPullDialogAndPullImmediately(remoteBranch: remoteBranch)
+            : StartPullDialog(remoteBranch: remoteBranch);
+    }
+
+    private static void UpdateSettingsBasedOnArguments(IReadOnlyDictionary<string, string?> arguments)
+    {
+        if (arguments.ContainsKey("merge"))
         {
-            return FormProcess.ShowDialog(owner, this, arguments: Commands.SubmoduleSync(""), Module.WorkingDir, input: null, useDialogSettings: true);
+            AppSettings.DefaultPullAction = GitPullAction.Merge;
         }
 
-        return DoActionOnRepo(owner, Action);
-    }
-
-    public bool StartTheContinueRebaseDialog(IWin32Window? owner)
-    {
-        return StartRebaseDialog(
-            owner,
-            from: string.Empty,
-            to: null,
-            onto: null,
-            interactive: false,
-            startRebaseImmediately: false);
-    }
-
-    public bool StartUpdateSubmoduleDialog(IWin32Window? owner, string submoduleLocalPath, string submoduleParentPath)
-    {
-        bool Action()
+        if (arguments.ContainsKey("rebase"))
         {
-            // Execute the submodule update command from the submodule's parent directory
-            return FormProcess.ShowDialog(owner, this, arguments: Commands.SubmoduleUpdate(submoduleLocalPath), submoduleParentPath, null, true);
+            AppSettings.DefaultPullAction = GitPullAction.Rebase;
         }
 
-        return DoActionOnRepo(owner, Action, postEvent: PostUpdateSubmodules);
-    }
-
-    public bool StartUpdateSubmodulesDialog(IWin32Window? owner, string submoduleLocalPath = "")
-    {
-        bool Action()
+        if (arguments.ContainsKey("fetch"))
         {
-            return FormProcess.ShowDialog(owner, this, arguments: Commands.SubmoduleUpdate(submoduleLocalPath), Module.WorkingDir, input: null, useDialogSettings: true);
+            AppSettings.DefaultPullAction = GitPullAction.Fetch;
         }
 
-        return DoActionOnRepo(owner, Action, postEvent: PostUpdateSubmodules);
-    }
-
-    public bool StartVerifyDatabaseDialog(IWin32Window? owner = null)
-    {
-        bool Action()
+        if (arguments.ContainsKey("autostash"))
         {
-            using FormVerify form = new(this);
-            form.ShowDialog(owner);
-            return true;
+            AppSettings.AutoStash = true;
         }
-
-        return DoActionOnRepo(owner, Action);
     }
 
     public bool StartViewPatchDialog(IWin32Window? owner, string? patchFile = null)
@@ -1753,117 +2038,100 @@ public sealed class GitUICommands : IGitUICommands
         return StartViewPatchDialog(null, patchFile);
     }
 
-    public void UpdateSubmodules(IWin32Window? owner)
+    public void RaisePostBrowseInitialize(IWin32Window? owner) => InvokeEvent(owner, PostBrowseInitialize);
+    public void RaisePostRegisterPlugin(IWin32Window? owner) => InvokeEvent(owner, PostRegisterPlugin);
+
+    public IGitRemoteCommand CreateRemoteCommand()
     {
-        if (!Module.HasSubmodules())
-        {
-            return;
-        }
-
-        bool updateSubmodules = AppSettings.UpdateSubmodulesOnCheckout ?? (AppSettings.DontConfirmUpdateSubmodulesOnCheckout ?? MessageBoxes.ConfirmUpdateSubmodules(owner));
-
-        if (updateSubmodules)
-        {
-            StartUpdateSubmodulesDialog(owner);
-        }
+        return new GitRemoteCommand(this);
     }
 
-    public bool WorktreeCreate(IWin32Window? owner, string mainWorktreePath)
+    /// <summary>
+    ///  Creates a new instance of <see cref="IGitUICommands"/> for a git repository specified by <paramref name="module"/>.
+    /// </summary>
+    /// <param name="module">The git repository.</param>
+    /// <returns>A new instance of <see cref="IGitUICommands"/>.</returns>
+    public IGitUICommands WithGitModule(IGitModule module) => new GitUICommands(_serviceProvider, module);
+
+    /// <summary>
+    ///  Creates a new instance of <see cref="IGitUICommands"/> for a git repository specified by <paramref name="workingDirectory"/>.
+    /// </summary>
+    /// <param name="workingDirectory">The git repository working directory.</param>
+    /// <returns>A new instance of <see cref="IGitUICommands"/>.</returns>
+    public IGitUICommands WithWorkingDirectory(string? workingDirectory)
+        => new GitUICommands(_serviceProvider, new GitModule(this.GetRequiredService<IGitExecutorProvider>(), workingDirectory));
+
+    #region Nested class: GitRemoteCommand
+
+    private sealed class GitRemoteCommand : IGitRemoteCommand
     {
-        return DoActionOnRepo(owner, action: () =>
+        public object? OwnerForm { get; set; }
+        public string? Remote { get; set; }
+        public string? Title { get; set; }
+        public string? CommandText { get; set; }
+        public bool ErrorOccurred { get; private set; }
+        public string? CommandOutput { get; private set; }
+
+        private readonly IGitUICommands _commands;
+
+        public event EventHandler<GitRemoteCommandCompletedEventArgs>? Completed;
+
+        internal GitRemoteCommand(IGitUICommands commands)
         {
-            using FormCreateWorktree form = new(this, mainWorktreePath);
-            if (form.ShowDialog(owner) != DialogResult.OK)
+            _commands = commands;
+        }
+
+        public void Execute()
+        {
+            if (CommandText is null)
             {
-                return false;
+                throw new InvalidOperationException("CommandText is required");
             }
 
-            // Offer to switch to the freshly created worktree, mirroring the clone flow.
-            WorktreeSwitch(owner, form.WorktreeDirectory);
-
-            return true;
-        });
-    }
-
-    public bool WorktreeDelete(IWin32Window? owner, string worktreePath)
-    {
-        return DoActionOnRepo(owner, action: () =>
-        {
-            TaskDialogButton result = TaskDialog.ShowDialog(owner!, new TaskDialogPage
+            using FormRemoteProcess form = new(_commands, CommandText);
+            if (Title is not null)
             {
-                Text = string.Format(TranslatedStrings.DeleteWorktreeConfirmation, worktreePath),
-                Caption = TranslatedStrings.DeleteWorktreeCaption,
-                Heading = TranslatedStrings.CannotBeUndone,
-                Buttons = { TaskDialogButton.Yes, TaskDialogButton.No },
-                Icon = TaskDialogIcon.Warning,
-                SizeToContent = true,
-            });
-
-            if (result != TaskDialogButton.Yes)
-            {
-                return false;
+                form.Text = Title;
             }
 
-            if (!worktreePath.TryDeleteDirectory(out string? errorMessage))
+            if (Remote is not null)
             {
-                TaskDialog.ShowDialog(owner!, new TaskDialogPage
-                {
-                    Text = $"{string.Format(TranslatedStrings.DeleteWorktreeFailed, worktreePath)}\n{errorMessage}",
-                    Caption = TranslatedStrings.Error,
-                    Icon = TaskDialogIcon.Error,
-                    SizeToContent = true,
-                });
-
-                return false;
+                form.Remote = Remote;
             }
 
-            StartCommandLineProcessDialog(owner, command: null, "worktree prune");
-            return true;
-        });
-    }
+            form.HandleOnExitCallback = HandleOnExit;
+            form.ShowDialog(OwnerForm as IWin32Window);
 
-    public bool WorktreeSwitch(IWin32Window? owner, string worktreePath)
-    {
-        if (!MessageBoxes.ConfirmSuppressible(owner, string.Format(TranslatedStrings.SwitchWorktreeConfirmation, worktreePath), TranslatedStrings.SwitchWorktreeCaption, AppSettings.DontConfirmSwitchWorktree))
-        {
-            return false;
+            ErrorOccurred = form.ErrorOccurred();
+            CommandOutput = form.GetOutputString();
         }
 
-        if (!Directory.Exists(worktreePath))
+        private bool HandleOnExit(ref bool isError, FormProcess form)
         {
-            return false;
+            CommandOutput = form.GetOutputString();
+            GitRemoteCommandCompletedEventArgs e = new(this, isError, false);
+            Completed?.Invoke(form, e);
+            isError = e.IsError;
+            return e.Handled;
         }
-
-        if (FindFormBrowse(owner) is FormBrowse browse)
-        {
-            browse.SetWorkingDir(Path.GetFullPath(worktreePath));
-        }
-
-        return true;
-    }
-
-    private static FormBrowse? FindFormBrowse(IWin32Window? window)
-    {
-        if (window is FormBrowse browse)
-        {
-            return browse;
-        }
-
-        if (window is Avalonia.Controls.WindowBase avaloniaWindow)
-        {
-            while (avaloniaWindow.Owner is not null)
-            {
-                if (avaloniaWindow.Owner is FormBrowse ownerBrowse)
-                {
-                    return ownerBrowse;
-                }
-
-                avaloniaWindow = avaloniaWindow.Owner;
-            }
-        }
-
-        return null;
     }
 
     #endregion
+
+    internal TestAccessor GetTestAccessor() => new(this);
+
+    internal readonly struct TestAccessor
+    {
+        private readonly GitUICommands _commands;
+
+        internal TestAccessor(GitUICommands commands)
+        {
+            _commands = commands;
+        }
+
+        internal string NormalizeFileName(string fileName) => _commands.NormalizeFileName(fileName);
+
+        internal bool RunCommandBasedOnArgument(IReadOnlyList<string> args)
+            => _commands.RunCommandBasedOnArgument(args, InitializeArguments(args));
+    }
 }

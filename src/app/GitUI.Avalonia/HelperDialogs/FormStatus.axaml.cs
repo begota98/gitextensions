@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using GitCommands;
 using GitExtensions.Extensibility;
 using GitExtensions.Extensibility.Git;
@@ -12,8 +12,8 @@ using GitUI.UserControls;
 
 namespace GitUI.HelperDialogs;
 
-// Twin of GitUI/HelperDialogs/FormStatus.cs. Platform taskbar progress is not portable; the
-// status badge window icons are, and the console is always the plain text emulator.
+// Platform taskbar progress is not portable; status badge window icons are, and the console
+// uses the plain-text emulator.
 public partial class FormStatus : GitExtensionsDialog
 {
     private static readonly Lazy<IReadOnlyDictionary<Avalonia.Media.Imaging.Bitmap, Avalonia.Controls.WindowIcon>> _statusIcons = new(
@@ -51,6 +51,7 @@ public partial class FormStatus : GitExtensionsDialog
         ConsoleCommandRunner.ConsoleHostTerminated += (s, e) =>
         {
             // This means the control is not visible anymore, no use in keeping.
+            // Expected scenario: user hits ESC in the prompt after the git process exits
             Close();
         };
 
@@ -163,6 +164,7 @@ public partial class FormStatus : GitExtensionsDialog
         }
         catch (Exception exception)
         {
+            // Do nothing
             Trace.WriteLine(exception);
         }
 

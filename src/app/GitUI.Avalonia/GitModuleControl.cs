@@ -16,11 +16,18 @@ public class GitModuleControl : GitExtensionsControl, IGitModuleControl, IWin32W
     /// <summary>Occurs after <see cref="UICommandsSource"/> is set.</summary>
     public event EventHandler<GitUICommandsSourceEventArgs>? UICommandsSourceSet;
 
+    protected override IServiceProvider ServiceProvider => UICommands;
+
+    /// <summary>Gets the commands exposed by <see cref="UICommandsSource"/>.</summary>
+    public IGitUICommands UICommands => UICommandsSource.UICommands;
+
     /// <summary>Gets or sets the command source for this control.</summary>
     public IGitUICommandsSource UICommandsSource
     {
         get
         {
+            // Double check locking
+            // Search ancestors for an implementation of IGitUICommandsSource
             _uiCommandsSource ??= this.GetLogicalAncestors()
                 .OfType<IGitUICommandsSource>()
                 .FirstOrDefault()
@@ -41,22 +48,25 @@ public class GitModuleControl : GitExtensionsControl, IGitModuleControl, IWin32W
         }
     }
 
-    /// <summary>Gets the commands exposed by <see cref="UICommandsSource"/>.</summary>
-    public IGitUICommands UICommands => UICommandsSource.UICommands;
-
-    /// <summary>Gets the commands only if their source has already been set.</summary>
+    /// <summary>
+    /// Gets the UI commands, if they've initialised.
+    /// </summary>
+    /// <remarks>
+    /// <para>This method will not attempt to initialise the commands if they have not
+    /// yet been initialised.</para>
+    /// <para>By contrast, the <see cref="UICommands"/> property attempts to initialise
+    /// the value if not previously initialised.</para>
+    /// </remarks>
     internal bool TryGetUICommandsDirect([NotNullWhen(returnValue: true)] out IGitUICommands? commands)
     {
         commands = _uiCommandsSource?.UICommands;
         return commands is not null;
     }
 
-    /// <summary>Gets the current Git module.</summary>
-    public IGitModule Module => UICommands.Module;
-
     nint IWin32Window.Handle => TopLevel.GetTopLevel(this)?.TryGetPlatformHandle()?.Handle ?? 0;
 
-    protected override IServiceProvider ServiceProvider => UICommands;
+    /// <summary>Gets the current Git module.</summary>
+    public IGitModule Module => UICommands.Module;
 
     protected override bool ExecuteCommand(int command)
     {

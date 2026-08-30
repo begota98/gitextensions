@@ -21,6 +21,7 @@ namespace GitExtensionsTests;
 [TestFixture]
 public sealed class DiffPatchDialogTests
 {
+    private StubFolderPicker _folderPicker = null!;
     private StubMessageBoxHost _messageBoxes = null!;
 
     [SetUp]
@@ -28,7 +29,9 @@ public sealed class DiffPatchDialogTests
     {
         AvaloniaSynchronizationContext.InstallIfNeeded();
         ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
+        _folderPicker = new StubFolderPicker();
         _messageBoxes = new StubMessageBoxHost();
+        WinFormsShims.ShimHost.FolderPicker = _folderPicker;
         WinFormsShims.ShimHost.MessageBoxHost = _messageBoxes;
     }
 
@@ -69,6 +72,190 @@ public sealed class DiffPatchDialogTests
     }
 
     [AvaloniaTest]
+    public void Diff_and_patch_views_should_preserve_source_and_runtime_dimensions_at_96_dpi()
+    {
+        FormDiff diff = new();
+        FormCompareToBranch compareToBranch = new();
+        FormFormatPatch formatPatch = new();
+
+        diff.Width.Should().Be(1042);
+        diff.Height.Should().Be(685);
+        diff.FindControl<Button>("btnSwap")!.Width.Should().Be(22);
+        diff.FindControl<Button>("btnAnotherFirstBranch")!.Height.Should().Be(22);
+
+        compareToBranch.Width.Should().Be(434);
+        // Runtime AutoSize resolves the Designer's 110-pixel client minimum to 106 pixels.
+        compareToBranch.Height.Should().Be(106);
+        // The Designer's 60x23 minimum grows through WinForms AutoSize to 66x25 with the runtime font.
+        compareToBranch.FindControl<Button>("btnCompare")!.Width.Should().Be(66);
+        compareToBranch.FindControl<Button>("btnCompare")!.Height.Should().Be(25);
+        compareToBranch.FindControl<Button>("btnCompare")!.Padding.Left.Should().Be(0);
+
+        // The original FormFormatPatch Designer is authored at 120 DPI, so WinForms AutoScale resolves integer 96-DPI dimensions.
+        formatPatch.Width.Should().Be(824);
+        formatPatch.Height.Should().Be(532);
+        formatPatch.MinWidth.Should().Be(446);
+        formatPatch.MinHeight.Should().Be(316);
+        formatPatch.FindControl<Grid>("tableLayoutPanelForm")!.Margin.Left.Should().Be(0);
+        formatPatch.FindControl<Grid>("tableLayoutPanelForm")!.RowSpacing.Should().Be(0);
+        formatPatch.FindControl<Grid>("tableLayoutPanelSaveTo")!.Margin.Left.Should().Be(3);
+        formatPatch.FindControl<Grid>("tableLayoutPanelSaveTo")!.ColumnSpacing.Should().Be(0);
+        formatPatch.FindControl<Label>("lblPatches")!.Padding.Top.Should().Be(5);
+        formatPatch.FindControl<TextBox>("OutputPath")!.Height.Should().Be(23);
+        formatPatch.FindControl<Button>("Browse")!.Width.Should().Be(64);
+        formatPatch.FindControl<Button>("Browse")!.Height.Should().Be(25);
+        formatPatch.FindControl<Button>("FormatPatch")!.Width.Should().Be(140);
+        formatPatch.FindControl<Button>("FormatPatch")!.Height.Should().Be(25);
+        formatPatch.FindControl<Label>("CurrentBranch")!.Margin.Left.Should().Be(3);
+    }
+
+    [AvaloniaTest]
+    public void Compare_to_branch_should_preserve_the_original_runtime_auto_layout()
+    {
+        FormCompareToBranch form = new();
+        form.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            GitUI.UserControls.BranchSelector branchSelector = form.FindControl<GitUI.UserControls.BranchSelector>("branchSelector")!;
+            Button compare = form.FindControl<Button>("btnCompare")!;
+
+            branchSelector.Bounds.X.Should().Be(8);
+            branchSelector.Bounds.Y.Should().Be(8);
+            branchSelector.Bounds.Width.Should().Be(322);
+            branchSelector.Bounds.Height.Should().Be(58);
+            compare.Bounds.X.Should().Be(352);
+            compare.Bounds.Y.Should().Be(78);
+            compare.Bounds.Width.Should().Be(66);
+            compare.Bounds.Height.Should().Be(25);
+            branchSelector.TabIndex.Should().Be(0);
+            compare.TabIndex.Should().Be(1);
+            branchSelector.FindControl<Label>("label1")!.Bounds.X.Should().Be(12);
+            branchSelector.FindControl<Label>("label1")!.Bounds.Width.Should().Be(78);
+            branchSelector.FindControl<RadioButton>("LocalBranch")!.TabIndex.Should().Be(0);
+            branchSelector.FindControl<RadioButton>("Remotebranch")!.TabIndex.Should().Be(0);
+            branchSelector.FindControl<ComboBox>("Branches")!.Padding.Left.Should().Be(0);
+            branchSelector.FindControl<ComboBox>("Branches")!.TabIndex.Should().Be(1);
+            branchSelector.FindControl<TextBlock>("lbChanges")!.Bounds.Y.Should().Be(35);
+            branchSelector.FindControl<TextBlock>("lbChanges")!.TabIndex.Should().Be(30);
+        }
+        finally
+        {
+            form.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    public void Diff_should_preserve_the_original_runtime_auto_layout()
+    {
+        FormDiff form = new();
+        form.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            Grid settings = form.FindControl<Grid>("settingsLayoutPanel")!;
+            GroupBox firstGroup = form.FindControl<GroupBox>("firstCommitGroup")!;
+            StackPanel firstPanel = form.FindControl<StackPanel>("firstCommitPanel")!;
+            Button swap = form.FindControl<Button>("btnSwap")!;
+            StackPanel options = form.FindControl<StackPanel>("diffOptionsPanel")!;
+            Grid split = form.FindControl<Grid>("splitContainer1")!;
+            FileStatusList files = form.FindControl<FileStatusList>("DiffFiles")!;
+
+            settings.Bounds.X.Should().Be(3, "the settings panel keeps the original left margin");
+            settings.Bounds.Y.Should().Be(3, "the settings panel keeps the original top margin");
+            settings.Bounds.Height.Should().Be(106);
+            firstGroup.Bounds.Height.Should().Be(50);
+            form.FindControl<Label>("lblFirstCommit")!.Bounds.Should().Be(new Avalonia.Rect(3, 6, 200, 15));
+            form.FindControl<Label>("lblSecondCommit")!.Bounds.Should().Be(new Avalonia.Rect(3, 6, 200, 15));
+            form.FindControl<Label>("lblFirstCommit")!.TabIndex.Should().Be(14);
+            form.FindControl<Label>("lblSecondCommit")!.TabIndex.Should().Be(1);
+            firstPanel.Bounds.X.Should().Be(3, "the first commit panel keeps the original group-box inset");
+            firstPanel.Bounds.Width.Should().Be(491);
+            swap.Bounds.Y.Should().Be(21);
+            options.Bounds.X.Should().Be(3, "the options panel keeps the original left margin");
+            options.Bounds.Y.Should().Be(53);
+            options.Bounds.Width.Should().Be(412);
+            options.Bounds.Height.Should().Be(25);
+            split.Bounds.X.Should().Be(3, "the split panel keeps the original left margin");
+            split.Bounds.Y.Should().Be(115);
+            split.Bounds.Height.Should().Be(602);
+            split.Margin.Top.Should().Be(3, "the split panel records the original table-layout margin");
+            files.Bounds.Width.Should().Be(345);
+            files.Bounds.Height.Should().Be(602);
+            files.TabIndex.Should().Be(0);
+            form.FindControl<Button>("btnAnotherFirstBranch")!.TabIndex.Should().Be(7);
+            form.FindControl<Button>("btnAnotherFirstCommit")!.TabIndex.Should().Be(10);
+            form.FindControl<Button>("btnAnotherSecondBranch")!.TabIndex.Should().Be(16);
+            form.FindControl<Button>("btnAnotherSecondCommit")!.TabIndex.Should().Be(17);
+            swap.TabIndex.Should().Be(6);
+            form.FindControl<CheckBox>("ckCompareToMergeBase")!.TabIndex.Should().Be(9);
+            form.FindControl<Button>("btnCompareDirectoriesWithDiffTool")!.TabIndex.Should().Be(10);
+        }
+        finally
+        {
+            form.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    public void Format_patch_should_preserve_the_original_runtime_table_layout()
+    {
+        FormFormatPatch form = new();
+        form.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            Grid root = form.FindControl<Grid>("tableLayoutPanelForm")!;
+            Grid saveTo = form.FindControl<Grid>("tableLayoutPanelSaveTo")!;
+            Label patches = form.FindControl<Label>("lblPatches")!;
+            TextBox output = form.FindControl<TextBox>("OutputPath")!;
+            Button browse = form.FindControl<Button>("Browse")!;
+            RevisionGridControl revisions = form.FindControl<RevisionGridControl>("RevisionGrid")!;
+            StackPanel branch = form.FindControl<StackPanel>("flowLayoutPanelBranch")!;
+            Button create = form.FindControl<Button>("FormatPatch")!;
+
+            root.Bounds.Should().Be(new Avalonia.Rect(0, 0, 824, 532));
+            saveTo.Bounds.Should().Be(new Avalonia.Rect(3, 3, 818, 28));
+            patches.Bounds.Should().Be(new Avalonia.Rect(3, 0, 40, 20));
+            output.Bounds.Should().Be(new Avalonia.Rect(49, 3, 696, 23));
+            browse.Bounds.Should().Be(new Avalonia.Rect(751, 3, 64, 25));
+            revisions.Bounds.Should().Be(new Avalonia.Rect(3, 37, 818, 456));
+            branch.Bounds.Should().Be(new Avalonia.Rect(3, 499, 672, 30));
+            create.Bounds.Should().Be(new Avalonia.Rect(681, 504, 140, 25));
+            Label selectedBranch = form.FindControl<Label>("SelectedBranch")!;
+            Label currentBranch = form.FindControl<Label>("CurrentBranch")!;
+            selectedBranch.Bounds.X.Should().Be(3);
+            selectedBranch.Bounds.Y.Should().Be(0);
+            selectedBranch.Bounds.Height.Should().Be(15);
+            currentBranch.Bounds.X.Should().BeGreaterThan(selectedBranch.Bounds.Right);
+            currentBranch.Bounds.Y.Should().Be(0);
+            currentBranch.Bounds.Height.Should().Be(15);
+            output.TabIndex.Should().Be(1);
+            browse.TabIndex.Should().Be(2);
+            revisions.TabIndex.Should().Be(1);
+            branch.TabIndex.Should().Be(2);
+            selectedBranch.TabIndex.Should().Be(0);
+            currentBranch.TabIndex.Should().Be(1);
+            create.TabIndex.Should().Be(3);
+        }
+        finally
+        {
+            form.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    public void Diff_designer_instance_should_ignore_runtime_only_merge_base_changes()
+    {
+        FormDiff form = new();
+        FormDiff.TestAccessor accessor = form.GetTestAccessor();
+
+        Action toggle = () => accessor.CompareToMergeBase.IsChecked = true;
+
+        toggle.Should().NotThrow();
+    }
+
+    [AvaloniaTest]
     public void Compare_to_branch_should_accept_the_selected_branch()
     {
         (IGitUICommands commands, _) = CreateCommands();
@@ -80,6 +267,43 @@ public sealed class DiffPatchDialogTests
 
         form.BranchName.Should().Be("feature/parity");
         form.DialogResult.Should().Be(WinFormsShims.DialogResult.OK);
+    }
+
+    [AvaloniaTest]
+    public void Compare_to_branch_should_reject_an_empty_selection()
+    {
+        (IGitUICommands commands, _) = CreateCommands();
+        FormCompareToBranch form = new(commands, ObjectId.Parse("2222222222222222222222222222222222222222"));
+        FormCompareToBranch.TestAccessor accessor = form.GetTestAccessor();
+        accessor.BranchSelector.GetTestAccessor().Branches.Text = "   ";
+
+        accessor.Compare.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+        form.BranchName.Should().BeNull();
+        form.DialogResult.Should().Be(WinFormsShims.DialogResult.None);
+    }
+
+    [AvaloniaTest]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Compare_to_branch_should_count_against_the_requested_commit(bool useCurrentCheckout)
+    {
+        ObjectId selectedCommit = ObjectId.Parse("2222222222222222222222222222222222222222");
+        ObjectId currentCheckout = ObjectId.Parse("3333333333333333333333333333333333333333");
+        ObjectId expectedCommit = useCurrentCheckout ? currentCheckout : selectedCommit;
+        IGitRef remoteBranch = Substitute.For<IGitRef>();
+        remoteBranch.Name.Returns("origin/main");
+        (IGitUICommands commands, IGitModule module) = CreateCommands();
+        module.GetRefs(RefsFilter.Remotes).Returns([remoteBranch]);
+        module.GetCurrentCheckout().Returns(currentCheckout);
+        module.GetCommitCountString(expectedCommit, "origin/main").Returns("1 ahead, 2 behind");
+        FormCompareToBranch form = new(commands, useCurrentCheckout ? default : selectedCommit);
+        FormCompareToBranch.TestAccessor accessor = form.GetTestAccessor();
+
+        accessor.BranchSelector.GetTestAccessor().Branches.SelectedItem = "origin/main";
+        await WaitUntilAsync(() => accessor.BranchSelector.GetTestAccessor().Changes.Text == "1 ahead, 2 behind");
+
+        module.Received(1).GetCommitCountString(expectedCommit, "origin/main");
     }
 
     [AvaloniaTest]
@@ -95,8 +319,154 @@ public sealed class DiffPatchDialogTests
         FormDiff.TestAccessor accessor = form.GetTestAccessor();
 
         accessor.CompareToMergeBase.IsEnabled.Should().BeTrue();
-        accessor.CompareToMergeBase.Content.Should().Be($"Compare to merge &base ({parent.ToShortString()})");
+        accessor.CompareToMergeBase.Content.Should().Be($"Compare to merge _base ({parent.ToShortString()})");
+        Avalonia.Controls.ToolTip.GetTip(form.FindControl<Button>("btnAnotherFirstBranch")!).Should().Be("Select another branch");
+        Avalonia.Controls.ToolTip.GetTip(form.FindControl<Button>("btnAnotherSecondBranch")!).Should().Be("Select another branch");
+        Avalonia.Controls.ToolTip.GetTip(form.FindControl<Button>("btnAnotherFirstCommit")!).Should().Be("Select another commit");
+        Avalonia.Controls.ToolTip.GetTip(form.FindControl<Button>("btnAnotherSecondCommit")!).Should().Be("Select another commit");
         Avalonia.Controls.ToolTip.GetTip(accessor.Swap).Should().Be("Swap BASE and Compare commits");
+    }
+
+    [AvaloniaTest]
+    public void Diff_should_disable_merge_base_when_the_revisions_are_identical()
+    {
+        ObjectId head = ObjectId.Parse("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        (IGitUICommands commands, IGitModule module) = CreateCommands();
+        module.GetCurrentCheckout().Returns(head);
+
+        FormDiff form = new(commands, head, head, "HEAD", "HEAD");
+        FormDiff.TestAccessor accessor = form.GetTestAccessor();
+
+        accessor.CompareToMergeBase.IsEnabled.Should().BeFalse();
+        module.DidNotReceiveWithAnyArgs().GetMergeBase(default, default);
+    }
+
+    [AvaloniaTest]
+    public void Diff_should_use_the_merge_base_for_directory_diff_when_selected()
+    {
+        ObjectId first = ObjectId.Parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        ObjectId second = ObjectId.Parse("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        ObjectId mergeBase = ObjectId.Parse("cccccccccccccccccccccccccccccccccccccccc");
+        (IGitUICommands commands, IGitModule module) = CreateCommands();
+        module.GetCurrentCheckout().Returns(second);
+        module.GetMergeBase(first, second).Returns(mergeBase);
+        FormDiff form = new(commands, first, second, "main~1", "main");
+        FormDiff.TestAccessor accessor = form.GetTestAccessor();
+
+        accessor.CompareToMergeBase.IsChecked = true;
+        accessor.CompareDirectories.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+        module.Received(1).OpenWithDifftoolDirDiff(mergeBase.ToString(), second.ToString(), customTool: null);
+    }
+
+    [AvaloniaTest]
+    public void Diff_should_disable_directory_diff_from_the_worktree()
+    {
+        ObjectId head = ObjectId.Parse("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        (IGitUICommands commands, IGitModule module) = CreateCommands();
+        module.GetCurrentCheckout().Returns(head);
+        FormDiff form = new(commands, ObjectId.WorkTreeId, head, "Working directory", "HEAD");
+        FormDiff.TestAccessor accessor = form.GetTestAccessor();
+
+        Invoke(form, "PopulateDiffFiles");
+
+        accessor.CompareDirectories.IsEnabled.Should().BeFalse();
+    }
+
+    [AvaloniaTest]
+    public void Diff_should_swap_the_original_revision_order_and_directory_diff_arguments()
+    {
+        ObjectId parent = ObjectId.Parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        ObjectId head = ObjectId.Parse("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        (IGitUICommands commands, IGitModule module) = CreateCommands();
+        module.GetCurrentCheckout().Returns(head);
+        module.GetMergeBase(parent, head).Returns(parent);
+        FormDiff form = new(commands, parent, head, "HEAD~1", "HEAD");
+        FormDiff.TestAccessor accessor = form.GetTestAccessor();
+
+        accessor.Swap.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        accessor.CompareDirectories.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+        accessor.FirstCommit.Content.Should().Be("HEAD");
+        accessor.SecondCommit.Content.Should().Be("HEAD~1");
+        module.Received(1).OpenWithDifftoolDirDiff(head.ToString(), parent.ToString(), customTool: null);
+    }
+
+    [AvaloniaTest]
+    public async Task Diff_should_cancel_an_obsolete_file_population_when_restarted()
+    {
+        ObjectId parent = ObjectId.Parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        ObjectId head = ObjectId.Parse("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        (IGitUICommands commands, IGitModule module) = CreateCommands();
+        module.GetCurrentCheckout().Returns(head);
+        module.GetMergeBase(parent, head).Returns(parent);
+        CancellationToken firstToken = default;
+        ManualResetEventSlim firstCallStarted = new();
+        int callCount = 0;
+        module.GetDiffFilesWithSubmodulesStatus(
+                Arg.Any<ObjectId>(),
+                Arg.Any<ObjectId>(),
+                Arg.Any<ObjectId>(),
+                Arg.Any<bool>(),
+                Arg.Any<UntrackedFilesMode>(),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                CancellationToken token = callInfo.ArgAt<CancellationToken>(5);
+                if (Interlocked.Increment(ref callCount) == 1)
+                {
+                    firstToken = token;
+                    firstCallStarted.Set();
+                    token.WaitHandle.WaitOne(TimeSpan.FromSeconds(5));
+                    token.ThrowIfCancellationRequested();
+                }
+
+                return [];
+            });
+        FormDiff form = new(commands, parent, head, "HEAD~1", "HEAD");
+
+        Invoke(form, "PopulateDiffFiles");
+        await WaitUntilAsync(() => firstCallStarted.IsSet);
+        Invoke(form, "PopulateDiffFiles");
+        await WaitUntilAsync(() => firstToken.IsCancellationRequested && Volatile.Read(ref callCount) >= 2);
+
+        firstToken.IsCancellationRequested.Should().BeTrue();
+        form.Close();
+    }
+
+    [AvaloniaTest]
+    public async Task Diff_should_cancel_file_population_when_closed()
+    {
+        ObjectId parent = ObjectId.Parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        ObjectId head = ObjectId.Parse("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        (IGitUICommands commands, IGitModule module) = CreateCommands();
+        module.GetCurrentCheckout().Returns(head);
+        module.GetMergeBase(parent, head).Returns(parent);
+        CancellationToken populationToken = default;
+        ManualResetEventSlim callStarted = new();
+        module.GetDiffFilesWithSubmodulesStatus(
+                Arg.Any<ObjectId>(),
+                Arg.Any<ObjectId>(),
+                Arg.Any<ObjectId>(),
+                Arg.Any<bool>(),
+                Arg.Any<UntrackedFilesMode>(),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                populationToken = callInfo.ArgAt<CancellationToken>(5);
+                callStarted.Set();
+                populationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(5));
+                populationToken.ThrowIfCancellationRequested();
+                return [];
+            });
+        FormDiff form = new(commands, parent, head, "HEAD~1", "HEAD");
+        form.Show();
+
+        await WaitUntilAsync(() => callStarted.IsSet);
+        form.Close();
+        await WaitUntilAsync(() => populationToken.IsCancellationRequested);
+
+        populationToken.IsCancellationRequested.Should().BeTrue();
     }
 
     [AvaloniaTest]
@@ -118,6 +488,10 @@ public sealed class DiffPatchDialogTests
 
         module.Received(1).FormatPatch(parent.ToString(), head.ToString(), outputPath);
         _messageBoxes.Messages.Should().ContainSingle().Which.Should().Be("0001-parity.patch");
+        _messageBoxes.Requests.Should().ContainSingle().Which.Should().Match<MessageRequest>(
+            request => ReferenceEquals(request.Owner, form)
+                       && request.Caption == "Patch result"
+                       && request.Icon == WinFormsShims.MessageBoxIcon.Information);
     }
 
     [AvaloniaTest]
@@ -130,6 +504,138 @@ public sealed class DiffPatchDialogTests
 
         module.DidNotReceiveWithAnyArgs().FormatPatch(default!, default!, default!);
         _messageBoxes.Messages.Should().ContainSingle().Which.Should().Be("You need to enter an output path.");
+        _messageBoxes.Requests.Should().ContainSingle().Which.Caption.Should().Be("Error");
+    }
+
+    [AvaloniaTest]
+    public void Format_patch_should_use_the_selected_folder_and_preserve_a_cancelled_selection()
+    {
+        (IGitUICommands commands, _) = CreateCommands();
+        FormFormatPatch form = new(commands);
+        FormFormatPatch.TestAccessor accessor = form.GetTestAccessor();
+        accessor.OutputPath.Text = "existing";
+
+        _folderPicker.Result = null;
+        accessor.Browse.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        accessor.OutputPath.Text.Should().Be("existing");
+
+        _folderPicker.Result = Path.GetTempPath();
+        accessor.Browse.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        accessor.OutputPath.Text.Should().Be(Path.GetTempPath());
+        _folderPicker.Owners.Should().OnlyContain(owner => ReferenceEquals(owner, form));
+    }
+
+    [AvaloniaTest]
+    public void Format_patch_should_reject_an_empty_revision_selection()
+    {
+        (IGitUICommands commands, IGitModule module) = CreateCommands();
+        FormFormatPatch form = new(commands);
+        form.GetTestAccessor().OutputPath.Text = Path.GetTempPath();
+
+        Invoke(form, "FormatPatch_Click", form, EventArgs.Empty);
+
+        module.DidNotReceiveWithAnyArgs().FormatPatch(default!, default!, default!);
+        _messageBoxes.Messages.Should().ContainSingle().Which.Should().Be("You need to select at least one revision");
+        _messageBoxes.Requests.Should().ContainSingle().Which.Should().Match<MessageRequest>(
+            request => request.Caption == "Patch error" && request.Icon == WinFormsShims.MessageBoxIcon.Error);
+    }
+
+    [AvaloniaTest]
+    public void Format_patch_should_report_an_empty_git_result_without_closing()
+    {
+        ObjectId head = ObjectId.Parse("2222222222222222222222222222222222222222");
+        (IGitUICommands commands, IGitModule module) = CreateCommands();
+        string outputPath = Path.GetTempPath();
+        module.FormatPatch(string.Empty, head.ToString(), outputPath).Returns(string.Empty);
+        GitRevision revision = new(head) { ParentIds = [] };
+        FormFormatPatch form = new(commands);
+        FormFormatPatch.TestAccessor accessor = form.GetTestAccessor();
+        accessor.OutputPath.Text = outputPath;
+        accessor.RevisionGrid.GetTestAccessor().SetRevisions([revision]);
+        accessor.RevisionGrid.GetTestAccessor().Revisions.SelectedItem = revision;
+
+        Invoke(form, "FormatPatch_Click", form, EventArgs.Empty);
+
+        module.Received(1).FormatPatch(string.Empty, head.ToString(), outputPath);
+        _messageBoxes.Messages.Should().ContainSingle().Which.Should().Be("Unable to create patch file(s)");
+        _messageBoxes.Requests.Should().ContainSingle().Which.Should().Match<MessageRequest>(
+            request => request.Caption == "Patch error" && request.Icon == WinFormsShims.MessageBoxIcon.Error);
+    }
+
+    [AvaloniaTest]
+    public void Format_patch_should_preserve_the_original_two_revision_range()
+    {
+        ObjectId oldestParent = ObjectId.Parse("1111111111111111111111111111111111111111");
+        ObjectId oldest = ObjectId.Parse("2222222222222222222222222222222222222222");
+        ObjectId newestParent = ObjectId.Parse("3333333333333333333333333333333333333333");
+        ObjectId newest = ObjectId.Parse("4444444444444444444444444444444444444444");
+        (IGitUICommands commands, IGitModule module) = CreateCommands();
+        string outputPath = Path.GetTempPath();
+        module.FormatPatch(newestParent.ToString(), oldest.ToString(), outputPath).Returns("two-revision.patch");
+        GitRevision oldestRevision = new(oldest) { ParentIds = [oldestParent] };
+        GitRevision newestRevision = new(newest) { ParentIds = [newestParent] };
+        FormFormatPatch form = new(commands);
+        FormFormatPatch.TestAccessor accessor = form.GetTestAccessor();
+        accessor.OutputPath.Text = outputPath;
+        accessor.RevisionGrid.GetTestAccessor().SetRevisions([oldestRevision, newestRevision]);
+        accessor.RevisionGrid.GetTestAccessor().Revisions.SelectedItems!.Add(oldestRevision);
+        accessor.RevisionGrid.GetTestAccessor().Revisions.SelectedItems!.Add(newestRevision);
+
+        Invoke(form, "FormatPatch_Click", form, EventArgs.Empty);
+
+        module.Received(1).FormatPatch(newestParent.ToString(), oldest.ToString(), outputPath);
+        _messageBoxes.Messages.Should().ContainSingle().Which.Should().Be("two-revision.patch");
+    }
+
+    [AvaloniaTest]
+    public void Format_patch_should_create_each_selected_revision_when_more_than_two_are_selected()
+    {
+        (IGitUICommands commands, IGitModule module) = CreateCommands();
+        string outputPath = Path.GetTempPath();
+        GitRevision[] revisions =
+        [
+            CreateRevision('2', '1'),
+            CreateRevision('4', '3'),
+            CreateRevision('6', '5'),
+        ];
+        module.FormatPatch(Arg.Any<string>(), Arg.Any<string>(), outputPath, Arg.Any<int>()).Returns("patch");
+        FormFormatPatch form = new(commands);
+        FormFormatPatch.TestAccessor accessor = form.GetTestAccessor();
+        accessor.OutputPath.Text = outputPath;
+        accessor.RevisionGrid.GetTestAccessor().SetRevisions(revisions);
+        foreach (GitRevision revision in revisions)
+        {
+            accessor.RevisionGrid.GetTestAccessor().Revisions.SelectedItems!.Add(revision);
+        }
+
+        Invoke(form, "FormatPatch_Click", form, EventArgs.Empty);
+
+        module.Received(1).FormatPatch(new string('5', 40), new string('6', 40), outputPath, 1);
+        module.Received(1).FormatPatch(new string('3', 40), new string('4', 40), outputPath, 2);
+        module.Received(1).FormatPatch(new string('1', 40), new string('2', 40), outputPath, 3);
+        _messageBoxes.Messages.Should().ContainSingle().Which.Should().Be("patchpatchpatch");
+    }
+
+    private static GitRevision CreateRevision(char objectId, char parentId)
+        => new(ObjectId.Parse(new string(objectId, 40)))
+        {
+            ParentIds = [ObjectId.Parse(new string(parentId, 40))],
+        };
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        for (int retry = 0; retry < 100; retry++)
+        {
+            Dispatcher.UIThread.RunJobs();
+            if (condition())
+            {
+                return;
+            }
+
+            await Task.Delay(10);
+        }
+
+        throw new TimeoutException("The expected asynchronous dialog state was not reached.");
     }
 
     private static void Invoke(object target, string methodName, params object[] arguments)
@@ -154,6 +660,7 @@ public sealed class DiffPatchDialogTests
     private sealed class StubMessageBoxHost : WinFormsShims.IMessageBoxHost
     {
         public List<string> Messages { get; } = [];
+        public List<MessageRequest> Requests { get; } = [];
 
         public WinFormsShims.DialogResult Show(
             WinFormsShims.IWin32Window? owner,
@@ -164,7 +671,26 @@ public sealed class DiffPatchDialogTests
             WinFormsShims.MessageBoxDefaultButton defaultButton)
         {
             Messages.Add(text ?? string.Empty);
+            Requests.Add(new MessageRequest(owner, text, caption, icon));
             return WinFormsShims.DialogResult.OK;
+        }
+    }
+
+    private sealed record MessageRequest(
+        WinFormsShims.IWin32Window? Owner,
+        string? Text,
+        string? Caption,
+        WinFormsShims.MessageBoxIcon Icon);
+
+    private sealed class StubFolderPicker : WinFormsShims.IFolderPicker
+    {
+        public List<WinFormsShims.IWin32Window?> Owners { get; } = [];
+        public string? Result { get; set; }
+
+        public string? PickFolder(WinFormsShims.IWin32Window? owner, string? selectedPath)
+        {
+            Owners.Add(owner);
+            return Result;
         }
     }
 }

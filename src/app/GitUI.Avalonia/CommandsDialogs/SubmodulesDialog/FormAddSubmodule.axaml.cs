@@ -12,8 +12,7 @@ using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitUI.CommandsDialogs.SubmodulesDialog;
 
-// Twin of GitUI/CommandsDialogs/SubmodulesDialog/FormAddSubmodule.cs. Editable combo items
-// are repository path strings so Avalonia retains their display text after selection.
+// Editable combo items are repository path strings so Avalonia retains their display text.
 public sealed partial class FormAddSubmodule : GitModuleForm
 {
     private readonly TranslationString _remoteAndLocalPathRequired
@@ -104,7 +103,7 @@ public sealed partial class FormAddSubmodule : GitModuleForm
 
     private void BranchDropDown(object? sender, EventArgs e)
     {
-        Branch.ItemsSource = QueryRemoteRepoBranches(Module.GitExecutable, GetDirectoryText()).ToArray();
+        Branch.ItemsSource = LoadRemoteRepoBranches(Module.GitExecutable, GetDirectoryText()).ToArray();
     }
 
     private void DirectoryTextUpdate(object? sender, EventArgs e)
@@ -126,7 +125,7 @@ public sealed partial class FormAddSubmodule : GitModuleForm
     /// </remarks>
     /// <param name="gitExecutable">The git executable.</param>
     /// <param name="url">The repo URL; can also be a local path.</param>
-    private static IEnumerable<string> QueryRemoteRepoBranches(IExecutable gitExecutable, string url)
+    private static IEnumerable<string> LoadRemoteRepoBranches(IExecutable gitExecutable, string url)
     {
         if (string.IsNullOrWhiteSpace(url))
         {
@@ -155,6 +154,6 @@ public sealed partial class FormAddSubmodule : GitModuleForm
         public ComboBox Branch => form.Branch;
 
         public static IEnumerable<string> LoadRemoteRepoBranches(IExecutable gitExecutable, string url)
-            => QueryRemoteRepoBranches(gitExecutable, url);
+            => FormAddSubmodule.LoadRemoteRepoBranches(gitExecutable, url);
     }
 }

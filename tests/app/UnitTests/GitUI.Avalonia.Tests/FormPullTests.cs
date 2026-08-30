@@ -1,4 +1,4 @@
-using System.ComponentModel.Design;
+﻿using System.ComponentModel.Design;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
@@ -193,12 +193,58 @@ public sealed class FormPullTests
             form.FindControl<HeaderedContentControl>("GroupTagOptions").Should().NotBeNull();
             form.FindControl<RadioButton>("PullFromUrl").Should().NotBeNull();
             form.FindControl<CheckBox>("Prune").Should().NotBeNull();
-            form.CaptureRenderedFrame().Should().NotBeNull("the complete pull dialog should render headlessly");
+            Avalonia.Media.Imaging.WriteableBitmap? frame = form.CaptureRenderedFrame();
+            frame.Should().NotBeNull("the complete pull dialog should render headlessly");
+            frame!.PixelSize.Width.Should().Be(
+                674 + GitUI.Properties.Images.HelpPullFetch.PixelSize.Width - 40,
+                "the source help control grows the host by the displayed image width minus its Designer width");
+
+            Control mainPanel = form.FindControl<Control>("MainPanel")!;
+            Control mainLayout = form.FindControl<Control>("MainLayout")!;
+            Control panelRight = form.FindControl<Control>("PanelRight")!;
+            Control groupPullFrom = form.FindControl<Control>("GroupPullFrom")!;
+            Control groupBranch = form.FindControl<Control>("GroupBranch")!;
+            Control groupMergeOptions = form.FindControl<Control>("GroupMergeOptions")!;
+            Control groupTagOptions = form.FindControl<Control>("GroupTagOptions")!;
+            Control controlsPanel = form.FindControl<Control>("ControlsPanel")!;
+            CheckBox prune = form.FindControl<CheckBox>("Prune")!;
+            CheckBox pruneTags = form.FindControl<CheckBox>("PruneTags")!;
+            CheckBox autoStash = form.FindControl<CheckBox>("AutoStash")!;
+
+            mainPanel.Should().BeOfType<GitUI.Compat.WinFormsControls.Panel>();
+            mainLayout.Should().BeOfType<GitUI.Compat.WinFormsControls.TableLayoutPanel>();
+            panelRight.Should().BeOfType<GitUI.Compat.WinFormsControls.Panel>();
+            ((Decorator)mainPanel).Padding.Should().Be(new Avalonia.Thickness(9));
+            mainLayout.Margin.Should().Be(new Avalonia.Thickness(0));
+            panelRight.Margin.Should().Be(new Avalonia.Thickness(3));
+            groupPullFrom.Bounds.Height.Should().Be(92);
+            groupBranch.Bounds.Should().Be(new Avalonia.Rect(3, 101, 598, 91));
+            groupMergeOptions.Bounds.Should().Be(new Avalonia.Rect(3, 198, 598, 103));
+            groupTagOptions.Bounds.Should().Be(new Avalonia.Rect(3, 307, 598, 103));
+            prune.Bounds.Width.Should().Be(ExpectedCheckBoxWidth(prune));
+            pruneTags.Bounds.Width.Should().Be(ExpectedCheckBoxWidth(pruneTags));
+            autoStash.Bounds.Width.Should().Be(ExpectedCheckBoxWidth(autoStash));
+            if (OperatingSystem.IsWindows())
+            {
+                prune.Bounds.Width.Should().Be(149);
+                pruneTags.Bounds.Width.Should().Be(197);
+                autoStash.Bounds.Width.Should().Be(82);
+            }
+
+            controlsPanel.Bounds.Y.Should().Be(484);
+            controlsPanel.Bounds.Height.Should().Be(41);
         }
         finally
         {
             form.Close();
         }
+    }
+
+    private static double ExpectedCheckBoxWidth(CheckBox checkBox)
+    {
+        string text = checkBox.Content as string ?? string.Empty;
+        text = AvaloniaTranslationUtils.RemoveAvaloniaMnemonics(text);
+        return Math.Ceiling(WinFormsTextMeasurer.MeasureSize(checkBox, text).Width + 26);
     }
 
     [AvaloniaTest]

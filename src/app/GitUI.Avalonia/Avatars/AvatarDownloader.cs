@@ -20,6 +20,7 @@ public sealed class AvatarDownloader : IAvatarDownloader
 
     public async Task<byte[]?> DownloadImageAsync(Uri? imageUrl)
     {
+        // check network connectivity
         if (imageUrl is null)
         {
             return null;
@@ -33,8 +34,10 @@ public sealed class AvatarDownloader : IAvatarDownloader
         {
             (DateTime _, Task<byte[]?> task) = _downloads.GetOrAdd(imageUrl, _ => (DateTime.UtcNow, DownloadAsync(imageUrl)));
 
+            // If we discover a faulted task, remove it and try again
             if (task.IsFaulted || task.IsCanceled)
             {
+                // Image from cached download has been disposed (in all probability during a cache cleanup)
                 _downloads.TryRemove(imageUrl, out _);
 
                 if (++errorCount > 3)
@@ -51,7 +54,10 @@ public sealed class AvatarDownloader : IAvatarDownloader
 
     private static async Task<byte[]?> DownloadAsync(Uri imageUrl)
     {
+        // Get onto background thread
         await TaskScheduler.Default;
+
+        // Limit the number of concurrent download requests
         await _downloadSemaphore.WaitAsync();
 
         try
@@ -67,6 +73,7 @@ public sealed class AvatarDownloader : IAvatarDownloader
         }
         catch (Exception ex)
         {
+            // catch IO errors
             Trace.WriteLine(ex.Message);
         }
         finally

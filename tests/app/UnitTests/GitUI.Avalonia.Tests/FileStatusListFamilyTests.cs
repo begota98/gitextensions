@@ -1,9 +1,12 @@
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Headless.NUnit;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.Threading;
 using GitCommands;
 using GitExtensions.Extensibility.Git;
+using GitExtensions.Extensibility.Translations;
 using GitUI;
 using GitUI.CommandsDialogs;
 using GitUI.Hotkey;
@@ -163,6 +166,7 @@ public sealed class FileStatusListFamilyTests
     {
         FileStatusList control = new();
         FileStatusList.TestAccessor accessor = control.GetTestAccessor();
+        control.TranslateItems(Substitute.For<ITranslation>());
 
         accessor.Toolbar.Children.Should().NotBeEmpty();
         control.FindControl<MenuItem>("tsmiUpdateSubmodule").Should().NotBeNull();
@@ -171,6 +175,47 @@ public sealed class FileStatusListFamilyTests
         control.FindControl<MenuItem>("tsmiSaveAs").Should().NotBeNull();
         control.FindControl<MenuItem>("tsmiSkipWorktree").Should().NotBeNull();
         control.FindControl<MenuItem>("tsmiStopTracking").Should().NotBeNull();
+        ToolTip.GetTip(control.FindControl<Control>("btnSettings")!).Should().Be("Settings");
+        AssertFilterButton("btnUnequalChange", "#FFFF0000");
+        AssertFilterButton("btnOnlyB", "#FFBD7CFF");
+        AssertFilterButton("btnOnlyA", "#FFA8A800");
+        AssertFilterButton("btnSameChange", "#FF00A800");
+
+        return;
+
+        void AssertFilterButton(string name, string color)
+        {
+            ToggleButton button = control.FindControl<ToggleButton>(name)!;
+            button.Width.Should().Be(23);
+            button.Foreground.Should().BeAssignableTo<ISolidColorBrush>().Which.Color.Should().Be(Color.Parse(color));
+        }
+    }
+
+    [AvaloniaTest]
+    public void FileStatusList_should_collapse_the_filter_row_only_for_the_empty_state()
+    {
+        FileStatusList control = new();
+        FileStatusList.TestAccessor accessor = control.GetTestAccessor();
+
+        control.Clear();
+
+        accessor.NoFilesLabel.IsVisible.Should().BeTrue();
+        accessor.FilterRow.IsVisible.Should().BeFalse();
+        accessor.List.IsVisible.Should().BeTrue("the WinForms list remains beneath the empty-state label");
+        accessor.RefreshButton.IsEnabled.Should().BeFalse();
+        control.FindControl<MenuItem>("tsmiShowSkipWorktreeFiles")!.IsEnabled.Should().BeFalse();
+        control.FindControl<MenuItem>("tsmiShowUntrackedFiles")!.IsEnabled.Should().BeFalse();
+
+        GitItemStatus worktree = new("tracked.txt")
+        {
+            IsChanged = true,
+            IsTracked = true,
+            Staged = StagedStatus.WorkTree,
+        };
+        control.SetDiffs(new GitRevision(ObjectId.IndexId), new GitRevision(ObjectId.WorkTreeId), [worktree]);
+
+        accessor.NoFilesLabel.IsVisible.Should().BeFalse();
+        accessor.FilterRow.IsVisible.Should().BeTrue();
     }
 
     [AvaloniaTest]
@@ -317,32 +362,85 @@ public sealed class FileStatusListFamilyTests
     [AvaloniaTest]
     public void FileStatusList_should_apply_all_sort_and_branch_diff_filters()
     {
-        FileStatusList control = new() { GroupByRevision = true };
-        GitRevision first = new(ObjectId.Random());
-        GitRevision second = new(ObjectId.Random());
-        control.SetDiffs(
-        [
-            new FileStatusWithDescription(
-                first,
-                second,
-                "branch diff",
-                [
-                    new GitItemStatus("only-a.txt") { IsChanged = true, IsTracked = true, DiffStatus = DiffBranchStatus.OnlyAChange },
-                    new GitItemStatus("only-b.cs") { IsChanged = true, IsTracked = true, DiffStatus = DiffBranchStatus.OnlyBChange },
-                ],
-                iconName: nameof(Images.DiffA)),
-        ],
-        isFileTreeMode: false);
-        FileStatusList.TestAccessor accessor = control.GetTestAccessor();
-
-        foreach (DiffListSortType sortType in Enum.GetValues<DiffListSortType>())
+        DiffListSortType originalSort = DiffListSortService.Instance.DiffListSorting;
+        try
         {
-            accessor.SetSort(sortType);
-            control.GitItemFilteredStatuses.Should().HaveCount(2);
-        }
+            FileStatusList control = new() { GroupByRevision = true };
+            GitRevision first = new(ObjectId.Random());
+            GitRevision second = new(ObjectId.Random());
+            control.SetDiffs(
+            [
+                new FileStatusWithDescription(
+                    first,
+                    second,
+                    "branch diff",
+                    [
+                        new GitItemStatus("only-a.txt") { IsChanged = true, IsTracked = true, DiffStatus = DiffBranchStatus.OnlyAChange },
+                        new GitItemStatus("only-b.cs") { IsChanged = true, IsTracked = true, DiffStatus = DiffBranchStatus.OnlyBChange },
+                    ],
+                    iconName: nameof(Images.DiffA)),
+            ],
+            isFileTreeMode: false);
+            FileStatusList.TestAccessor accessor = control.GetTestAccessor();
 
-        accessor.SetDiffStatusVisible(DiffBranchStatus.OnlyAChange, visible: false);
-        control.GitItemFilteredStatuses.Should().ContainSingle().Which.Name.Should().Be("only-b.cs");
+            foreach (DiffListSortType sortType in Enum.GetValues<DiffListSortType>())
+            {
+                accessor.SetSort(sortType);
+                control.GitItemFilteredStatuses.Should().HaveCount(2);
+            }
+
+            accessor.SetDiffStatusVisible(DiffBranchStatus.OnlyAChange, visible: false);
+            control.GitItemFilteredStatuses.Should().ContainSingle().Which.Name.Should().Be("only-b.cs");
+        }
+        finally
+        {
+            DiffListSortService.Instance.DiffListSorting = originalSort;
+        }
+    }
+
+    [AvaloniaTest]
+    public void FileStatusList_should_switch_renderer_for_all_ungrouped_tree_and_flat_sort_modes()
+    {
+        DiffListSortType originalSort = DiffListSortService.Instance.DiffListSorting;
+        try
+        {
+            FileStatusList control = new();
+            GitRevision revision = new(ObjectId.Random());
+            GitItemStatus first = new("src/first.cs") { IsChanged = true, IsTracked = true };
+            GitItemStatus second = new("docs/readme.md") { IsChanged = true, IsTracked = true };
+            control.SetDiffs(
+                [new FileStatusWithDescription(null, revision, "Diff with parent", [first, second])],
+                isFileTreeMode: false);
+            FileStatusList.TestAccessor accessor = control.GetTestAccessor();
+            Window window = new() { Width = 360, Height = 240, Content = control };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            try
+            {
+                foreach (DiffListSortType sortType in Enum.GetValues<DiffListSortType>())
+                {
+                    accessor.SetSort(sortType);
+                    Dispatcher.UIThread.RunJobs();
+                    bool flat = sortType is DiffListSortType.FilePathFlat
+                        or DiffListSortType.FileExtensionFlat
+                        or DiffListSortType.FileStatusFlat;
+                    accessor.List.IsVisible.Should().Be(flat, $"{sortType} is a flat renderer");
+                    accessor.DiffTree.IsVisible.Should().Be(!flat, $"{sortType} preserves hierarchy");
+                    control.AllItems.Should().HaveCount(2);
+                    control.SelectFileOrFolder(RelativePath.From(first.Name)).Should().BeTrue();
+                    control.SelectedGitItem.Should().BeSameAs(first);
+                }
+            }
+            finally
+            {
+                window.Close();
+            }
+        }
+        finally
+        {
+            DiffListSortService.Instance.DiffListSorting = originalSort;
+        }
     }
 
     [AvaloniaTest]
@@ -412,6 +510,7 @@ public sealed class FileStatusListFamilyTests
             AppSettings.SetBool(settingsKey, false);
             FileStatusList control = new();
             FileStatusList.TestAccessor accessor = control.GetTestAccessor();
+            accessor.UpdateToolbar();
             int buttonIndex = accessor.Toolbar.Children.IndexOf(accessor.ByPathButton);
             MenuItem visibilityItem = (MenuItem)accessor.ToolbarMenuItem.Items[buttonIndex]!;
 

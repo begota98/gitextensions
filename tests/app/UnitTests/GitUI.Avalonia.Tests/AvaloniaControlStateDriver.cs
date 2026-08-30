@@ -39,6 +39,7 @@ internal sealed class AvaloniaControlStateDriver : IDisposable
         TopLevel topLevel = TopLevel.GetTopLevel(root)
             ?? throw new AvaloniaCaptureStateUnsupportedException("The control is not attached to a headless top level.");
         AvaloniaControlStateDriver driver = new(root, topLevel);
+        driver.ApplyRequestedSize(state);
         object? target = state.TargetField is null ? root : FindFieldValue(root, state.TargetField);
         if (target is null)
         {
@@ -78,6 +79,25 @@ internal sealed class AvaloniaControlStateDriver : IDisposable
 
         Dispatcher.UIThread.RunJobs();
         return driver;
+    }
+
+    private void ApplyRequestedSize(CaptureStatePlan state)
+    {
+        if (state.WidthDip is not int width || state.HeightDip is not int height)
+        {
+            return;
+        }
+
+        double originalWidth = _root.Width;
+        double originalHeight = _root.Height;
+        _root.Width = width;
+        _root.Height = height;
+        Dispatcher.UIThread.RunJobs();
+        _restoreActions.Add(() =>
+        {
+            _root.Width = originalWidth;
+            _root.Height = originalHeight;
+        });
     }
 
     // parity-scaffolding: The original FileStatusList has one FileStatusListView while the
@@ -169,9 +189,23 @@ internal sealed class AvaloniaControlStateDriver : IDisposable
 
     private void Check(object target)
     {
-        if (target is not ToggleButton toggle)
+        ToggleButton? toggle = target as ToggleButton;
+        if (toggle is null && target is Control composite)
         {
-            throw new AvaloniaCaptureStateUnsupportedException("The checked state requires a ToggleButton.");
+            ToggleButton[] descendants = EnumerateLogicalControls(composite)
+                .OfType<ToggleButton>()
+                .Take(2)
+                .ToArray();
+            if (descendants.Length == 1)
+            {
+                toggle = descendants[0];
+            }
+        }
+
+        if (toggle is null)
+        {
+            throw new AvaloniaCaptureStateUnsupportedException(
+                "The checked state requires a ToggleButton or a composite control with one ToggleButton.");
         }
 
         bool? previous = toggle.IsChecked;
@@ -336,6 +370,33 @@ internal sealed class AvaloniaControlStateDriver : IDisposable
             return;
         }
 
+        if (target is ComboBox comboBox)
+        {
+            if (comboBox.ItemCount == 0)
+            {
+                throw new AvaloniaCaptureStateUnsupportedException("The ComboBox popup requires a populated control.");
+            }
+
+            bool comboPrevious = comboBox.IsDropDownOpen;
+            comboBox.IsDropDownOpen = true;
+            Dispatcher.UIThread.RunJobs();
+            if (!comboBox.IsDropDownOpen)
+            {
+                throw new AvaloniaCaptureStateUnsupportedException("The requested ComboBox popup declined to open.");
+            }
+
+            TrackExternalTopLevels(comboBox);
+            if (_externalTopLevels.Count == 0 && _popupSurfaceRoots.Count == 0)
+            {
+                comboBox.IsDropDownOpen = comboPrevious;
+                throw new AvaloniaCaptureStateUnsupportedException(
+                    "The ComboBox opened without exposing a rendered popup surface.");
+            }
+
+            _restoreActions.Add(() => comboBox.IsDropDownOpen = comboPrevious);
+            return;
+        }
+
         if (target is ContextMenu contextMenu)
         {
             // parity-scaffolding: Exercise the grid-owned ContextMenu through Avalonia's real popup surface.
@@ -382,7 +443,7 @@ internal sealed class AvaloniaControlStateDriver : IDisposable
         };
         if (menuItem is null)
         {
-            throw new AvaloniaCaptureStateUnsupportedException("The open-menu state requires a Menu or MenuItem.");
+            throw new AvaloniaCaptureStateUnsupportedException("The open-menu state requires a ComboBox, Menu, or MenuItem.");
         }
 
         ContextMenu? owningContextMenu = EnumerateLogicalControls(_root)

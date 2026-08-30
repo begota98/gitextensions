@@ -15,9 +15,8 @@ using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitUI.CommandsDialogs.BrowseDialog;
 
-// Twin of CommandsDialogs/BrowseDialog/FormUpdates. The shared release configuration still
-// describes Windows MSI packages, so Linux and macOS deliberately expose release links
-// without attempting to execute that installer.
+// The shared release configuration describes Windows MSI packages, so Linux and macOS expose
+// release links without attempting to execute the installer.
 public sealed partial class FormUpdates : GitExtensionsDialog
 {
     private const string ReleasesPage = "https://github.com/gitextensions/gitextensions/releases";
@@ -35,18 +34,18 @@ public sealed partial class FormUpdates : GitExtensionsDialog
     #endregion
 
     private readonly CancellationTokenSource _cancellationTokenSource = new();
-    private readonly Version _currentVersion;
+    private Window? _ownerWindow;
     private readonly Func<CancellationToken, Task<string>> _loadReleases;
 
     // Avalonia's designer constructs views before the application initializes ThreadHelper.
     private readonly TaskManager _operations = GitUI.Compat.DesignTimeTaskManager.Create();
     private bool _alwaysShow;
+    private readonly Version _currentVersion;
     private bool _updateFound;
     private string _netRuntimeDownloadUrl = string.Empty;
-    private string _newVersion = string.Empty;
     private string _updateUrl = string.Empty;
+    private string _newVersion = string.Empty;
     private Version? _requiredNetRuntimeVersion;
-    private Window? _ownerWindow;
 
     public FormUpdates()
         : this(AppSettings.AppVersion)

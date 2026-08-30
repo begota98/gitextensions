@@ -129,11 +129,49 @@ internal static class AvaloniaThemeResources
         DrawingColor controlText = ResolveSystemColor(settings, KnownColor.ControlText);
         DrawingColor controlDark = ResolveSystemColor(settings, KnownColor.ControlDark);
         DrawingColor controlLight = ResolveSystemColor(settings, KnownColor.ControlLight);
+        DrawingColor dialogControlsBackground = controlLight.MakeDarkerBy(-0.04);
+        DrawingColor readOnlyTextInputBackground = isDark
+            ? ResolveSystemColor(settings, KnownColor.ControlDarkDark)
+            : control;
+        DrawingColor dataGridViewGridLine = isDark
+            ? DrawingColor.FromArgb(40, 40, 40)
+            : DrawingColor.FromArgb(100, 100, 100);
         DrawingColor menu = ResolveSystemColor(settings, KnownColor.Menu);
         DrawingColor menuText = ResolveSystemColor(settings, KnownColor.MenuText);
         DrawingColor commitEditorBackground = isDark ? controlLight : window;
+        DrawingColor textInputBackground = isDark ? controlLight : window;
+        DrawingColor nativeGroupBoxBorder = DrawingColor.FromArgb(220, 220, 220);
+        DrawingColor nativeButtonBackground = isDark
+            ? DrawingColor.FromArgb(51, 51, 51)
+            : DrawingColor.FromArgb(253, 253, 253);
+        DrawingColor nativeButtonBorder = isDark
+            ? DrawingColor.FromArgb(155, 155, 155)
+            : DrawingColor.FromArgb(208, 208, 208);
+        DrawingColor nativeButtonPressedBackground = isDark
+            ? DrawingColor.FromArgb(102, 102, 102)
+            : DrawingColor.FromArgb(204, 228, 247);
+        DrawingColor nativeButtonPressedBorder = isDark
+            ? DrawingColor.FromArgb(160, 160, 160)
+            : DrawingColor.FromArgb(0, 84, 153);
+        DrawingColor nativeButtonDisabledBackground = isDark
+            ? DrawingColor.FromArgb(51, 51, 51)
+            : DrawingColor.FromArgb(249, 249, 249);
+        DrawingColor nativeButtonDisabledBorder = isDark
+            ? DrawingColor.FromArgb(55, 55, 55)
+            : DrawingColor.FromArgb(233, 233, 233);
+        DrawingColor nativeButtonDisabledForeground = isDark
+            ? DrawingColor.FromArgb(204, 204, 204)
+            : DrawingColor.FromArgb(160, 160, 160);
+        DrawingColor nativeTabBorder = isDark
+            ? DrawingColor.FromArgb(74, 74, 74)
+            : DrawingColor.FromArgb(217, 217, 217);
+        DrawingColor nativeTabSelectedBackground = isDark ? control : window;
+        DrawingColor nativeTabPageBackground = isDark ? control : DrawingColor.Transparent;
         DrawingColor highlight = ResolveSystemColor(settings, KnownColor.Highlight);
         DrawingColor highlightText = ResolveSystemColor(settings, KnownColor.HighlightText);
+        DrawingColor dataGridViewSelectionBackground = isDark
+            ? highlight
+            : DrawingColor.FromArgb(0, 120, 212);
         DrawingColor inactiveSelection = ResolveSystemColor(settings, KnownColor.InactiveCaption);
         DrawingColor inactiveSelectionText = ResolveSystemColor(settings, KnownColor.InactiveCaptionText);
         DrawingColor info = ResolveSystemColor(settings, KnownColor.Info);
@@ -157,6 +195,8 @@ internal static class AvaloniaThemeResources
         DrawingColor warningPanel = DrawingColor.FromArgb(230, 99, 99);
         DrawingColor interactiveAction = DrawingColor.LightSkyBlue.AdaptBackColor();
         DrawingColor interactiveConflict = DrawingColor.Orange.AdaptBackColor();
+        DrawingColor commitSummaryTags = DrawingColor.LightSteelBlue.AdaptBackColor();
+        DrawingColor commitSummaryBranches = DrawingColor.LightSalmon.AdaptBackColor();
         if (isDark)
         {
             resetSoft = resetSoft.DimColor();
@@ -209,6 +249,22 @@ internal static class AvaloniaThemeResources
         SetBrush(resources, "GitExtensionsWindowTextBrush", windowText);
         SetBrush(resources, "GitExtensionsWindowBackgroundBrush", window);
         SetBrush(resources, "GitExtensionsCommitEditorBackgroundBrush", commitEditorBackground);
+        SetBrush(resources, "GitExtensionsTextInputBackgroundBrush", textInputBackground);
+        SetBrush(resources, "GitExtensionsDialogControlsBackgroundBrush", dialogControlsBackground);
+        SetBrush(resources, "GitExtensionsReadOnlyTextInputBackgroundBrush", readOnlyTextInputBackground);
+        SetBrush(resources, "GitExtensionsDataGridViewGridLineBrush", dataGridViewGridLine);
+        SetBrush(resources, "GitExtensionsNativeGroupBoxBorderBrush", nativeGroupBoxBorder);
+        SetBrush(resources, "GitExtensionsNativeButtonBackgroundBrush", nativeButtonBackground);
+        SetBrush(resources, "GitExtensionsNativeButtonBorderBrush", nativeButtonBorder);
+        SetBrush(resources, "GitExtensionsNativeButtonPressedBackgroundBrush", nativeButtonPressedBackground);
+        SetBrush(resources, "GitExtensionsNativeButtonPressedBorderBrush", nativeButtonPressedBorder);
+        SetBrush(resources, "GitExtensionsNativeButtonDisabledBackgroundBrush", nativeButtonDisabledBackground);
+        SetBrush(resources, "GitExtensionsNativeButtonDisabledBorderBrush", nativeButtonDisabledBorder);
+        SetBrush(resources, "GitExtensionsNativeButtonDisabledForegroundBrush", nativeButtonDisabledForeground);
+        SetBrush(resources, "GitExtensionsNativeTabBorderBrush", nativeTabBorder);
+        SetBrush(resources, "GitExtensionsNativeTabSelectedBackgroundBrush", nativeTabSelectedBackground);
+        SetBrush(resources, "GitExtensionsNativeTabUnselectedBackgroundBrush", control);
+        SetBrush(resources, "GitExtensionsNativeTabPageBackgroundBrush", nativeTabPageBackground);
         SetBrush(resources, "GitExtensionsCommitMessageBackgroundBrush", commitMessageBackground);
         SetBrush(resources, "GitExtensionsControlBackgroundBrush", control);
         SetBrush(resources, "GitExtensionsControlForegroundBrush", controlText);
@@ -220,6 +276,7 @@ internal static class AvaloniaThemeResources
         SetBrush(resources, "GitExtensionsDisabledForegroundBrush", grayText);
         SetBrush(resources, "GitExtensionsHighlightBackgroundBrush", highlight);
         SetBrush(resources, "GitExtensionsHighlightForegroundBrush", highlightText);
+        SetBrush(resources, "GitExtensionsDataGridViewSelectionBackgroundBrush", dataGridViewSelectionBackground);
         SetBrush(resources, "GitExtensionsFileStatusSelectionForegroundBrush", isDark ? controlText : highlightText);
         SetBrush(resources, "GitExtensionsInactiveSelectionForegroundBrush", inactiveSelectionText);
         SetBrush(resources, "GitExtensionsSystemInactiveSelectionBackgroundBrush", inactiveSelection);
@@ -261,6 +318,10 @@ internal static class AvaloniaThemeResources
         SetBrush(resources, "GitExtensionsInteractiveActionForegroundBrush", interactiveAction.GetTextColor());
         SetBrush(resources, "GitExtensionsInteractiveConflictBackgroundBrush", interactiveConflict);
         SetBrush(resources, "GitExtensionsInteractiveConflictForegroundBrush", interactiveConflict.GetTextColor());
+        SetBrush(resources, "GitExtensionsCommitSummaryTagsBackgroundBrush", commitSummaryTags);
+        SetBrush(resources, "GitExtensionsCommitSummaryTagsForegroundBrush", commitSummaryTags.GetTextColor());
+        SetBrush(resources, "GitExtensionsCommitSummaryBranchesBackgroundBrush", commitSummaryBranches);
+        SetBrush(resources, "GitExtensionsCommitSummaryBranchesForegroundBrush", commitSummaryBranches.GetTextColor());
         SetBrush(resources, "GitExtensionsDiffEditorBackgroundBrush", editor);
         SetBrush(resources, "GitExtensionsDiffTextBrush", windowText);
         SetBrush(resources, "GitExtensionsDiffLineNumberBackgroundBrush", ResolveAppColor(settings, AppColor.LineNumberBackground));
@@ -310,7 +371,9 @@ internal static class AvaloniaThemeResources
     internal static DrawingColor ResolveSystemColor(ThemeSettings settings, KnownColor name)
     {
         bool isDark = settings.Theme.SystemColorMode == GitExtensions.Shims.WinForms.SystemColorMode.Dark;
-        DrawingColor color = settings.Theme.GetColor(name);
+        DrawingColor color = settings.Theme.Id == ThemeId.DefaultLight
+            ? DrawingColor.Empty
+            : settings.Theme.GetColor(name);
         if (!color.IsEmpty)
         {
             return color;
@@ -322,7 +385,58 @@ internal static class AvaloniaThemeResources
         }
 
         color = settings.InvariantTheme.GetColor(name);
-        return color.IsEmpty ? DrawingColor.FromKnownColor(name) : color;
+        if (!color.IsEmpty)
+        {
+            return color;
+        }
+
+        // The portable System.Drawing fallback is host-dependent. Preserve invariant.css's
+        // Windows reference colors when a partial/test theme has no invariant value.
+        return TryGetLightSystemColor(name, out color) ? color : DrawingColor.FromKnownColor(name);
+    }
+
+    private static bool TryGetLightSystemColor(KnownColor name, out DrawingColor color)
+    {
+        string? value = name switch
+        {
+            KnownColor.ActiveBorder => "#B4B4B4",
+            KnownColor.ActiveCaption => "#99B4D1",
+            KnownColor.ActiveCaptionText => "#000000",
+            KnownColor.AppWorkspace => "#ABABAB",
+            KnownColor.ButtonFace => "#F0F0F0",
+            KnownColor.ButtonHighlight => "#FFFFFF",
+            KnownColor.ButtonShadow => "#A0A0A0",
+            KnownColor.Control => "#F0F0F0",
+            KnownColor.ControlDark => "#A0A0A0",
+            KnownColor.ControlDarkDark => "#696969",
+            KnownColor.ControlLight => "#E3E3E3",
+            KnownColor.ControlLightLight => "#FFFFFF",
+            KnownColor.ControlText => "#000000",
+            KnownColor.Desktop => "#000000",
+            KnownColor.GradientActiveCaption => "#B9D1EA",
+            KnownColor.GradientInactiveCaption => "#D7E4F2",
+            KnownColor.GrayText => "#6D6D6D",
+            KnownColor.Highlight => "#0078D7",
+            KnownColor.HighlightText => "#FFFFFF",
+            KnownColor.HotTrack => "#0066CC",
+            KnownColor.InactiveBorder => "#F4F7FC",
+            KnownColor.InactiveCaption => "#BFCDDB",
+            KnownColor.InactiveCaptionText => "#000000",
+            KnownColor.Info => "#FFFFE1",
+            KnownColor.InfoText => "#000000",
+            KnownColor.Menu => "#F0F0F0",
+            KnownColor.MenuBar => "#F0F0F0",
+            KnownColor.MenuHighlight => "#0078D7",
+            KnownColor.MenuText => "#000000",
+            KnownColor.ScrollBar => "#C8C8C8",
+            KnownColor.Window => "#FFFFFF",
+            KnownColor.WindowFrame => "#646464",
+            KnownColor.WindowText => "#000000",
+            _ => null,
+        };
+
+        color = value is null ? DrawingColor.Empty : System.Drawing.ColorTranslator.FromHtml(value);
+        return !color.IsEmpty;
     }
 
     private static bool TryGetDarkSystemColor(KnownColor name, out DrawingColor color)

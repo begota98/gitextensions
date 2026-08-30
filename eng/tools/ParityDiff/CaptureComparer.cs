@@ -242,7 +242,13 @@ internal static class CaptureComparer
                 continue;
             }
 
-            CompareNode(referenceSurface.Root, candidateSurface.Root, $"{path}/root", tolerance, findings);
+            CompareNode(
+                referenceSurface.Root,
+                candidateSurface.Root,
+                $"{path}/root",
+                tolerance,
+                findings,
+                compareBoundsOrigin: false);
             CompareFieldNodes(referenceSurface.Root, candidateSurface.Root, path, tolerance, findings);
             CompareAnonymousChildren(referenceSurface.Root, candidateSurface.Root, $"{path}/root", tolerance, findings);
             CompareFocusOrder(referenceSurface.Root, candidateSurface.Root, path, findings);
@@ -267,8 +273,22 @@ internal static class CaptureComparer
         DiffTolerance tolerance,
         ICollection<ParityFinding> findings)
     {
-        List<CaptureNode> referenceNodes = Flatten(referenceRoot).Where(node => node.FieldName is not null).ToList();
-        List<CaptureNode> candidateNodes = Flatten(candidateRoot).Where(node => node.FieldName is not null).ToList();
+        List<ScopedFieldNode> referenceFields = GetScopedFieldNodes(referenceRoot);
+        List<ScopedFieldNode> candidateFields = GetScopedFieldNodes(candidateRoot);
+        List<CaptureNode> referenceNodes = referenceFields.Select(field => field.Node).ToList();
+        List<CaptureNode> candidateNodes = candidateFields.Select(field => field.Node).ToList();
+        Dictionary<CaptureNode, string> referenceScopes = new(ReferenceEqualityComparer.Instance);
+        Dictionary<CaptureNode, string> candidateScopes = new(ReferenceEqualityComparer.Instance);
+        foreach (ScopedFieldNode field in referenceFields)
+        {
+            referenceScopes.Add(field.Node, field.OwnerPath);
+        }
+
+        foreach (ScopedFieldNode field in candidateFields)
+        {
+            candidateScopes.Add(field.Node, field.OwnerPath);
+        }
+
         Dictionary<string, List<CaptureNode>> candidatesByField = candidateNodes
             .GroupBy(node => node.FieldName!, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
@@ -276,7 +296,7 @@ internal static class CaptureComparer
         Dictionary<string, int> candidateCounts = GetFieldCounts(candidateNodes);
         Dictionary<CaptureNode, int> referenceOccurrences = GetFieldOccurrences(referenceNodes);
         Dictionary<CaptureNode, int> candidateOccurrences = GetFieldOccurrences(candidateNodes);
-        ReportDuplicateFields(referenceCounts, candidateCounts, surfacePath, findings);
+        ReportDuplicateFields(referenceFields, candidateFields, surfacePath, findings);
 
         HashSet<CaptureNode> matchedCandidates = new(ReferenceEqualityComparer.Instance);
         foreach (CaptureNode referenceNode in referenceNodes)
@@ -285,7 +305,9 @@ internal static class CaptureComparer
             bool aliased = false;
             if (candidatesByField.TryGetValue(referenceNode.FieldName!, out List<CaptureNode>? exactMatches))
             {
-                candidateNode = exactMatches.FirstOrDefault(node => !matchedCandidates.Contains(node));
+                candidateNode = exactMatches.FirstOrDefault(node => !matchedCandidates.Contains(node)
+                    && string.Equals(candidateScopes[node], referenceScopes[referenceNode], StringComparison.Ordinal))
+                    ?? exactMatches.FirstOrDefault(node => !matchedCandidates.Contains(node));
             }
 
             if (candidateNode is null)
@@ -364,6 +386,29 @@ internal static class CaptureComparer
         nodes.GroupBy(node => node.FieldName!, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
 
+    private static List<ScopedFieldNode> GetScopedFieldNodes(CaptureNode root)
+    {
+        List<ScopedFieldNode> fields = [];
+        AddChildren(root, "$root");
+        return fields;
+
+        void AddChildren(CaptureNode parent, string ownerPath)
+        {
+            foreach (CaptureNode child in parent.Children)
+            {
+                if (child.FieldName is not null)
+                {
+                    fields.Add(new ScopedFieldNode(child, ownerPath));
+                }
+
+                string childOwnerPath = child.FieldName is null
+                    ? ownerPath
+                    : $"{ownerPath}/{child.FieldName}";
+                AddChildren(child, childOwnerPath);
+            }
+        }
+    }
+
     private static Dictionary<CaptureNode, int> GetFieldOccurrences(IEnumerable<CaptureNode> nodes)
     {
         Dictionary<string, int> counts = new(StringComparer.Ordinal);
@@ -389,29 +434,40 @@ internal static class CaptureComparer
             : $"{surfacePath}/control[{fieldName}]";
 
     private static void ReportDuplicateFields(
-        IReadOnlyDictionary<string, int> referenceCounts,
-        IReadOnlyDictionary<string, int> candidateCounts,
+        IReadOnlyList<ScopedFieldNode> referenceFields,
+        IReadOnlyList<ScopedFieldNode> candidateFields,
         string surfacePath,
         ICollection<ParityFinding> findings)
     {
-        string[] duplicateFields = referenceCounts.Keys
+        Dictionary<ScopedFieldIdentity, int> referenceCounts = GetScopedFieldCounts(referenceFields);
+        Dictionary<ScopedFieldIdentity, int> candidateCounts = GetScopedFieldCounts(candidateFields);
+        ScopedFieldIdentity[] duplicateFields = referenceCounts.Keys
             .Concat(candidateCounts.Keys)
-            .Distinct(StringComparer.Ordinal)
-            .Where(fieldName => referenceCounts.GetValueOrDefault(fieldName) > 1
-                                || candidateCounts.GetValueOrDefault(fieldName) > 1)
-            .Order(StringComparer.Ordinal)
+            .Distinct()
+            .Where(identity => referenceCounts.GetValueOrDefault(identity) > 1
+                               || candidateCounts.GetValueOrDefault(identity) > 1)
+            .OrderBy(identity => identity.FieldName, StringComparer.Ordinal)
+            .ThenBy(identity => identity.OwnerPath, StringComparer.Ordinal)
             .ToArray();
-        foreach (string fieldName in duplicateFields)
+        foreach (ScopedFieldIdentity identity in duplicateFields)
         {
             findings.Add(CreateFinding(
                 ControlCategory,
                 "control.duplicateIdentity",
-                $"{surfacePath}/control[{fieldName}]",
-                "The field identity is duplicated; repeated controls are joined in stable tree order.",
-                referenceCounts.GetValueOrDefault(fieldName).ToString(CultureInfo.InvariantCulture),
-                candidateCounts.GetValueOrDefault(fieldName).ToString(CultureInfo.InvariantCulture)));
+                $"{surfacePath}/control[{identity.FieldName}]",
+                $"The field identity is duplicated within named owner '{identity.OwnerPath}'; repeated controls are joined in stable tree order.",
+                referenceCounts.GetValueOrDefault(identity).ToString(CultureInfo.InvariantCulture),
+                candidateCounts.GetValueOrDefault(identity).ToString(CultureInfo.InvariantCulture)));
         }
     }
+
+    private static Dictionary<ScopedFieldIdentity, int> GetScopedFieldCounts(IEnumerable<ScopedFieldNode> fields) =>
+        fields.GroupBy(field => new ScopedFieldIdentity(field.OwnerPath, field.Node.FieldName!))
+            .ToDictionary(group => group.Key, group => group.Count());
+
+    private sealed record ScopedFieldNode(CaptureNode Node, string OwnerPath);
+
+    private sealed record ScopedFieldIdentity(string OwnerPath, string FieldName);
 
     private static void CompareFocusOrder(
         CaptureNode reference,
@@ -472,11 +528,41 @@ internal static class CaptureComparer
             .Where(surface => !surface.Role.Equals("primary", StringComparison.Ordinal))
             .OrderBy(surface => surface.Role, StringComparer.Ordinal)
             .ToArray();
+        CaptureRectangle referenceCanvas = GetCanvasBounds(referenceDocument.Surfaces);
+        CaptureRectangle candidateCanvas = GetCanvasBounds(candidateDocument.Surfaces);
+        List<PixelMetrics> surfaceMetrics = [];
+        CaptureSurface referencePrimary = referenceDocument.Surfaces.Single(
+            surface => surface.Role.Equals("primary", StringComparison.Ordinal));
+        CaptureSurface candidatePrimary = candidateDocument.Surfaces.Single(
+            surface => surface.Role.Equals("primary", StringComparison.Ordinal));
+        bool hasMatchedPopup = referencePopups.Any(
+            referencePopup => candidatePopups.Any(candidatePopup => candidatePopup.Role == referencePopup.Role));
+        if (TryCropPrimaryClient(reference, referencePrimary, referenceCanvas, out PngImage referenceClient)
+            && TryCropPrimaryClient(candidate, candidatePrimary, candidateCanvas, out PngImage candidateClient))
+        {
+            surfaceMetrics.Add(CompareImagePair(
+                referenceClient,
+                candidateClient,
+                tolerance,
+                "$image/surface[primary-client]",
+                findings));
+        }
+        else if (!hasMatchedPopup)
+        {
+            return CompareImagePair(reference, candidate, tolerance, "$image", findings);
+        }
+        else
+        {
+            surfaceMetrics.Add(CompareImagePair(
+                CropSurface(reference, referencePrimary, referenceCanvas),
+                CropSurface(candidate, candidatePrimary, candidateCanvas),
+                tolerance,
+                "$image/surface[primary]",
+                findings));
+        }
+
         if (referencePopups.Length > 0 && candidatePopups.Length > 0)
         {
-            CaptureRectangle referenceCanvas = GetCanvasBounds(referenceDocument.Surfaces);
-            CaptureRectangle candidateCanvas = GetCanvasBounds(candidateDocument.Surfaces);
-            List<PixelMetrics> surfaceMetrics = [];
             Dictionary<string, CaptureSurface> candidateByRole = candidatePopups
                 .ToDictionary(surface => surface.Role, StringComparer.Ordinal);
             foreach (CaptureSurface referenceSurface in referencePopups)
@@ -495,14 +581,11 @@ internal static class CaptureComparer
                     $"$image/surface[{referenceSurface.Role}]",
                     findings));
             }
-
-            if (surfaceMetrics.Count > 0)
-            {
-                return AggregatePixelMetrics(surfaceMetrics);
-            }
         }
 
-        return CompareImagePair(reference, candidate, tolerance, "$image", findings);
+        return surfaceMetrics.Count == 1
+            ? surfaceMetrics[0]
+            : AggregatePixelMetrics(surfaceMetrics);
     }
 
     private static void CompareAnonymousChildren(
@@ -649,6 +732,30 @@ internal static class CaptureComparer
             surface.ScreenBoundsPx.Width,
             surface.ScreenBoundsPx.Height);
 
+    private static bool TryCropPrimaryClient(
+        PngImage image,
+        CaptureSurface surface,
+        CaptureRectangle canvas,
+        out PngImage client)
+    {
+        CaptureRectangle bounds = surface.Root.BoundsPx;
+        int x = surface.ScreenBoundsPx.X - canvas.X + bounds.X;
+        int y = surface.ScreenBoundsPx.Y - canvas.Y + bounds.Y;
+        if (bounds.Width <= 0
+            || bounds.Height <= 0
+            || x < 0
+            || y < 0
+            || x + bounds.Width > image.Width
+            || y + bounds.Height > image.Height)
+        {
+            client = null!;
+            return false;
+        }
+
+        client = image.Crop(x, y, bounds.Width, bounds.Height);
+        return true;
+    }
+
     private static CaptureRectangle GetCanvasBounds(IReadOnlyList<CaptureSurface> surfaces)
     {
         int left = surfaces.Min(surface => surface.ScreenBoundsPx.X);
@@ -685,12 +792,19 @@ internal static class CaptureComparer
         CaptureNode candidate,
         string path,
         DiffTolerance tolerance,
-        ICollection<ParityFinding> findings)
+        ICollection<ParityFinding> findings,
+        bool compareBoundsOrigin = true)
     {
         CompareValue(reference.ControlKind, candidate.ControlKind, ControlCategory, "control.kind", path, findings);
         if (reference.Visible != false && candidate.Visible != false)
         {
-            CompareRectangle(reference.BoundsDip, candidate.BoundsDip, $"{path}/boundsDip", tolerance.GeometryDip, findings);
+            CompareRectangle(
+                reference.BoundsDip,
+                candidate.BoundsDip,
+                $"{path}/boundsDip",
+                tolerance.GeometryDip,
+                findings,
+                compareBoundsOrigin);
             CompareSize(reference.ClientSizeDip, candidate.ClientSizeDip, $"{path}/clientSizeDip", tolerance.GeometryDip, findings);
             CompareDecimal(reference.ItemHeightDip, candidate.ItemHeightDip, tolerance.GeometryDip, GeometryCategory, "geometry.itemHeightDip", path, findings);
             CompareThickness(reference.Padding.Dip, candidate.Padding.Dip, $"{path}/paddingDip", tolerance.GeometryDip, findings);
@@ -752,10 +866,15 @@ internal static class CaptureComparer
         CaptureRectangleF candidate,
         string path,
         decimal tolerance,
-        ICollection<ParityFinding> findings)
+        ICollection<ParityFinding> findings,
+        bool compareOrigin = true)
     {
-        CompareDecimal(reference.X, candidate.X, tolerance, GeometryCategory, "geometry.x", path, findings);
-        CompareDecimal(reference.Y, candidate.Y, tolerance, GeometryCategory, "geometry.y", path, findings);
+        if (compareOrigin)
+        {
+            CompareDecimal(reference.X, candidate.X, tolerance, GeometryCategory, "geometry.x", path, findings);
+            CompareDecimal(reference.Y, candidate.Y, tolerance, GeometryCategory, "geometry.y", path, findings);
+        }
+
         CompareDecimal(reference.Width, candidate.Width, tolerance, GeometryCategory, "geometry.width", path, findings);
         CompareDecimal(reference.Height, candidate.Height, tolerance, GeometryCategory, "geometry.height", path, findings);
     }

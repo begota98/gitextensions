@@ -1,6 +1,7 @@
-using System.ComponentModel.Design;
+﻿using System.ComponentModel.Design;
 using System.Diagnostics;
 using Avalonia.Controls;
+using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
@@ -16,6 +17,8 @@ using GitUI.UserControls.RevisionGrid;
 using Microsoft.VisualStudio.Threading;
 using NSubstitute;
 using MediaColor = Avalonia.Media.Color;
+using SourceColumnHeader = GitUI.Compat.WinFormsControls.ColumnHeader;
+using SourceDataGridView = GitUI.Compat.WinFormsControls.DataGridView;
 using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitExtensionsTests;
@@ -68,7 +71,11 @@ public sealed class RemotesTests
         form.GetTestAccessor().Save.Should().NotBeNull();
         form.FindControl<ComboBox>("Url").Should().NotBeNull();
         form.FindControl<Label>("labelPushUrl")!.IsVisible.Should().BeFalse("the push url row shows only with a separate push url");
-        form.FindControl<ListBox>("RemoteBranches").Should().NotBeNull();
+        SourceDataGridView remoteBranches = form.FindControl<SourceDataGridView>("RemoteBranches")!;
+        remoteBranches.IsReadOnly.Should().BeTrue();
+        remoteBranches.Columns.Select(column => column.Name).Should().Equal("BranchName", "RemoteCombo", "MergeWith");
+        form.FindControl<TextBox>("PuttySshKey").Should().NotBeNull();
+        form.FindControl<Control>("pnlMgtPuttySsh")!.IsVisible.Should().BeFalse("the runtime SSH backend has not been evaluated");
     }
 
     [AvaloniaTest]
@@ -92,6 +99,10 @@ public sealed class RemotesTests
         translation.Received(1).AddTranslationItem(nameof(FormRemotes), "Save", "Text", "&Save changes");
         translation.Received(1).AddTranslationItem(nameof(FormRemotes), "btnRemoteColor", "Text", "Set &color");
         translation.Received(1).AddTranslationItem(nameof(FormRemotes), "btnRemoteColorReset", "Text", "Default color");
+        translation.Received(1).AddTranslationItem(nameof(FormRemotes), "LoadSSHKey", "Text", "&Load SSH key");
+        translation.Received(1).AddTranslationItem(nameof(FormRemotes), "SshBrowse", "Text", "Brows&e...");
+        translation.Received(1).AddTranslationItem(nameof(FormRemotes), "TestConnection", "Text", "&Test connection");
+        translation.Received(1).AddTranslationItem(nameof(FormRemotes), "label3", "Text", "Private &key file");
         translation.Received(1).AddTranslationItem(nameof(FormRemotes), "SaveDefaultPushPull", "Text", "&Save changes");
         translation.Received(1).AddTranslationItem(nameof(FormRemotes), "label4", "Text", "&Local branch name");
         translation.Received(1).AddTranslationItem(nameof(FormRemotes), "label5", "Text", "&Remote repository");
@@ -123,6 +134,7 @@ public sealed class RemotesTests
         form.Show();
         try
         {
+            form.FindControl<Control>("pnlMgtPuttySsh")!.IsVisible.Should().Be(OperatingSystem.IsWindows() && GitSshHelpers.IsPlink);
             FormRemotes.TestAccessor accessor = form.GetTestAccessor();
 
             // No remotes yet: the management panel creates a new one.
@@ -165,6 +177,39 @@ public sealed class RemotesTests
     }
 
     [AvaloniaTest]
+    public async Task FormRemotes_should_size_the_remote_column_to_content_and_debounce_viewport_resizes()
+    {
+        GitModule module = CreateRepositoryWithCommit();
+        string longRemoteName = $"remote-{new string('x', 80)}";
+        module.AddRemote(longRemoteName, Path.Combine(_workingDirectory, "other")).Should().BeEmpty();
+
+        FormRemotes form = new(CreateCommands(module));
+        form.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            ListBox remotes = form.FindControl<ListBox>("Remotes")!;
+            SourceColumnHeader column = form.FindControl<SourceColumnHeader>("columnHeader1")!;
+            column.SourceWidth.Should().BeGreaterThan(remotes.Bounds.Width,
+                "content wider than the viewport must retain its measured width");
+
+            remotes.Width = 800;
+            Dispatcher.UIThread.RunJobs();
+            double widthBeforeDebounce = column.SourceWidth;
+            widthBeforeDebounce.Should().BeLessThan(remotes.Bounds.Width - 4);
+
+            await Task.Delay(200);
+            Dispatcher.UIThread.RunJobs();
+            column.SourceWidth.Should().BeApproximately(remotes.Bounds.Width - 4, 0.01,
+                "the debounced resize must expand a narrower content column to the viewport");
+        }
+        finally
+        {
+            form.Close();
+        }
+    }
+
+    [AvaloniaTest]
     public async Task FormRemotes_default_pull_tab_should_save_the_tracking_remote()
     {
         GitModule module = CreateRepositoryWithCommit();
@@ -181,7 +226,7 @@ public sealed class RemotesTests
             form.GetTestAccessor().TabControl.SelectedItem.Should().Be(form.FindControl<TabItem>("tabPage2"),
                 "preselecting a local branch opens the default pull behavior tab");
 
-            ListBox remoteBranches = form.FindControl<ListBox>("RemoteBranches")!;
+            SourceDataGridView remoteBranches = form.FindControl<SourceDataGridView>("RemoteBranches")!;
             remoteBranches.ItemCount.Should().Be(1);
             (remoteBranches.SelectedItem as IGitRef)!.LocalName.Should().Be("main");
             form.FindControl<TextBox>("LocalBranchNameEdit")!.Text.Should().Be("main");
@@ -217,9 +262,11 @@ public sealed class RemotesTests
         {
             FormRemotes.TestAccessor accessor = form.GetTestAccessor();
             accessor.RemoteColor.Color = MediaColor.Parse("#123456");
+            form.FindControl<TextBox>("PuttySshKey")!.Text = "C:\\keys\\origin.ppk";
             accessor.Save.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
 
             module.GetSetting("remote.origin.color").Should().Be("#123456");
+            module.GetSetting("remote.origin.puttykeyfile").Should().Be("C:\\keys\\origin.ppk");
             accessor.RemoteColor.Content.Should().BeOfType<Border>()
                 .Which.Background.Should().BeAssignableTo<Avalonia.Media.ISolidColorBrush>()
                 .Which.Color.Should().Be(MediaColor.Parse("#123456"));
@@ -235,6 +282,23 @@ public sealed class RemotesTests
             accessor.RemoteColorReset.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             accessor.Save.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             module.GetSetting("remote.origin.color").Should().BeEmpty();
+
+            form.CaptureRenderedFrame().Should().NotBeNull("the complete remotes dialog should render headlessly");
+
+            TabControl tabs = form.FindControl<TabControl>("tabControl1")!;
+            Control remotePage = form.FindControl<Control>("tabPage1")!;
+            Control remoteListPanel = form.FindControl<Control>("panel1")!;
+            Control managementContainer = form.FindControl<Control>("pnlManagementContainer")!;
+            Control managementGroup = form.FindControl<Control>("gbMgtPanel")!;
+
+            tabs.Classes.Should().Contain("gitextensions-native-tabs");
+            tabs.Bounds.Should().Be(new Avalonia.Rect(0, 0, 934, 306));
+            remotePage.Should().BeOfType<GitUI.Compat.WinFormsControls.TabPage>();
+            remoteListPanel.Should().BeOfType<GitUI.Compat.WinFormsControls.Panel>();
+            remoteListPanel.Bounds.Size.Should().Be(new Avalonia.Size(350, 266));
+            managementContainer.Bounds.Size.Should().Be(new Avalonia.Size(570, 266));
+            managementGroup.Should().BeOfType<GitUI.Compat.WinFormsControls.GroupBox>();
+            managementGroup.Bounds.Size.Should().Be(new Avalonia.Size(554, 172));
         }
         finally
         {

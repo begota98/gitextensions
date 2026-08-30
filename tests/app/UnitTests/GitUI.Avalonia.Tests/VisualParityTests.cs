@@ -4,6 +4,7 @@ using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Styling;
@@ -72,6 +73,40 @@ public sealed class VisualParityTests
             AppSettings.FixedWidthFont = originalFixedWidthFont;
             AppSettings.MonospaceFont = originalMonospaceFont;
             AvaloniaFontSettings.ApplyAppSettings();
+        }
+    }
+
+    [AvaloniaTest]
+    public void Window_ambient_text_should_use_ControlText_while_inputs_use_WindowText()
+    {
+        TextBlock label = new() { Text = "Repository" };
+        TextBox textBox = new() { Text = "gitextensions" };
+        ComboBox comboBox = new() { ItemsSource = new[] { "main" }, SelectedIndex = 0 };
+        StackPanel content = new();
+        content.Children.Add(label);
+        content.Children.Add(textBox);
+        content.Children.Add(comboBox);
+        Window window = new() { Width = 320, Height = 160, Content = content };
+
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            Color controlText = ToMediaColor(AvaloniaThemeResources.ResolveSystemColor(
+                ThemeModule.Settings,
+                System.Drawing.KnownColor.ControlText));
+            Color windowText = ToMediaColor(AvaloniaThemeResources.ResolveSystemColor(
+                ThemeModule.Settings,
+                System.Drawing.KnownColor.WindowText));
+
+            GetColor(window.Foreground).Should().Be(controlText);
+            GetColor(label.Foreground).Should().Be(controlText);
+            GetColor(textBox.Foreground).Should().Be(windowText);
+            GetColor(comboBox.Foreground).Should().Be(windowText);
+        }
+        finally
+        {
+            window.Close();
         }
     }
 
@@ -154,6 +189,23 @@ public sealed class VisualParityTests
     }
 
     [AvaloniaTest]
+    [Category("P8.6h.3b.2b.2b.2b.5")]
+    public void Desktop_menu_renderer_palette_should_match_WinForms()
+    {
+        Application application = Application.Current
+            ?? throw new InvalidOperationException("The Avalonia application was not created.");
+
+        GetResourceBrushColor(application, "GitExtensionsMenuRenderedBackgroundBrush", ThemeVariant.Light)
+            .Should().Be(Color.Parse("#FDFDFD"));
+        GetResourceBrushColor(application, "GitExtensionsMenuRenderedBorderBrush", ThemeVariant.Light)
+            .Should().Be(Color.Parse("#808080"));
+        GetResourceBrushColor(application, "GitExtensionsMenuRenderedBackgroundBrush", ThemeVariant.Dark)
+            .Should().Be(Color.Parse("#2F2F2F"));
+        GetResourceBrushColor(application, "GitExtensionsMenuRenderedBorderBrush", ThemeVariant.Dark)
+            .Should().Be(Color.Parse("#6B6B6B"));
+    }
+
+    [AvaloniaTest]
     public void List_and_tree_selection_should_use_shared_dense_metrics_in_both_theme_variants()
     {
         AssertListAndTreeStyles(ThemeVariant.Light, Color.Parse("#C3C3FF"), Colors.Black);
@@ -231,7 +283,7 @@ public sealed class VisualParityTests
                 form.commandsToolStripMenuItem.IsSubMenuOpen = true;
                 Dispatcher.UIThread.RunJobs();
                 visibleMenuItems.Select(item => item.Bounds).Should().Equal(closedMenuItemBounds);
-                form.commitToolStripMenuItem.Bounds.Height.Should().Be(21);
+                form.commitToolStripMenuItem.Bounds.Height.Should().Be(22);
                 ItemsPresenter menuItemsPresenter = form.commitToolStripMenuItem
                     .GetVisualAncestors()
                     .OfType<ItemsPresenter>()
@@ -365,6 +417,7 @@ public sealed class VisualParityTests
 
     [AvaloniaTest]
     [Category("P8.6h.3b.2b.2b.2b.2")]
+    [Category("P8.6h.3b.2b.2b.2b.5")]
     public void Desktop_menus_should_not_reserve_touch_padding_or_empty_rows()
     {
         Button target = new() { Content = "Open" };
@@ -390,6 +443,10 @@ public sealed class VisualParityTests
             contextItem.FontStyle.Should().Be(GetResource<FontStyle>(Application.Current!, "GitExtensionsUiFontStyle"));
             contextItem.FontWeight.Should().Be(GetResource<FontWeight>(Application.Current!, "GitExtensionsUiFontWeight"));
             contextItem.Padding.Should().Be(new Thickness(0, 1));
+            contextMenu.BorderBrush.Should().Be(
+                GetThemeResource<IBrush>(Application.Current!, "GitExtensionsMenuRenderedBorderBrush"));
+            GetMenuLayoutRoot(contextItem).Background.Should().Be(
+                GetThemeResource<IBrush>(Application.Current!, "GitExtensionsMenuRenderedBackgroundBrush"));
             contextMenu.GetVisualDescendants()
                 .OfType<ItemsPresenter>()
                 .Single(presenter => presenter.Name == "PART_ItemsPresenter")
@@ -397,7 +454,22 @@ public sealed class VisualParityTests
             contextItem.IsSubMenuOpen = true;
             Dispatcher.UIThread.RunJobs();
             AssertSingleItemPopupFits(nestedContextItem);
+            GetMenuLayoutRoot(nestedContextItem).Background.Should().Be(
+                GetThemeResource<IBrush>(Application.Current!, "GitExtensionsMenuRenderedBackgroundBrush"));
             contextMenu.Close();
+
+            MenuItem captionItem = new() { Header = "Branches", Classes = { "gitextensions-menu-caption" } };
+            ContextMenu captionMenu = new() { Items = { captionItem } };
+            captionMenu.Open(target);
+            Dispatcher.UIThread.RunJobs();
+            captionItem.Opacity.Should().Be(1);
+            GetMenuLayoutRoot(captionItem).Background.Should().Be(
+                GetThemeResource<IBrush>(Application.Current!, "GitExtensionsMenuRenderedBackgroundBrush"));
+            captionItem.GetVisualDescendants()
+                .OfType<ContentPresenter>()
+                .Single(presenter => presenter.Name == "PART_HeaderPresenter")
+                .Opacity.Should().Be(0.7);
+            captionMenu.Close();
 
             Separator contextSeparator = new();
             ContextMenu separatorMenu = new()
@@ -411,10 +483,11 @@ public sealed class VisualParityTests
             };
             separatorMenu.Open(target);
             Dispatcher.UIThread.RunJobs();
-            contextSeparator.Height.Should().Be(4.5);
-            contextSeparator.Margin.Should().Be(new Thickness(0));
+            contextSeparator.Height.Should().Be(6);
+            contextSeparator.Margin.Should().Be(new Thickness(2, 0, 1, 0));
             contextSeparator.Foreground.Should().Be(GetThemeResource<IBrush>(Application.Current!, "GitExtensionsControlBorderBrush"));
             contextSeparator.Background.Should().Be(GetThemeResource<IBrush>(Application.Current!, "GitExtensionsControlBackgroundBrush"));
+            AssertRenderedSeparatorPalette(contextSeparator);
             separatorMenu.Close();
 
             MenuItem flyoutItem = new() { Header = "Flyout command" };
@@ -422,12 +495,16 @@ public sealed class VisualParityTests
             flyout.ShowAt(target);
             Dispatcher.UIThread.RunJobs();
             AssertSingleItemPopupFits(flyoutItem);
+            GetMenuLayoutRoot(flyoutItem).Background.Should().Be(
+                GetThemeResource<IBrush>(Application.Current!, "GitExtensionsMenuRenderedBackgroundBrush"));
             TopLevel flyoutRoot = TopLevel.GetTopLevel(flyoutItem)!;
             MenuFlyoutPresenter flyoutPresenter = flyoutRoot.GetVisualDescendants()
                 .Prepend(flyoutRoot)
                 .OfType<MenuFlyoutPresenter>()
                 .Single();
             flyoutPresenter.MinHeight.Should().Be(0);
+            flyoutPresenter.BorderBrush.Should().Be(
+                GetThemeResource<IBrush>(Application.Current!, "GitExtensionsMenuRenderedBorderBrush"));
             flyout.Hide();
 
             Separator flyoutSeparator = new();
@@ -442,14 +519,57 @@ public sealed class VisualParityTests
             };
             separatorFlyout.ShowAt(target);
             Dispatcher.UIThread.RunJobs();
-            flyoutSeparator.Height.Should().Be(4.5);
+            flyoutSeparator.Height.Should().Be(6);
             flyoutSeparator.Margin.Should().Be(new Thickness(0));
             flyoutSeparator.Foreground.Should().Be(GetThemeResource<IBrush>(Application.Current!, "GitExtensionsControlBorderBrush"));
             flyoutSeparator.Background.Should().Be(GetThemeResource<IBrush>(Application.Current!, "GitExtensionsControlBackgroundBrush"));
+            AssertRenderedSeparatorPalette(flyoutSeparator);
             separatorFlyout.Hide();
         }
         finally
         {
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6h.3b.2b.2b.2b.5")]
+    public void ToolStrip_submenu_should_measure_and_render_the_complete_shortcut_display()
+    {
+        MenuItem child = new()
+        {
+            Header = "Highlight selected branch (until refresh)",
+            InputGesture = new KeyGesture(Key.B, KeyModifiers.Control | KeyModifiers.Shift),
+        };
+        WinFormsToolStripMenuSizer.SetShortcutDisplayString(child, "Ctrl+Shift+B, Alt+LButton");
+        GitUI.Compat.WinFormsControls.ToolStripDropDownItem owner = new()
+        {
+            Header = "View",
+            Items = { child },
+        };
+        Window window = new()
+        {
+            Width = 640,
+            Height = 240,
+            Content = new Menu { Items = { owner } },
+        };
+        window.Show();
+        try
+        {
+            owner.IsSubMenuOpen = true;
+            Dispatcher.UIThread.RunJobs();
+
+            child.Width.Should().BeGreaterThan(0);
+            TextBlock inputGesture = child.GetVisualDescendants()
+                .OfType<TextBlock>()
+                .Single(textBlock => textBlock.Name == "PART_InputGestureText");
+            inputGesture.Text.Should().Be("Ctrl+Shift+B, Alt+LButton");
+            inputGesture.Margin.Should().Be(new Thickness(7, 0, 0, 0));
+        }
+        finally
+        {
+            owner.IsSubMenuOpen = false;
+            Dispatcher.UIThread.RunJobs();
             window.Close();
         }
     }
@@ -809,6 +929,40 @@ public sealed class VisualParityTests
     }
 
     [AvaloniaTest]
+    [Category("P8.6h.3b.2b.2b.2b.5")]
+    public void Revision_grid_should_not_draw_an_outer_focus_frame()
+    {
+        RevisionGridControl control = new() { UICommandsSource = CreateRevisionGridCommandsSource() };
+        ListBox revisions = control.FindControl<ListBox>("_gridView")
+            ?? throw new InvalidOperationException("The revision list was not created.");
+        revisions.ItemsSource = new[] { new GitRevision(ObjectId.Random()) };
+        Window window = new() { Width = 700, Height = 180, Content = control };
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            revisions.Focus();
+            Dispatcher.UIThread.RunJobs();
+            revisions.IsFocused.Should().BeTrue();
+            revisions.FocusAdorner.Should().BeNull(
+                "the original borderless revision grid has no container-level focus frame");
+
+            revisions.SelectedIndex = 0;
+            ListBoxItem item = revisions.ContainerFromIndex(0) as ListBoxItem
+                ?? throw new InvalidOperationException("The revision row was not realized.");
+            item.Focus();
+            Dispatcher.UIThread.RunJobs();
+            item.IsFocused.Should().BeTrue();
+            revisions.FocusAdorner.Should().BeNull();
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
     [Category("P8.6h.3b.2b")]
     [Category("P8.6h.3b.2b.2a")]
     public void Revision_grid_should_use_the_original_background_and_active_inactive_selection_colors()
@@ -1153,9 +1307,24 @@ public sealed class VisualParityTests
         double topInset = itemPosition.Y;
         double bottomInset = popupSurface.Bounds.Height - itemPosition.Y - item.Bounds.Height;
 
-        item.Bounds.Height.Should().Be(21);
-        topInset.Should().BeLessThanOrEqualTo(1);
-        bottomInset.Should().BeLessThanOrEqualTo(1);
+        item.Bounds.Height.Should().Be(22);
+        topInset.Should().BeLessThanOrEqualTo(2);
+        bottomInset.Should().BeLessThanOrEqualTo(2);
+    }
+
+    private static Border GetMenuLayoutRoot(MenuItem item)
+        => item.GetVisualDescendants()
+            .OfType<Border>()
+            .Single(border => border.Name == "PART_LayoutRoot");
+
+    private static void AssertRenderedSeparatorPalette(Separator separator)
+    {
+        Border[] borders = [.. separator.GetVisualDescendants().OfType<Border>()];
+        borders.Should().HaveCount(2);
+        borders[0].Background.Should().Be(
+            GetThemeResource<IBrush>(Application.Current!, "GitExtensionsMenuRenderedBackgroundBrush"));
+        borders[1].Background.Should().Be(
+            GetThemeResource<IBrush>(Application.Current!, "GitExtensionsMenuRenderedBorderBrush"));
     }
 
     private static void AssertRefLabelRendering(

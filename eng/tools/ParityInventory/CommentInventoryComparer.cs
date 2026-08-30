@@ -7,6 +7,11 @@ internal static class CommentInventoryComparer
 {
     public static InventoryComparison Compare(SourceInventory original, SourceInventory twin)
     {
+        IReadOnlyDictionary<string, string> originalPartMap = original.Parts.ToDictionary(
+            part => part.Path,
+            part => part.ExpectedTwinPath ?? part.Path,
+            StringComparer.Ordinal);
+        IReadOnlySet<string> uniquelyComparableMemberAnchors = GetUniquelyComparableMemberAnchors(original, twin);
         IndexedComment[] originalComments = original.Comments
             .Select((comment, index) => new IndexedComment(index, comment))
             .ToArray();
@@ -15,16 +20,16 @@ internal static class CommentInventoryComparer
             .ToArray();
         Dictionary<CommentGroupKey, IndexedComment[]> originalGroups = originalComments
             .GroupBy(comment => new CommentGroupKey(
-                GetComparablePart(comment.Entry.Part),
-                comment.Entry.Anchor,
+                GetComparablePart(comment.Entry, originalPartMap),
+                GetComparableAnchor(comment.Entry.Anchor, uniquelyComparableMemberAnchors),
                 comment.Entry.Placement))
             .ToDictionary(
                 group => group.Key,
                 group => group.OrderBy(comment => comment.Entry.Order).ToArray());
         Dictionary<CommentGroupKey, IndexedComment[]> twinGroups = twinComments
             .GroupBy(comment => new CommentGroupKey(
-                GetComparablePart(comment.Entry.Part),
-                comment.Entry.Anchor,
+                NormalizeTwinPart(comment.Entry.Part),
+                GetComparableAnchor(comment.Entry.Anchor, uniquelyComparableMemberAnchors),
                 comment.Entry.Placement))
             .ToDictionary(
                 group => group.Key,
@@ -105,10 +110,12 @@ internal static class CommentInventoryComparer
                 .ThenBy(finding => finding.Path, StringComparer.Ordinal)
                 .ThenBy(finding => finding.OriginalValue, StringComparer.Ordinal)
                 .ToArray(),
+            DependentFindings = [],
             AdaptedComments = adaptations
                 .OrderBy(adaptation => adaptation.Path, StringComparer.Ordinal)
                 .ThenBy(adaptation => adaptation.OriginalText, StringComparer.Ordinal)
-                .ToArray()
+                .ToArray(),
+            AcceptedFrameworkDeviations = []
         };
     }
 
@@ -188,9 +195,19 @@ internal static class CommentInventoryComparer
 
     private static AlignmentKind Classify(CommentEntry original, CommentEntry twin)
     {
-        if (original.Kind == twin.Kind && original.Text == twin.Text)
+        if (original.Kind == twin.Kind
+            && original.Text == twin.Text
+            && original.Anchor == twin.Anchor)
         {
             return AlignmentKind.Exact;
+        }
+
+        if (original.Kind == twin.Kind
+            && GetLifecycleAnchor(original.Anchor) == "method:<closed-lifecycle>()"
+            && GetLifecycleAnchor(twin.Anchor) == "method:<closed-lifecycle>()"
+            && NormalizeLifecycleComment(original.Text) == NormalizeLifecycleComment(twin.Text))
+        {
+            return AlignmentKind.Adapted;
         }
 
         return original.Kind == twin.Kind
@@ -241,6 +258,13 @@ internal static class CommentInventoryComparer
             RegexOptions.CultureInvariant);
     }
 
+    private static string NormalizeLifecycleComment(string text) =>
+        Regex.Replace(
+            text,
+            "<param name=\"(?:disposing|e)\">.*?</param>",
+            "<lifecycle-param>",
+            RegexOptions.CultureInvariant);
+
     private static CommentAdaptation NewAdaptation(CommentEntry original, CommentEntry twin) =>
         new()
         {
@@ -289,10 +313,71 @@ internal static class CommentInventoryComparer
     private static string GetPath(CommentEntry comment) =>
         $"comment/{comment.Part}/{comment.Anchor}/{comment.Placement}/{comment.Order}";
 
-    private static string GetComparablePart(string part) =>
+    private static string GetComparablePart(
+        CommentEntry comment,
+        IReadOnlyDictionary<string, string> originalPartMap)
+    {
+        if (GetLifecycleAnchor(comment.Anchor) == "method:<closed-lifecycle>()"
+            && comment.Part.EndsWith(".Designer.cs", StringComparison.Ordinal))
+        {
+            return $"{comment.Part[..^".Designer.cs".Length]}.cs";
+        }
+
+        string part = originalPartMap.GetValueOrDefault(comment.Part, comment.Part);
+        return NormalizeTwinPart(part);
+    }
+
+    private static string NormalizeTwinPart(string part) =>
         part.EndsWith(".axaml.cs", StringComparison.Ordinal)
             ? $"{part[..^".axaml.cs".Length]}.cs"
             : part;
+
+    private static IReadOnlySet<string> GetUniquelyComparableMemberAnchors(
+        SourceInventory original,
+        SourceInventory twin)
+    {
+        HashSet<string> uniqueOriginal = original.Members
+            .GroupBy(GetRelaxedMemberAnchor, StringComparer.Ordinal)
+            .Where(group => group.Count() == 1)
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        HashSet<string> uniqueTwin = twin.Members
+            .GroupBy(GetRelaxedMemberAnchor, StringComparer.Ordinal)
+            .Where(group => group.Count() == 1)
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        uniqueOriginal.IntersectWith(uniqueTwin);
+        return uniqueOriginal;
+    }
+
+    private static string GetComparableAnchor(string anchor, IReadOnlySet<string> uniquelyComparableMemberAnchors)
+    {
+        string lifecycleAnchor = GetLifecycleAnchor(anchor);
+        if (lifecycleAnchor != anchor)
+        {
+            return lifecycleAnchor;
+        }
+
+        string relaxedAnchor = GetRelaxedCommentAnchor(anchor);
+        string finalSegment = relaxedAnchor[(relaxedAnchor.LastIndexOf('/') + 1)..];
+        return uniquelyComparableMemberAnchors.Contains(finalSegment) ? relaxedAnchor : anchor;
+    }
+
+    private static string GetLifecycleAnchor(string anchor) =>
+        anchor is "method:Dispose(bool disposing)" or "method:OnClosed(EventArgs e)"
+            ? "method:<closed-lifecycle>()"
+            : anchor;
+
+    private static string GetRelaxedMemberAnchor(MemberEntry member) => $"{member.Kind}:{member.Name}";
+
+    private static string GetRelaxedCommentAnchor(string anchor) =>
+        string.Join(
+            "/",
+            anchor.Split('/').Select(segment =>
+            {
+                int parameterList = segment.IndexOf('(');
+                return parameterList < 0 ? segment : segment[..parameterList];
+            }));
 
     private enum AlignmentKind
     {

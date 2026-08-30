@@ -11,8 +11,6 @@ using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitUI.CommandsDialogs.WorktreeDialog;
 
-// Twin of GitUI/CommandsDialogs/WorktreeDialog/FormCreateWorktree.cs. The branch list
-// remains code-behind driven and the original worktree command construction is retained.
 public sealed partial class FormCreateWorktree : GitExtensionsDialog
 {
     private readonly CancellationTokenSequence _branchesLoadSequence = new();
@@ -131,11 +129,6 @@ public sealed partial class FormCreateWorktree : GitExtensionsDialog
         }
     }
 
-    private void btnCreateWorktree_Click(object? sender, EventArgs e)
-    {
-        CreateWorktree();
-    }
-
     private void txtNewBranchName_Leave(object? sender, EventArgs e)
     {
         NormaliseNewBranchName();
@@ -152,6 +145,11 @@ public sealed partial class FormCreateWorktree : GitExtensionsDialog
         int caretPosition = txtNewBranchName.CaretIndex;
         txtNewBranchName.Text = _branchNameNormaliser.Normalise(branchName, _gitBranchNameOptions);
         txtNewBranchName.CaretIndex = caretPosition;
+    }
+
+    private void btnCreateWorktree_Click(object? sender, EventArgs e)
+    {
+        CreateWorktree();
     }
 
     private void CreateWorktree()
@@ -180,6 +178,9 @@ public sealed partial class FormCreateWorktree : GitExtensionsDialog
 
     private GitArgumentBuilder CreateWorktreeCommand(IGitModule module, string relativePath, string newBranchOption)
     {
+        // https://git-scm.com/docs/git-worktree
+        // Get the default value, set if unset in config.
+        // Similar in DiffHighlightService.
         const string command = "worktree";
         GitCommandConfiguration commandConfiguration = new();
         IReadOnlyList<GitConfigItem> items = GitCommandConfiguration.Default.Get(command);

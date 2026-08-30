@@ -34,7 +34,7 @@ public partial class FormOpenDirectory : GitExtensionsForm
         Load.Click += LoadClick;
         folderBrowserButton.Click += folderBrowserButton_Click;
         folderGoUpButton.Click += folderGoUpButton_Click;
-        _NO_TRANSLATE_Directory.KeyDown += DirectoryKeyDown;
+        _NO_TRANSLATE_Directory.KeyDown += DirectoryKeyPress;
         _NO_TRANSLATE_Directory.PropertyChanged += (sender, args) =>
         {
             if (args.Property == ComboBox.TextProperty)
@@ -48,6 +48,18 @@ public partial class FormOpenDirectory : GitExtensionsForm
         _NO_TRANSLATE_Directory.ItemsSource = GetDirectories(currentModule, repositoryHistory);
 
         _NO_TRANSLATE_Directory.Focus();
+    }
+
+    protected override void OnRuntimeLoad(EventArgs e)
+    {
+        base.OnRuntimeLoad(e);
+
+        // WinForms records whole-window minimum/maximum sizes. Avalonia sizes the client area,
+        // so the AXAML bounds retain the corresponding 434..784 by 77 logical-DIP range.
+        MinWidth = 434;
+        MaxWidth = 784;
+        MinHeight = 77;
+        MaxHeight = 77;
     }
 
     private static IReadOnlyList<string> GetDirectories(IGitModule? currentModule, IEnumerable<Repository> repositoryHistory)
@@ -108,7 +120,7 @@ public partial class FormOpenDirectory : GitExtensionsForm
         MessageBoxes.Show(this, _warningOpenFailed.Text, TranslatedStrings.Error, WinFormsShims.MessageBoxButtons.OK, WinFormsShims.MessageBoxIcon.Error);
     }
 
-    private void DirectoryKeyDown(object? sender, KeyEventArgs e)
+    private void DirectoryKeyPress(object? sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter)
         {
@@ -191,6 +203,15 @@ public partial class FormOpenDirectory : GitExtensionsForm
 
         public ComboBox Directory => _form._NO_TRANSLATE_Directory;
         public Button OpenButton => _form.Load;
+        public Button BrowseButton => _form.folderBrowserButton;
+        public Button GoUpButton => _form.folderGoUpButton;
+
+        public void GoUp() => _form.folderGoUpButton_Click(_form.folderGoUpButton, EventArgs.Empty);
+
+        public void UpdateDirectoryState() => _form._NO_TRANSLATE_Directory_TextChanged(_form._NO_TRANSLATE_Directory, EventArgs.Empty);
+
+        public static IReadOnlyList<string> GetDirectories(IGitModule? currentModule, IEnumerable<Repository> repositoryHistory)
+            => FormOpenDirectory.GetDirectories(currentModule, repositoryHistory);
 
         public static IGitModule? OpenGitRepository(IGitExecutorProvider executorProvider, string path, ILocalRepositoryManager localRepositoryManager)
             => FormOpenDirectory.OpenGitRepository(executorProvider, path, localRepositoryManager);

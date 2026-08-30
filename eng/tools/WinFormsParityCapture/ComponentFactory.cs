@@ -1,19 +1,26 @@
 ﻿using GitCommands;
 using GitCommands.Git;
+using GitCommands.Logging;
 using GitCommands.UserRepositoryHistory;
 using GitExtensions.Extensibility;
 using GitExtensions.Extensibility.Git;
 using GitExtensions.ParityCapture;
 using GitExtensions.Plugins.Gource;
+using GitExtUtils;
+using GitExtUtils.GitUI.Theming;
 using GitUI;
 using GitUI.CommandsDialogs;
+using GitUI.CommandsDialogs.AboutBoxDialog;
 using GitUI.CommandsDialogs.BrowseDialog;
 using GitUI.CommandsDialogs.BrowseDialog.DashboardControl;
+using GitUI.CommandsDialogs.CommitDialog;
 using GitUI.CommandsDialogs.RepoHosting;
 using GitUI.CommandsDialogs.SettingsDialog;
 using GitUI.CommandsDialogs.SettingsDialog.Pages;
 using GitUI.CommitInfo;
+using GitUI.HelperDialogs;
 using GitUI.LeftPanel;
+using GitUI.SettingControlBindings;
 using GitUI.UserControls;
 using GitUI.UserControls.RevisionGrid;
 using GitUI.UserControls.Settings;
@@ -23,25 +30,55 @@ namespace WinFormsParityCapture;
 
 internal static class ComponentFactory
 {
-    public static Control Create(CaptureComponentPlan component, GitUICommands commands)
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, RepositoryHostCaptureFixture> RepositoryHostFixtures = new();
+
+    public static Control Create(CaptureComponentPlan component, GitUICommands commands, CaptureStatePlan state)
     {
+        // parity-scaffolding: The real application initialises this before constructing About/EnvironmentInfo.
+        UserEnvironmentInformation.Initialise("9999999999999999999999999999999999abcdef", isDirty: true);
         Control control = component.TypeName switch
         {
             "GitUI.CommandsDialogs.FormBrowse" => new FormBrowse(commands, new BrowseArguments()),
             "GitUI.CommandsDialogs.FormCommit" => new FormCommit(commands),
+            "GitUI.CommandsDialogs.FormFileHistory" => new FormFileHistory(commands, "src/App.cs", CreateRevision(commands)),
             "GitUI.CommandsDialogs.FormStash" => new FormStash(commands),
+            "GitUI.CommandsDialogs.FormVerify" => new FormVerify(commands),
+            "GitUI.CommandsDialogs.FormPull" => new FormPull(commands, "main", "origin", GitPullAction.Merge),
+            "GitUI.CommandsDialogs.FormPush" => new FormPush(commands, "main"),
+            "GitUI.CommandsDialogs.FormRemotes" => new FormRemotes(commands) { PreselectRemoteOnLoad = "origin" },
             "GitUI.CommandsDialogs.FormSettings" => new FormSettings(commands),
             "GitUI.CommandsDialogs.FormDiff" => CreateFormDiff(commands),
             "GitUI.CommandsDialogs.FormCompareToBranch" => new FormCompareToBranch(commands, commands.Module.RevParse("HEAD")),
             "GitUI.CommandsDialogs.FormFormatPatch" => new FormFormatPatch(commands),
+            "GitUI.CommandsDialogs.FormBlame" => CreateFormBlame(commands),
+            "GitUI.CommandsDialogs.FormLog" => new FormLog(commands),
+            "GitUI.CommandsDialogs.FormAddToGitIgnore" => new FormAddToGitIgnore(commands, localExclude: false, "src/*.cs"),
+            "GitUI.CommandsDialogs.FormGitIgnore" => new FormGitIgnore(commands, localExclude: false),
+            "GitUI.CommandsDialogs.FormGitAttributes" => new FormGitAttributes(commands),
+            "GitUI.CommandsDialogs.FormMailMap" => new FormMailMap(commands),
+            "GitUI.CommandsDialogs.FormCleanupRepository" => new FormCleanupRepository(commands),
+            "GitUI.CommandsDialogs.BrowseDialog.FormBisect" => CreateFormBisect(commands),
+            "GitUI.CommandsDialogs.FormSparseWorkingCopy" => new FormSparseWorkingCopy(commands),
+            "GitUI.CommandsDialogs.FormDeleteRemoteBranch" => new FormDeleteRemoteBranch(commands, "origin/feature/delete-me"),
+            "GitUI.HelperDialogs.FormResetAnotherBranch" => FormResetAnotherBranch.Create(commands, CreateRevision(commands)),
+            "GitUI.CommandsDialogs.CommitDialog.FormCommitTemplateSettings" => new FormCommitTemplateSettings(commands),
+            "GitUI.CommandsDialogs.FormAbout" => new FormAbout(),
+            "GitUI.CommandsDialogs.EnvironmentInfo" => new EnvironmentInfo(),
+            "GitUI.CommandsDialogs.FormCommandlineHelp" => new FormCommandlineHelp(),
+            "GitUI.CommandsDialogs.BrowseDialog.FormDonate" => new FormDonate(),
+            "GitUI.CommandsDialogs.BrowseDialog.FormChangeLog" => new FormChangeLog(),
+            "GitUI.CommandsDialogs.BrowseDialog.FormOpenDirectory" =>
+                new FormOpenDirectory(commands.GetRequiredService<IGitExecutorProvider>(), commands.Module),
+            "GitUI.CommandsDialogs.AboutBoxDialog.FormContributors" => new FormContributors(),
+            "GitUI.CommandsDialogs.BrowseDialog.FormGitCommandLog" => CreateGitCommandLog(commands),
             "GitUI.CommandsDialogs.BrowseDialog.FormGoToCommit" => new FormGoToCommit(commands),
             "GitUI.CommandsDialogs.FormCheckoutRevision" => CreateCheckoutRevision(commands),
             "GitUI.CommandsDialogs.RepoHosting.CreatePullRequestForm" =>
-                new CreatePullRequestForm(commands, RepositoryHostCaptureFixture.Create(commands), null, null),
+                CreateCreatePullRequestForm(component.TypeName, state.Id, commands),
             "GitUI.CommandsDialogs.RepoHosting.ForkAndCloneForm" =>
-                new ForkAndCloneForm(commands, RepositoryHostCaptureFixture.Create(commands), null),
+                CreateForkAndCloneForm(component.TypeName, state.Id, commands),
             "GitUI.CommandsDialogs.RepoHosting.ViewPullRequestsForm" =>
-                new ViewPullRequestsForm(commands, RepositoryHostCaptureFixture.Create(commands)),
+                CreateViewPullRequestsForm(component.TypeName, state.Id, commands),
             "GitUI.CommandsDialogs.SearchControl" => CreateSearchControl(),
             "GitUI.CommandsDialogs.SearchWindow" => CreateSearchWindow(),
             "GitUI.CommitInfo.CommitInfo" => CreateCommitInfo(),
@@ -61,21 +98,50 @@ internal static class ComponentFactory
                 CreateSettingsPage(new FormBrowseRepoSettingsPage(commands)),
             "GitUI.CommandsDialogs.SettingsDialog.Pages.ShellExtensionSettingsPage" =>
                 CreateSettingsPage(new ShellExtensionSettingsPage(commands)),
+            "GitUI.SettingControlBindings.SettingControlBindingsCaptureSurface" =>
+                new SettingControlBindingsCaptureSurface(),
+            "GitUI.SettingControlBindings.SettingControlBindingsNullCaptureSurface" =>
+                new SettingControlBindingsNullCaptureSurface(),
             "GitExtensions.Plugins.Gource.GourceStart" => new GourceStart(string.Empty, null!, string.Empty),
             _ => CreateParameterless(component.TypeName)
         };
         PrepareInitialSize(control);
-        foreach ((string fieldName, string text) in component.TextValues)
-        {
-            if (FindFieldValue(control, fieldName) is not Control target)
-            {
-                throw new InvalidDataException($"Text seed field '{fieldName}' was not found on {component.TypeName}.");
-            }
-
-            target.Text = text;
-        }
+        ApplyTextValues(control, component);
 
         return control;
+    }
+
+    private static CreatePullRequestForm CreateCreatePullRequestForm(
+        string componentType,
+        string stateId,
+        GitUICommands commands)
+    {
+        RepositoryHostCaptureFixture fixture = RepositoryHostCaptureFixture.Create(commands, componentType, stateId);
+        CreatePullRequestForm form = new(commands, fixture.Host, null, null);
+        RepositoryHostFixtures.Add(form, fixture);
+        return form;
+    }
+
+    private static ForkAndCloneForm CreateForkAndCloneForm(
+        string componentType,
+        string stateId,
+        GitUICommands commands)
+    {
+        RepositoryHostCaptureFixture fixture = RepositoryHostCaptureFixture.Create(commands, componentType, stateId);
+        ForkAndCloneForm form = new(commands, fixture.Host, null);
+        RepositoryHostFixtures.Add(form, fixture);
+        return form;
+    }
+
+    private static ViewPullRequestsForm CreateViewPullRequestsForm(
+        string componentType,
+        string stateId,
+        GitUICommands commands)
+    {
+        RepositoryHostCaptureFixture fixture = RepositoryHostCaptureFixture.Create(commands, componentType, stateId);
+        ViewPullRequestsForm form = new(commands, fixture.Host);
+        RepositoryHostFixtures.Add(form, fixture);
+        return form;
     }
 
     // parity-scaffolding: Standalone settings pages are normally loaded by FormSettings.
@@ -115,6 +181,16 @@ internal static class ComponentFactory
         FormCheckoutRevision form = new(commands);
         form.SetRevision("HEAD");
         return form;
+    }
+
+    // parity-scaffolding: Supplies FormBisect's original RevisionGridControl ownership contract.
+    private static FormBisect CreateFormBisect(GitUICommands commands)
+    {
+        RevisionGridControl revisionGrid = new()
+        {
+            UICommandsSource = new CaptureCommandsSource(commands),
+        };
+        return new FormBisect(revisionGrid);
     }
 
     // parity-scaffolding: Closes the open generic capture boundary with representative paths.
@@ -163,6 +239,16 @@ internal static class ComponentFactory
         CaptureCommandsSource source = new(commands);
         switch (control)
         {
+            case FormAbout formAbout:
+                ((System.Windows.Forms.Timer?)FindFieldValue(formAbout, "thanksTimer"))?.Stop();
+                break;
+            case FormRemotes formRemotes:
+                // parity-scaffolding: The original form defers its first repository-backed
+                // initialization to Application.Idle. The isolated worker pumps messages
+                // deterministically, so drive that same original callback before any focus
+                // state can enter a remote URL control.
+                InvokeNonPublic(formRemotes, "application_Idle", null!, EventArgs.Empty);
+                break;
             case CommitInfo commitInfo:
                 commitInfo.UICommandsSource = source;
                 commitInfo.Revision = CreateRevision(commands);
@@ -223,7 +309,12 @@ internal static class ComponentFactory
                 break;
         }
 
-        // parity-scaffolding: Load handlers may replace plan seeds; the shared plan remains authoritative.
+        ApplyTextValues(control, component);
+    }
+
+    // parity-scaffolding: Load and asynchronous handlers may replace plan seeds; the shared plan remains authoritative.
+    internal static void ApplyTextValues(Control control, CaptureComponentPlan component)
+    {
         foreach ((string fieldName, string text) in component.TextValues)
         {
             if (FindFieldValue(control, fieldName) is not Control target)
@@ -231,15 +322,69 @@ internal static class ComponentFactory
                 throw new InvalidDataException($"Text seed field '{fieldName}' was not found on {component.TypeName}.");
             }
 
-            target.Text = text;
+            // parity-scaffolding: Capture plans use platform-neutral LF; WinForms multiline
+            // controls require the Windows newline sequence to preserve line boundaries.
+            target.Text = text.Replace("\r\n", "\n").Replace('\r', '\n').Replace("\n", Environment.NewLine);
         }
     }
 
     // parity-scaffolding: Async revision loading can settle on a stash or artificial row at
     // different times in isolated workers; every paired state must start from repository HEAD.
-    public static void PrepareCaptureState(Control control, IGitUICommands commands)
+    public static void PrepareCaptureState(
+        Control control,
+        IGitUICommands commands,
+        CaptureStatePlan state)
     {
-        if (control is not RevisionGridControl revisionGrid)
+        PrepareRepositoryHostCaptureState(control, state);
+
+        ChecklistSettingsPage? checklist = EnumerateSelfAndDescendants(control)
+            .OfType<ChecklistSettingsPage>()
+            .SingleOrDefault();
+        if (checklist is not null)
+        {
+            SeedChecklist(checklist);
+        }
+
+        if (control is FormBlame)
+        {
+            WaitForBlameContent(control);
+        }
+
+        if (control is FormAddToGitIgnore)
+        {
+            WaitForIgnorePreview(control);
+        }
+
+        if (control is FormGitIgnore)
+        {
+            WaitForEditorContent(control, "_NO_TRANSLATE_GitIgnoreEdit", ".gitignore");
+        }
+
+        if (control is FormGitAttributes)
+        {
+            WaitForEditorContent(control, "_NO_TRANSLATE_GitAttributesText", ".gitattributes");
+        }
+
+        if (control is FormMailMap)
+        {
+            WaitForEditorContent(control, "_NO_TRANSLATE_MailMapText", ".mailmap");
+        }
+
+        if (control is FormSparseWorkingCopy)
+        {
+            GitUI.Editor.FileViewer editor = EnumerateSelfAndDescendants(control)
+                .OfType<GitUI.Editor.FileViewer>()
+                .Single();
+            WaitForEditorContent(editor, ".git/info/sparse-checkout");
+        }
+
+        RevisionGridControl? revisionGrid = control as RevisionGridControl;
+        if (revisionGrid is null && control is FormLog)
+        {
+            revisionGrid = (RevisionGridControl?)FindFieldValue(control, "RevisionGrid");
+        }
+
+        if (revisionGrid is null)
         {
             return;
         }
@@ -273,6 +418,11 @@ internal static class ComponentFactory
             ?? throw new CaptureStateUnsupportedException("The original revision grid did not expose its selected-row state.");
         ObjectId head = commands.Module.RevParse("HEAD");
         WaitForStableHeadSelection();
+
+        if (control is FormLog)
+        {
+            WaitForLogDiffContent(control);
+        }
 
         // parity-scaffolding: Data loading and visible-row graph rendering settle independently;
         // capture only after the product's background renderer publishes its measured width.
@@ -330,6 +480,199 @@ internal static class ComponentFactory
         }
     }
 
+    private static void PrepareRepositoryHostCaptureState(Control control, CaptureStatePlan state)
+    {
+        if (control is CreatePullRequestForm)
+        {
+            ComboBox targetRepositories = RequireField<ComboBox>("_pullReqTargetsCB");
+            ComboBox sourceBranches = RequireField<ComboBox>("_yourBranchesCB");
+            ComboBox targetBranches = RequireField<ComboBox>("_remoteBranchesCB");
+            Button create = RequireField<Button>("_createBtn");
+            if (state.Id == "initial.loading")
+            {
+                WaitUntil(
+                    () => control.Controls.OfType<LoadingControl>().Count() == 1
+                          && targetRepositories.Items.Count == 0
+                          && !create.Enabled,
+                    "The Create Pull Request initial provider mask did not become stable.");
+                return;
+            }
+
+            if (state.Id == "branches.loading")
+            {
+                WaitUntil(
+                    () => !control.Controls.OfType<LoadingControl>().Any()
+                          && targetRepositories.Items.Count > 0
+                          && sourceBranches.Items.Count == 0
+                          && targetBranches.Items.Count == 0
+                          && !create.Enabled,
+                    "The Create Pull Request branch-loading state did not become stable.");
+                return;
+            }
+
+            WaitUntil(
+                () => targetRepositories.Items.Count > 0
+                      && sourceBranches.Items.Count > 0
+                      && targetBranches.Items.Count > 0
+                      && create.Enabled,
+                "The Create Pull Request provider state did not settle.");
+            return;
+        }
+
+        if (control is ForkAndCloneForm)
+        {
+            ListView repositories = RequireField<ListView>("myReposLV");
+            Label help = RequireField<Label>("helpTextLbl");
+            if (state.Id == "initial.loading")
+            {
+                WaitUntil(
+                    () => repositories.Items.Count == 1
+                          && repositories.Items[0].Text.Contains("LOADING", StringComparison.Ordinal),
+                    "The Fork and Clone owned-repository loading row did not become stable.");
+                return;
+            }
+
+            if (state.Id == "owned.error")
+            {
+                WaitUntil(
+                    () => repositories.Items.Count == 0
+                          && help.Text.Contains("Deterministic owned repository failure", StringComparison.Ordinal),
+                    "The Fork and Clone owned-repository error did not become stable.");
+                return;
+            }
+
+            WaitUntil(
+                () => repositories.Items.Count > 0
+                      && !repositories.Items[0].Text.Contains("LOADING", StringComparison.Ordinal),
+                "The Fork and Clone owned-repository list did not settle.");
+            if (state.Id is "protocol.open" or "clone.hover" or "clone.pressed")
+            {
+                repositories.Items[0].Selected = true;
+                repositories.Select();
+                Application.DoEvents();
+                if (state.Id == "protocol.open")
+                {
+                    WaitUntil(
+                        () => RequireField<ComboBox>("ProtocolDropdownList").Items.Count > 0,
+                        "The selected repository did not publish its clone protocols.");
+                }
+            }
+
+            return;
+        }
+
+        if (control is ViewPullRequestsForm)
+        {
+            ComboBox providers = RequireField<ComboBox>("_selectHostedRepoCB");
+            ListView pullRequests = RequireField<ListView>("_pullRequestsList");
+            FileStatusList files = RequireField<FileStatusList>("_fileStatusList");
+            GitUI.Editor.FileViewer viewer = RequireField<GitUI.Editor.FileViewer>("_diffViewer");
+            if (state.Id == "initial.loading")
+            {
+                WaitUntil(
+                    () => control.Controls.OfType<LoadingControl>().Count() == 1
+                          && providers.Items.Count == 0,
+                    "The View Pull Requests initial provider mask did not become stable.");
+                return;
+            }
+
+            if (state.Id == "provider.empty")
+            {
+                WaitUntil(
+                    () => !control.Controls.OfType<LoadingControl>().Any()
+                          && providers.Items.Count == 0
+                          && pullRequests.Items.Count == 0,
+                    "The View Pull Requests empty-provider state did not settle.");
+                return;
+            }
+
+            if (state.Id == "pull-requests.loading")
+            {
+                WaitUntil(
+                    () => !control.Controls.OfType<LoadingControl>().Any()
+                          && providers.Items.Count > 0
+                          && !providers.Enabled
+                          && pullRequests.Items.Count == 1
+                          && pullRequests.Items[0].Tag is null,
+                    "The View Pull Requests provider list did not enter its loading state.",
+                    () => $"mask={control.Controls.OfType<LoadingControl>().Count()}, "
+                          + $"providers={providers.Items.Count}/{providers.Enabled}, "
+                          + $"pullRequests={pullRequests.Items.Count}/"
+                          + $"{(pullRequests.Items.Count > 0 ? pullRequests.Items[0].Text : "<empty>")}");
+                return;
+            }
+
+            WaitUntil(
+                () => providers.Items.Count > 0
+                      && providers.Enabled
+                      && pullRequests.Items.Count > 0
+                      && pullRequests.Items[0].Tag is not null
+                      && files.GitItemStatuses.Count > 0
+                      && !string.IsNullOrWhiteSpace(viewer.GetText()),
+                "The View Pull Requests provider and visible diff state did not settle.",
+                () => $"providers={providers.Items.Count}/{providers.Enabled}, "
+                      + $"pullRequests={pullRequests.Items.Count}, files={files.GitItemStatuses.Count}, "
+                      + $"viewerText={viewer.GetText().Length}");
+        }
+
+        T RequireField<T>(string fieldName) where T : class
+            => FindFieldValue(control, fieldName) as T
+               ?? throw new CaptureStateUnsupportedException(
+                   $"The original {control.GetType().Name} did not expose '{fieldName}'.");
+
+        static void WaitUntil(Func<bool> condition, string message, Func<string>? details = null)
+        {
+            System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            while (!condition() && stopwatch.Elapsed < TimeSpan.FromSeconds(15))
+            {
+                Application.DoEvents();
+                Thread.Sleep(10);
+            }
+
+            if (!condition())
+            {
+                string suffix = details is null ? string.Empty : $" ({details()})";
+                throw new CaptureStateNotReadyException(message + suffix);
+            }
+        }
+    }
+
+    // parity-scaffolding: The settings shell must not inherit machine-specific registry, shell-tool, or Git configuration.
+    private static void SeedChecklist(ChecklistSettingsPage checklist)
+    {
+        (string Name, string Message, bool Valid)[] rows =
+        [
+            ("GitFound", "Git 2.52.0 is found on your computer.", true),
+            ("UserNameSet", "A username and an email address are configured.", true),
+            ("MergeTool", "You need to configure merge tool in order to solve merge conflicts.", false),
+            ("DiffTool", "You should configure a diff tool to show file diff in external program.", false),
+            ("ShellExtensionsRegistered", "Shell extensions registered properly.", true),
+            ("GitBinFound", "Linux tools (sh) not found. To solve this problem you can set the correct path in settings.", false),
+            ("GitExtensionsInstall", "Git Extensions is properly registered.", true),
+            ("SshConfig", "Default SSH client, OpenSSH, will be used.", true),
+            ("translationConfig", "There is no language configured for Git Extensions.", false),
+        ];
+        foreach ((string name, string message, bool valid) in rows)
+        {
+            Button status = EnumerateSelfAndDescendants(checklist).OfType<Button>().Single(button => button.Name == name);
+            Button repair = EnumerateSelfAndDescendants(checklist).OfType<Button>().Single(
+                button => button.Name == $"{name}_Fix");
+            status.Text = message;
+            status.Visible = true;
+            status.BackColor = valid ? OtherColors.BrightGreen : OtherColors.BrightRed;
+            status.ForeColor = ColorHelper.GetTextColor(status.BackColor);
+            repair.Visible = !valid;
+        }
+
+        Button gcm = EnumerateSelfAndDescendants(checklist).OfType<Button>().Single(button => button.Name == "GcmDetected");
+        Button gcmFix = EnumerateSelfAndDescendants(checklist).OfType<Button>().Single(button => button.Name == "GcmDetectedFix");
+        gcm.Visible = false;
+        gcmFix.Visible = false;
+        CheckBox checkAtStartup = EnumerateSelfAndDescendants(checklist).OfType<CheckBox>().Single(checkBox => checkBox.Name == "CheckAtStartup");
+        checkAtStartup.Checked = true;
+        checklist.PerformLayout();
+    }
+
     internal static bool IsRevisionGridSelectionReady(
         bool isRefreshing,
         bool isDataLoadComplete,
@@ -346,7 +689,60 @@ internal static class ComponentFactory
     // replaced HEAD after preparation or if the real opening handlers did not finish.
     public static void VerifyCaptureState(Control control, IGitUICommands commands, CaptureStatePlan state)
     {
-        if (control is not RevisionGridControl revisionGrid)
+        if (control is ViewPullRequestsForm && state.Id == "discussion.focused")
+        {
+            WebBrowser discussion = (WebBrowser?)FindFieldValue(control, "_discussionWB")
+                ?? throw new CaptureStateUnsupportedException(
+                    "The original View Pull Requests form did not expose its discussion browser.");
+            ListView pullRequests = (ListView?)FindFieldValue(control, "_pullRequestsList")
+                ?? throw new CaptureStateUnsupportedException(
+                    "The original View Pull Requests form did not expose its pull-request list.");
+
+            // parity-scaffolding: The native WebBrowser does not create its child window until
+            // the Comments tab is displayed. Re-drive the form's real selection event after that
+            // point so the product assigns its discussion HTML to the live browser handle.
+            if (!IsDiscussionBrowserReady(discussion) && pullRequests.Items.Count > 0)
+            {
+                pullRequests.Items[0].Selected = false;
+                Application.DoEvents();
+                pullRequests.Items[0].Selected = true;
+                Application.DoEvents();
+            }
+
+            DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+            while (!IsDiscussionBrowserReady(discussion) && DateTime.UtcNow < deadline)
+            {
+                Application.DoEvents();
+                Thread.Sleep(10);
+            }
+
+            if (!IsDiscussionBrowserReady(discussion))
+            {
+                string bodyText = discussion.Document?.Body?.InnerText ?? string.Empty;
+                throw new CaptureStateNotReadyException(
+                    "The original discussion browser did not render its expected native content "
+                    + $"(visible={discussion.Visible}, readyState={discussion.ReadyState}, "
+                    + $"documentTextLength={discussion.DocumentText?.Length ?? 0}, "
+                    + $"bodyTextLength={bodyText.Length}, bodyText='{Abbreviate(bodyText, 160)}').");
+            }
+
+            discussion.Select();
+            Application.DoEvents();
+        }
+
+        if (state.Id == "viewer-toolbar.hover"
+            && FindFieldValue(control, "fileviewerToolbar") is not ToolStrip { Visible: true })
+        {
+            throw new CaptureStateNotReadyException("The original file-viewer toolbar did not become visible through its mouse-move route.");
+        }
+
+        RevisionGridControl? revisionGrid = control as RevisionGridControl;
+        if (revisionGrid is null && control is FormLog)
+        {
+            revisionGrid = (RevisionGridControl?)FindFieldValue(control, "RevisionGrid");
+        }
+
+        if (revisionGrid is null)
         {
             return;
         }
@@ -416,6 +812,21 @@ internal static class ComponentFactory
             => (ToolStripMenuItem?)FindFieldValue(revisionGrid, fieldName)
                ?? throw new CaptureStateUnsupportedException(
                    $"The original revision grid did not expose menu item '{fieldName}'.");
+    }
+
+    internal static bool IsDiscussionBrowserReady(WebBrowser browser)
+        => browser.Visible
+           && browser.ReadyState == WebBrowserReadyState.Complete
+           && browser.Document?.Body?.InnerText?.Contains(
+               "The native discussion surface preserves multiline text.",
+               StringComparison.Ordinal) is true;
+
+    private static string Abbreviate(string value, int maximumLength)
+    {
+        string singleLine = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return singleLine.Length <= maximumLength
+            ? singleLine
+            : $"{singleLine[..maximumLength]}...";
     }
 
     internal static bool IsRevisionGridHeadContextMenuReady(
@@ -549,12 +960,25 @@ internal static class ComponentFactory
     // parity-scaffolding: Cancel the original grid's asynchronous refresh before WinForms disposal joins it.
     public static void CleanupBeforeDispose(Control control)
     {
+        if (RepositoryHostFixtures.TryGetValue(control, out RepositoryHostCaptureFixture? fixture))
+        {
+            fixture.Dispose();
+            RepositoryHostFixtures.Remove(control);
+        }
+
         RevisionGridControl? revisionGrid = control as RevisionGridControl;
         if (revisionGrid is null
             && control is FormFormatPatch
             && FindFieldValue(control, "RevisionGrid") is RevisionGridControl nestedRevisionGrid)
         {
             revisionGrid = nestedRevisionGrid;
+        }
+
+        if (revisionGrid is null
+            && control is FormLog
+            && FindFieldValue(control, "RevisionGrid") is RevisionGridControl logRevisionGrid)
+        {
+            revisionGrid = logRevisionGrid;
         }
 
         if (revisionGrid is not null)
@@ -591,6 +1015,119 @@ internal static class ComponentFactory
         ObjectId head = commands.Module.RevParse("HEAD");
         ObjectId parent = commands.Module.RevParse("HEAD~1");
         return new FormDiff(commands, parent, head, "HEAD~1", "HEAD");
+    }
+
+    // parity-scaffolding: Loads the original blame form against the shared deterministic file.
+    private static FormBlame CreateFormBlame(GitUICommands commands)
+        => new(
+            commands,
+            "src/App.cs",
+            commands.Module.GetRevision(commands.Module.GetCurrentCheckout(), loadRefs: true),
+            initialLine: 2);
+
+    // parity-scaffolding: The original single-instance form has a private constructor.
+    private static FormGitCommandLog CreateGitCommandLog(IGitUICommands commands)
+    {
+        CommandLog.Clear();
+        GitModule.GitCommandCache.Clear();
+        GitModule.GitCommandCache.Add(
+            "status --porcelain=v2",
+            "1 .M N... 100644 100644 src/App.cs",
+            string.Empty);
+        ProcessOperation operation = CommandLog.LogProcessStart(
+            "git",
+            "-c core.quotepath=false log --oneline --decorate",
+            commands.Module.WorkingDir);
+        operation.LogProcessEnd(0);
+        return (FormGitCommandLog)CreateNonPublicParameterless(typeof(FormGitCommandLog));
+    }
+
+    private static void WaitForBlameContent(Control control)
+    {
+        GitUI.Editor.FileViewer blameFile = (GitUI.Editor.FileViewer?)FindFieldValue(control, "BlameFile")
+            ?? throw new CaptureStateUnsupportedException("The original blame form did not expose its file viewer.");
+        DateTime deadline = DateTime.UtcNow.AddSeconds(30);
+        while (string.IsNullOrEmpty(blameFile.GetText()) && DateTime.UtcNow < deadline)
+        {
+            Application.DoEvents();
+            Thread.Sleep(25);
+        }
+
+        if (string.IsNullOrEmpty(blameFile.GetText()))
+        {
+            throw new CaptureStateUnsupportedException("The original blame loader did not publish file content before capture.");
+        }
+    }
+
+    private static void WaitForLogDiffContent(Control control)
+    {
+        FileStatusList diffFiles = (FileStatusList?)FindFieldValue(control, "DiffFiles")
+            ?? throw new CaptureStateUnsupportedException("The original log form did not expose its file list.");
+        GitUI.Editor.FileViewer diffViewer = (GitUI.Editor.FileViewer?)FindFieldValue(control, "diffViewer")
+            ?? throw new CaptureStateUnsupportedException("The original log form did not expose its diff viewer.");
+        DateTime deadline = DateTime.UtcNow.AddSeconds(30);
+        while ((diffFiles.AllItemsCount == 0 || string.IsNullOrEmpty(diffViewer.GetText()))
+               && DateTime.UtcNow < deadline)
+        {
+            Application.DoEvents();
+            Thread.Sleep(25);
+        }
+
+        if (diffFiles.AllItemsCount == 0 || string.IsNullOrEmpty(diffViewer.GetText()))
+        {
+            throw new CaptureStateUnsupportedException("The original log form did not publish its selected revision diff before capture.");
+        }
+    }
+
+    private static void WaitForIgnorePreview(Control control)
+    {
+        ListBox preview = (ListBox?)FindFieldValue(control, "_NO_TRANSLATE_Preview")
+            ?? throw new CaptureStateUnsupportedException("The original ignore-pattern form did not expose its preview list.");
+        DateTime deadline = DateTime.UtcNow.AddSeconds(30);
+        while ((!preview.Enabled || preview.Items.Count == 0) && DateTime.UtcNow < deadline)
+        {
+            Application.DoEvents();
+            Thread.Sleep(25);
+        }
+
+        if (!preview.Enabled || preview.Items.Count == 0)
+        {
+            throw new CaptureStateUnsupportedException("The original ignored-files loader did not publish its preview before capture.");
+        }
+    }
+
+    private static void WaitForEditorContent(Control control, string fieldName, string fileName)
+    {
+        GitUI.Editor.FileViewer editor = (GitUI.Editor.FileViewer?)FindFieldValue(control, fieldName)
+            ?? throw new CaptureStateUnsupportedException($"The original {fileName} form did not expose its editor.");
+        WaitForEditorContent(editor, fileName);
+    }
+
+    private static void WaitForEditorContent(GitUI.Editor.FileViewer editor, string fileName)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(30);
+        while (string.IsNullOrEmpty(editor.GetText()) && DateTime.UtcNow < deadline)
+        {
+            Application.DoEvents();
+            Thread.Sleep(25);
+        }
+
+        if (string.IsNullOrEmpty(editor.GetText()))
+        {
+            throw new CaptureStateUnsupportedException($"The original {fileName} loader did not publish file content before capture.");
+        }
+    }
+
+    private static IEnumerable<Control> EnumerateSelfAndDescendants(Control control)
+    {
+        yield return control;
+        foreach (Control child in control.Controls)
+        {
+            foreach (Control descendant in EnumerateSelfAndDescendants(child))
+            {
+                yield return descendant;
+            }
+        }
     }
 
     // parity-scaffolding: Seeds private original state without adding product-facing capture hooks.
@@ -687,6 +1224,17 @@ internal static class ComponentFactory
 
         return (Control?)Activator.CreateInstance(type)
             ?? throw new InvalidOperationException($"{typeName} could not be constructed.");
+    }
+
+    private static Control CreateNonPublicParameterless(Type type)
+    {
+        if (!typeof(Control).IsAssignableFrom(type))
+        {
+            throw new InvalidOperationException($"{type.FullName} is not a Windows Forms control.");
+        }
+
+        return (Control?)Activator.CreateInstance(type, nonPublic: true)
+            ?? throw new InvalidOperationException($"{type.FullName} could not be constructed.");
     }
 
     private static Control CreateWithCommands(string typeName, GitUICommands commands)

@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Avalonia.Controls;
 using GitExtensions.Extensibility;
 using GitExtensions.Extensibility.Plugins;
@@ -28,6 +28,7 @@ public partial class PluginSettingsPage : DistributedSettingsPage
 
     private void CreateSettingsControls()
     {
+        // Gather debug info for exceptions
         StringBuilder state = new();
         try
         {
@@ -58,6 +59,8 @@ public partial class PluginSettingsPage : DistributedSettingsPage
     {
         Validates.NotNull(gitPlugin.Description);
         _gitPlugin = gitPlugin;
+
+        // Description for old plugin setting processing as key
         _settingsContainer = new GitPluginSettingsContainer(gitPlugin.Id, gitPlugin.Description!);
         CreateSettingsControls();
         InitializeComplete();

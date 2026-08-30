@@ -75,42 +75,11 @@ public partial class PatchGrid : GitModuleControl
         TranslateHeader(translation, nameof(CommitHash), CommitHash, "Commit hash");
     }
 
-    public void Initialize()
+    private void DisplayPatches(IReadOnlyList<PatchFile> patchFiles)
     {
-        UpdateState(IsManagingRebase);
-        DisplayPatches(GetPatches());
-    }
-
-    public void RefreshGrid()
-    {
-        Validates.NotNull(PatchFiles);
-        IReadOnlyList<PatchFile> currentPatches = PatchFiles!;
-
-        IReadOnlyList<PatchFile> updatedPatches = GetPatches();
-        for (int i = 0; i < Math.Min(updatedPatches.Count, currentPatches.Count); i++)
-        {
-            updatedPatches[i].IsSkipped = currentPatches[i].IsSkipped;
-        }
-
-        DisplayPatches(updatedPatches);
-    }
-
-    public void SelectCurrentlyApplyingPatch()
-    {
-        PatchFile? applyingPatch = PatchFiles?.FirstOrDefault(patchFile => patchFile.IsNext);
-        if (applyingPatch is null)
-        {
-            return;
-        }
-
-        Patches.SelectedItem = applyingPatch;
-        Patches.ScrollIntoView(applyingPatch);
-    }
-
-    public void SetSkipped(IList<PatchFile> skipped)
-    {
-        ArgumentNullException.ThrowIfNull(skipped);
-        _skipped = skipped;
+        PatchFiles = patchFiles;
+        Patches.ItemsSource = patchFiles.ToArray();
+        SelectCurrentlyApplyingPatch();
     }
 
     private IReadOnlyList<PatchFile> GetInteractiveRebasePatchFiles()
@@ -123,6 +92,10 @@ public partial class PatchGrid : GitModuleControl
         string[] doneCommits = ReadCommitsDataFromRebaseFile(doneFilePath);
         string[] todoCommits = ReadCommitsDataFromRebaseFile(rebaseTodoFilePath);
         string commentChar = Module.GetEffectiveSetting("core.commentchar", defaultValue: "#");
+
+        // Filter comment lines and keep only lines containing at least 3 columns
+        // (action, commit hash and commit subject -- that could contain spaces and be cut in more --)
+        // ex: pick e0d861716540aa1ac83eaa2790ba5e79988b9489 this is the commit subject
         string[][] commitsInfos = [.. doneCommits.Concat(todoCommits)
             .Where(line => !line.StartsWith(commentChar, StringComparison.Ordinal))
             .Select(line => line.Split(Delimiters.Space))
@@ -144,6 +117,7 @@ public partial class PatchGrid : GitModuleControl
         }
         catch (OperationCanceledException)
         {
+            // If retrieve of commit range failed, fall back on getting data commit by commit
             rebasedCommitsRevisions = [];
         }
 
@@ -194,13 +168,6 @@ public partial class PatchGrid : GitModuleControl
                 : [];
     }
 
-    private void DisplayPatches(IReadOnlyList<PatchFile> patchFiles)
-    {
-        PatchFiles = patchFiles;
-        Patches.ItemsSource = patchFiles.ToArray();
-        SelectCurrentlyApplyingPatch();
-    }
-
     private IReadOnlyList<PatchFile> GetPatches()
     {
         string rebaseTodoFilePath = $"{Module.GetRebaseDir()}git-rebase-todo";
@@ -213,6 +180,7 @@ public partial class PatchGrid : GitModuleControl
             return patches;
         }
 
+        // Select commits with `ObjectId` and patches with `Name`
         IEnumerable<PatchFile> skippedPatches = patches
             .TakeWhile(patchFile => !patchFile.IsNext)
             .Where(patchFile => _skipped.Any(skipped =>
@@ -258,6 +226,44 @@ public partial class PatchGrid : GitModuleControl
         }
 
         return patchFiles;
+    }
+
+    public void Initialize()
+    {
+        UpdateState(IsManagingRebase);
+        DisplayPatches(GetPatches());
+    }
+
+    public void RefreshGrid()
+    {
+        Validates.NotNull(PatchFiles);
+        IReadOnlyList<PatchFile> currentPatches = PatchFiles!;
+
+        IReadOnlyList<PatchFile> updatedPatches = GetPatches();
+        for (int i = 0; i < Math.Min(updatedPatches.Count, currentPatches.Count); i++)
+        {
+            updatedPatches[i].IsSkipped = currentPatches[i].IsSkipped;
+        }
+
+        DisplayPatches(updatedPatches);
+    }
+
+    public void SelectCurrentlyApplyingPatch()
+    {
+        PatchFile? applyingPatch = PatchFiles?.FirstOrDefault(patchFile => patchFile.IsNext);
+        if (applyingPatch is null)
+        {
+            return;
+        }
+
+        Patches.SelectedItem = applyingPatch;
+        Patches.ScrollIntoView(applyingPatch);
+    }
+
+    public void SetSkipped(IList<PatchFile> skipped)
+    {
+        ArgumentNullException.ThrowIfNull(skipped);
+        _skipped = skipped;
     }
 
     private static void PopulatePatchHeaders(PatchFile patchFile)

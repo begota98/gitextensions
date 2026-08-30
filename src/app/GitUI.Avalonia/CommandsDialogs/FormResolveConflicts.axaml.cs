@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -19,9 +19,8 @@ using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitUI.CommandsDialogs;
 
-// Twin of GitUI/CommandsDialogs/FormResolveConflicts.cs. The conflicted-files grid is a
-// ListBox showing the file names (the WinForms grid's hidden Author column had no data
-// source upstream either).
+// The conflicted-files grid is a ListBox showing file names; the WinForms grid's hidden Author
+// column has no data source.
 public partial class FormResolveConflicts : GitModuleForm
 {
     #region Translation
@@ -122,7 +121,6 @@ public partial class FormResolveConflicts : GitModuleForm
     }
 
     private readonly IFullPathResolver _fullPathResolver;
-    private readonly CancellationTokenSequence _customDiffToolsSequence = new();
     private ConflictResolutionPreference _solveMergeConflictDialogResult;
     private bool _solveMergeConflictApplyToAll;
     private string? _solveMergeConflictDialogCheckboxText;
@@ -132,6 +130,7 @@ public partial class FormResolveConflicts : GitModuleForm
     private int _filesDeletedLocallyAndModifiedRemotelySolved;
     private int _filesModifiedLocallyAndDeletedRemotelySolved;
     private int _conflictItemsCount;
+    private readonly CancellationTokenSequence _customDiffToolsSequence = new();
     private bool _inTheMiddleOfRebase;
 
     public FormResolveConflicts()
@@ -252,6 +251,9 @@ public partial class FormResolveConflicts : GitModuleForm
                 oldSelectedRow = Math.Max(0, ConflictedFiles.ItemCount - 1);
             }
 
+            // as part of the databinding event, the fist row is selected automatically
+            // if previously another row was selected, we need to reset the selection,
+            // and select the desired row
             if (ConflictedFiles.ItemCount > oldSelectedRow)
             {
                 // Replacing the items source clears the selection; reselect the desired
@@ -1310,6 +1312,8 @@ public partial class FormResolveConflicts : GitModuleForm
                 {
                     Directory.SetCurrentDirectory(Module.WorkingDir);
                     await Task.Run(() => Module.RunMergeTool(fileName: conflict.Filename, customTool: customTool));
+
+                    // "main menu" clicked, cancel dropdown manually, invoke default mergetool
                     Initialize();
                 }
             }

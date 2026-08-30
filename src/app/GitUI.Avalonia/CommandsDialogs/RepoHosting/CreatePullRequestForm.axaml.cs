@@ -6,6 +6,7 @@ using GitExtensions.Extensibility.Git;
 using GitExtensions.Extensibility.Plugins;
 using GitExtUtils;
 using GitExtUtils.GitUI;
+using GitUI.Compat;
 using ResourceManager;
 using WinFormsShims = GitExtensions.Shims.WinForms;
 
@@ -22,15 +23,16 @@ public partial class CreatePullRequestForm : GitModuleForm
     private readonly TranslationString _strRemoteFailToLoadBranches = new("Fail to load target branches");
     private readonly TranslationString _strFailedToLoadTemplate = new("Failed to load PR template from file.");
 
-    private readonly IRepositoryHostPlugin? _repoHost;
+    private readonly IRepositoryHostPlugin _repoHost = null!;
     private IHostedRemote? _currentHostedRemote;
     private readonly string? _chooseRemote;
-    private IReadOnlyList<IHostedRemote> _hostedRemotes = [];
+    private IReadOnlyList<IHostedRemote>? _hostedRemotes;
     private string? _currentBranch;
     private string? _prevTitle;
 
     // Avalonia's designer constructs views before the application initializes ThreadHelper.
-    private readonly TaskManager _operations = GitUI.Compat.DesignTimeTaskManager.Create();
+    // Framework constraint: the Avalonia AsyncLoader owns TaskManager-backed execution.
+    private readonly AsyncLoader _remoteLoader = new();
     private readonly CancellationTokenSequence _targetBranchesSequence = new();
     private readonly CancellationTokenSequence _sourceBranchesSequence = new();
     private readonly CancellationTokenSequence _titleSequence = new();
@@ -65,6 +67,11 @@ public partial class CreatePullRequestForm : GitModuleForm
 
     private void WireControls()
     {
+        // Framework constraint: source AutoSize labels use native TextRenderer preferred widths.
+        WinFormsAutoSizeTextBlock.Attach(label1);
+        WinFormsAutoSizeTextBlock.Attach(label2);
+        WinFormsAutoSizeTextBlock.Attach(label4);
+        WinFormsAutoSizeTextBlock.Attach(label5);
         _pullReqTargetsCB.ItemTemplate = new FuncDataTemplate<IHostedRemote>(
             (remote, _) => new TextBlock { Text = remote?.DisplayData ?? string.Empty },
             supportsRecycling: false);
@@ -79,8 +86,15 @@ public partial class CreatePullRequestForm : GitModuleForm
     {
         base.OnRuntimeLoad(e);
         CreatePullRequestForm_Load(this, e);
+
+        // Framework constraint: WinForms activates the first eligible control by tab order.
+        _yourBranchesCB.Focus();
     }
 
+    /// <summary>
+    /// Clean up any resources being used.
+    /// </summary>
+    /// <param name="e">The window-closed event data.</param>
     protected override void OnClosed(EventArgs e)
     {
         _lifetimeCancellation.Cancel();
@@ -89,7 +103,7 @@ public partial class CreatePullRequestForm : GitModuleForm
         _titleSequence.CancelCurrent();
         _templateSequence.CancelCurrent();
         _createSequence.CancelCurrent();
-        _operations.JoinPendingOperations();
+        _remoteLoader.JoinPendingOperations();
         _targetBranchesSequence.Dispose();
         _sourceBranchesSequence.Dispose();
         _titleSequence.Dispose();
@@ -99,46 +113,54 @@ public partial class CreatePullRequestForm : GitModuleForm
         base.OnClosed(e);
     }
 
-    private void CreatePullRequestForm_Load(object? sender, EventArgs e)
+    private void CreatePullRequestForm_Load(object sender, EventArgs e)
     {
         _createBtn.IsEnabled = false;
         _yourBranchesCB.PlaceholderText = _strLoading.Text;
-        _operations.FileAndForget(() => InitializeAsync(_lifetimeCancellation.Token));
+        this.Mask();
+        _remoteLoader.FileAndForget(() => InitializeAsync(_lifetimeCancellation.Token));
     }
 
     private async Task InitializeAsync(CancellationToken cancellationToken)
     {
-        IReadOnlyList<IHostedRemote> hostedRemotes = await Task.Run(
-            () => GetRepoHost().GetHostedRemotesForModule(),
-            cancellationToken);
-        IHostedRemote[] foreignHostedRemotes = hostedRemotes
-            .Where(remote => !remote.IsOwnedByMe)
-            .ToArray();
-
-        string? currentBranch = _currentBranch;
-        if (string.IsNullOrEmpty(currentBranch) && Module.IsValidGitWorkingDir())
+        try
         {
-            currentBranch = await Task.Run(() => Module.GetSelectedBranch(), cancellationToken);
-        }
+            IHostedRemote[] hostedRemotes = await Task.Run(
+                () => _repoHost.GetHostedRemotesForModule().ToArray(),
+                cancellationToken);
+            IHostedRemote[] foreignHostedRemotes = hostedRemotes
+                .Where(remote => !remote.IsOwnedByMe)
+                .ToArray();
 
-        await _operations.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-        _hostedRemotes = hostedRemotes;
-        _currentBranch = currentBranch ?? string.Empty;
-        if (foreignHostedRemotes.Length == 0)
+            string? currentBranch = _currentBranch;
+            if (string.IsNullOrEmpty(currentBranch) && Module.IsValidGitWorkingDir())
+            {
+                currentBranch = await Task.Run(() => Module.GetSelectedBranch(), cancellationToken);
+            }
+
+            await _remoteLoader.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+            _hostedRemotes = hostedRemotes;
+            _currentBranch = currentBranch ?? string.Empty;
+            if (foreignHostedRemotes.Length == 0)
+            {
+                MessageBoxes.Show(
+                    this,
+                    _strFailedToCreatePullRequest.Text + Environment.NewLine + _strPleaseCloneGitHubRep.Text,
+                    string.Empty,
+                    WinFormsShims.MessageBoxButtons.OK,
+                    WinFormsShims.MessageBoxIcon.Error);
+                Dispatcher.UIThread.Post(Close);
+                return;
+            }
+
+            LoadRemotes(foreignHostedRemotes);
+            LoadMyBranches();
+            LoadPRTemplate();
+        }
+        finally
         {
-            MessageBoxes.Show(
-                this,
-                _strFailedToCreatePullRequest.Text + Environment.NewLine + _strPleaseCloneGitHubRep.Text,
-                string.Empty,
-                WinFormsShims.MessageBoxButtons.OK,
-                WinFormsShims.MessageBoxIcon.Error);
-            Dispatcher.UIThread.Post(Close);
-            return;
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(this.UnMask);
         }
-
-        LoadRemotes(foreignHostedRemotes);
-        LoadMyBranches();
-        LoadPRTemplate();
     }
 
     private void LoadRemotes(IHostedRemote[] foreignHostedRemotes)
@@ -157,7 +179,7 @@ public partial class CreatePullRequestForm : GitModuleForm
     private void LoadPRTemplate()
     {
         CancellationToken cancellationToken = _templateSequence.Next();
-        _operations.FileAndForget(() => LoadPRTemplateAsync(cancellationToken));
+        _remoteLoader.FileAndForget(() => LoadPRTemplateAsync(cancellationToken));
     }
 
     private async Task LoadPRTemplateAsync(CancellationToken cancellationToken)
@@ -171,7 +193,7 @@ public partial class CreatePullRequestForm : GitModuleForm
         try
         {
             string template = await File.ReadAllTextAsync(templatePath, cancellationToken);
-            await _operations.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+            await _remoteLoader.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             _bodyTB.Text = template;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -179,7 +201,7 @@ public partial class CreatePullRequestForm : GitModuleForm
         }
         catch (Exception ex)
         {
-            await _operations.JoinableTaskFactory.SwitchToMainThreadAsync();
+            await _remoteLoader.JoinableTaskFactory.SwitchToMainThreadAsync();
             if (!cancellationToken.IsCancellationRequested)
             {
                 MessageBoxes.Show(
@@ -192,7 +214,7 @@ public partial class CreatePullRequestForm : GitModuleForm
         }
     }
 
-    private void _pullReqTargetsCB_SelectedIndexChanged(object? sender, EventArgs e)
+    private void _pullReqTargetsCB_SelectedIndexChanged(object sender, EventArgs e)
     {
         if (_ignoreFirstRemoteLoading)
         {
@@ -202,19 +224,16 @@ public partial class CreatePullRequestForm : GitModuleForm
         _currentHostedRemote = _pullReqTargetsCB.SelectedItem as IHostedRemote;
         if (_currentHostedRemote is null)
         {
+            _targetBranchesSequence.CancelCurrent();
             _remoteBranchesCB.ItemsSource = Array.Empty<string>();
             UpdateCreateButton();
             return;
         }
 
-        PopulateBranchesComboAndEnableCreateButton(
-            _currentHostedRemote,
-            _remoteBranchesCB,
-            preferredBranch: null,
-            _targetBranchesSequence);
+        PopulateBranchesComboAndEnableCreateButton(_currentHostedRemote, _remoteBranchesCB);
     }
 
-    private IHostedRemote? MyRemote => _hostedRemotes.FirstOrDefault(remote => remote.IsOwnedByMe);
+    private IHostedRemote? MyRemote => _hostedRemotes!.FirstOrDefault(remote => remote.IsOwnedByMe);
 
     private void LoadMyBranches()
     {
@@ -222,32 +241,26 @@ public partial class CreatePullRequestForm : GitModuleForm
         if (myRemote is null)
         {
             _yourBranchesCB.ItemsSource = Array.Empty<string>();
-            UpdateCreateButton();
             return;
         }
 
-        PopulateBranchesComboAndEnableCreateButton(
-            myRemote,
-            _yourBranchesCB,
-            _currentBranch,
-            _sourceBranchesSequence);
+        PopulateBranchesComboAndEnableCreateButton(myRemote, _yourBranchesCB);
     }
 
-    private void PopulateBranchesComboAndEnableCreateButton(
-        IHostedRemote remote,
-        ComboBox comboBox,
-        string? preferredBranch,
-        CancellationTokenSequence sequence)
+    private void PopulateBranchesComboAndEnableCreateButton(IHostedRemote remote, ComboBox comboBox)
     {
+        bool sourceBranches = ReferenceEquals(comboBox, _yourBranchesCB);
+        CancellationTokenSequence sequence = sourceBranches
+            ? _sourceBranchesSequence
+            : _targetBranchesSequence;
         CancellationToken cancellationToken = sequence.Next();
         comboBox.ItemsSource = Array.Empty<string>();
         comboBox.PlaceholderText = _strLoading.Text;
-        UpdateCreateButton();
-        _operations.FileAndForget(
+        _remoteLoader.FileAndForget(
             () => PopulateBranchesComboAndEnableCreateButtonAsync(
                 remote,
                 comboBox,
-                preferredBranch,
+                sourceBranches ? _currentBranch : null,
                 cancellationToken));
     }
 
@@ -270,7 +283,7 @@ public partial class CreatePullRequestForm : GitModuleForm
                 },
                 cancellationToken);
 
-            await _operations.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+            await _remoteLoader.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             string[] branches = snapshot.Branches;
             comboBox.ItemsSource = branches;
             int selectedIndex = !string.IsNullOrEmpty(preferredBranch)
@@ -285,7 +298,15 @@ public partial class CreatePullRequestForm : GitModuleForm
                     branch => string.Equals(branch, snapshot.DefaultBranch, StringComparison.Ordinal));
             }
 
+            string? previousTitle = _titleTB.Text;
             comboBox.SelectedIndex = selectedIndex >= 0 ? selectedIndex : branches.Length > 0 ? 0 : -1;
+
+            // Avalonia may retain index zero while replacing ItemsSource and omit the original selection event.
+            if (ReferenceEquals(comboBox, _yourBranchesCB) && _titleTB.Text == previousTitle)
+            {
+                _yourBranchCB_SelectedIndexChanged(comboBox, EventArgs.Empty);
+            }
+
             UpdateCreateButton();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -293,7 +314,7 @@ public partial class CreatePullRequestForm : GitModuleForm
         }
         catch (Exception ex)
         {
-            await _operations.JoinableTaskFactory.SwitchToMainThreadAsync();
+            await _remoteLoader.JoinableTaskFactory.SwitchToMainThreadAsync();
             if (!cancellationToken.IsCancellationRequested)
             {
                 comboBox.ItemsSource = Array.Empty<string>();
@@ -308,7 +329,7 @@ public partial class CreatePullRequestForm : GitModuleForm
         }
     }
 
-    private void _yourBranchCB_SelectedIndexChanged(object? sender, EventArgs e)
+    private void _yourBranchCB_SelectedIndexChanged(object sender, EventArgs e)
     {
         UpdateCreateButton();
         if (!string.Equals(_prevTitle, _titleTB.Text ?? string.Empty, StringComparison.Ordinal)
@@ -321,7 +342,7 @@ public partial class CreatePullRequestForm : GitModuleForm
         string branch = GetComboText(_yourBranchesCB);
         string expectedTitle = _titleTB.Text ?? string.Empty;
         CancellationToken cancellationToken = _titleSequence.Next();
-        _operations.FileAndForget(
+        _remoteLoader.FileAndForget(
             () => LoadTitleFromCommitAsync(
                 remoteName,
                 branch,
@@ -345,7 +366,7 @@ public partial class CreatePullRequestForm : GitModuleForm
                     .SubstringUntil('\n'),
                 cancellationToken);
 
-            await _operations.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+            await _remoteLoader.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             if (string.Equals(_titleTB.Text ?? string.Empty, expectedTitle, StringComparison.Ordinal))
             {
                 _titleTB.Text = title;
@@ -361,7 +382,7 @@ public partial class CreatePullRequestForm : GitModuleForm
         }
     }
 
-    private void _createBtn_Click(object? sender, EventArgs e)
+    private void _createBtn_Click(object sender, EventArgs e)
     {
         if (_currentHostedRemote is null)
         {
@@ -386,7 +407,7 @@ public partial class CreatePullRequestForm : GitModuleForm
         CancellationToken cancellationToken = _createSequence.Next();
         _createInProgress = true;
         UpdateCreateButton();
-        _operations.FileAndForget(
+        _remoteLoader.FileAndForget(
             () => CreatePullRequestAsync(
                 _currentHostedRemote,
                 sourceBranch,
@@ -411,7 +432,7 @@ public partial class CreatePullRequestForm : GitModuleForm
                     .GetHostedRepository()
                     .CreatePullRequest(sourceBranch, targetBranch, title, body),
                 cancellationToken);
-            await _operations.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+            await _remoteLoader.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             MessageBoxes.Show(
                 this,
                 _strDone.Text,
@@ -425,7 +446,7 @@ public partial class CreatePullRequestForm : GitModuleForm
         }
         catch (Exception ex)
         {
-            await _operations.JoinableTaskFactory.SwitchToMainThreadAsync();
+            await _remoteLoader.JoinableTaskFactory.SwitchToMainThreadAsync();
             if (!cancellationToken.IsCancellationRequested)
             {
                 _createInProgress = false;
@@ -451,9 +472,7 @@ public partial class CreatePullRequestForm : GitModuleForm
     private static string GetComboText(ComboBox comboBox)
         => comboBox.SelectedItem as string ?? comboBox.Text ?? string.Empty;
 
-    private IRepositoryHostPlugin GetRepoHost()
-        => _repoHost ?? throw new InvalidOperationException($"{nameof(CreatePullRequestForm)} was constructed incorrectly.");
-
+    // parity-scaffolding: Exposes repository-host state and actions to the cross-platform parity suite.
     internal TestAccessor GetTestAccessor() => new(this);
 
     internal readonly struct TestAccessor(CreatePullRequestForm form)
@@ -482,7 +501,7 @@ public partial class CreatePullRequestForm : GitModuleForm
             => form.InitializeAsync(cancellationToken);
 
         public Task JoinOperationsAsync(CancellationToken cancellationToken = default)
-            => form._operations.JoinPendingOperationsAsync(cancellationToken);
+            => form._remoteLoader.JoinPendingOperationsAsync(cancellationToken);
 
         public void Create() => form._createBtn_Click(form, EventArgs.Empty);
     }

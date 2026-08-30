@@ -373,7 +373,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
             //// _refFilterOptions not disposable
             //// _lastVisibleResizableColumn not owned
             //// _maximizedColumn not owned
-            //// _revisionGraphColumnProvider not disposable
+            _revisionGraphColumnProvider.Dispose();
             //// _selectionTimer handled by this.components
             _buildServerWatcher?.Dispose();
             _customDiffToolsSequence.Dispose();
@@ -1222,13 +1222,8 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
             }
 
             selectedRef.IsSelected = true;
-
-            string selectedRemote = selectedRef.TrackingRemote;
-            string selectedMerge = selectedRef.MergeWith;
             IGitRef? selectedHeadMergeSource = gitRefs.FirstOrDefault(
-                gitRef => gitRef.IsRemote
-                     && selectedRemote == gitRef.Remote
-                     && selectedMerge == gitRef.LocalName);
+                gitRef => selectedRef.IsTrackingRemote(gitRef));
 
             selectedHeadMergeSource?.IsSelectedHeadMergeSource = true;
         }
@@ -1930,6 +1925,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
             else
             {
                 _gridView.InvalidateRow(e.RowIndex);
+                UpdateLaneHighlight(hitInfo?.GitRef, e.RowIndex);
             }
         }
 
@@ -1964,12 +1960,22 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         if (_messageColumnProvider.SetHighlight(-1, hitInfo: null))
         {
             _gridView.Invalidate();
+            UpdateLaneHighlight(gitRef: null, rowIndex: -1);
         }
 
         if (_gridView.Cursor == Cursors.Hand)
         {
             _gridView.Cursor = Cursors.Default;
         }
+    }
+
+    private void UpdateLaneHighlight(IGitRef? gitRef, int rowIndex)
+    {
+        this.InvokeAndForget(async () =>
+        {
+            await _revisionGraphColumnProvider.SetHoverHighlightAsync(gitRef, rowIndex);
+            _gridView.RequestRedrawWithoutClear();
+        });
     }
 
     private void OnGridViewCellMouseDown(object? sender, DataGridViewCellMouseEventArgs e)
@@ -2004,8 +2010,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
                 if (hitInfo?.GitRef is { } gitRef)
                 {
-                    bool isVirtualAheadBehingRef = gitRef.Guid is null;
-                    if (isVirtualAheadBehingRef)
+                    if (gitRef is NestledVirtualRef)
                     {
                         // Let the related ref be added to the selection afterwards in order to simulate standard Ctrl+click behavior.
                         // For this, let DataGridView's native Ctrl+click processing select this revision again first.
@@ -2239,10 +2244,8 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         }
 
         IGitRef? clickedRef = _rightClickedHitInfo?.GitRef;
-        string? relatedBranch = clickedRef is { Guid: null }
-            ? clickedRef.MergeWith.StartsWith(GitRefName.RefsRemotesPrefix)
-                ? clickedRef.MergeWith[GitRefName.RefsRemotesPrefix.Length..]
-                : clickedRef.MergeWith[GitRefName.RefsHeadsPrefix.Length..]
+        string? relatedBranch = clickedRef is NestledVirtualRef
+            ? (clickedRef.IsRemote ? clickedRef.Remote + "/" : "") + clickedRef.MergeWith
             : null;
         _rightClickedHitInfo = null;
         Func<IEnumerable<IGitRef>, IEnumerable<IGitRef>> filterRefs = clickedRef is null
@@ -3186,15 +3189,15 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private void GoToRelatedRef(IGitRef gitRef, Action<string>? handleGone = null, bool toggleSelection = false)
     {
-        if (gitRef.Guid is null)
+        if (gitRef is NestledVirtualRef nestledRef)
         {
-            if (gitRef.Name == AheadBehindData.GoneSymbol)
+            if (nestledRef.TrackingBranchIsGone)
             {
-                handleGone?.Invoke(gitRef.MergeWith[GitRefName.RefsHeadsPrefix.Length..]);
+                handleGone?.Invoke(nestledRef.MergeWith);
             }
             else
             {
-                GoToRef(gitRef.CompleteName, showNoRevisionMsg: true, toggleSelection);
+                GoToRef(nestledRef.CompleteName, showNoRevisionMsg: true, toggleSelection);
             }
         }
         else if (_messageColumnProvider.GetAheadBehindData(gitRef.IsRemote, gitRef.CompleteName) is { } aheadBehindData)

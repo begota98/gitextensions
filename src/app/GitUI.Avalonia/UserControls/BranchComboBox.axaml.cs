@@ -10,12 +10,11 @@ using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitUI;
 
-// Twin of GitUI/UserControls/BranchComboBox.cs. Avalonia's editable ComboBox replaces
-// WinForms autocomplete; the adjacent dialog preserves multi-head merge selection.
+// Avalonia's editable ComboBox replaces WinForms autocomplete; the adjacent dialog preserves
+// multi-head merge selection.
 public partial class BranchComboBox : GitExtensionsControl
 {
     private readonly TranslationString _branchCheckoutError = new("Branch '{0}' is not selectable, this branch has been removed from the selection.");
-    private IReadOnlyList<IGitRef>? _branchesToSelect;
 
     public BranchComboBox()
     {
@@ -30,6 +29,8 @@ public partial class BranchComboBox : GitExtensionsControl
         InitializeComplete();
     }
 
+    private bool _settingSelectedText;
+
     /// <summary>
     /// Occurs whenever the branch selection has changed.
     /// </summary>
@@ -37,6 +38,7 @@ public partial class BranchComboBox : GitExtensionsControl
     [Category("Action")]
     [Description("Occurs whenever the branch selection has changed.")]
     public event EventHandler? SelectedValueChanged;
+    private IReadOnlyList<IGitRef>? _branchesToSelect;
 
     public IReadOnlyList<IGitRef>? BranchesToSelect
     {
@@ -85,8 +87,19 @@ public partial class BranchComboBox : GitExtensionsControl
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        branches.SelectedItem = _branchesToSelect?.FirstOrDefault(branch => branch.Name == text);
-        branches.Text = text;
+        // Avalonia constraint: selecting an editable ComboBox item raises SelectionChanged
+        // before its text is updated; expose only the final WinForms-shaped notification.
+        _settingSelectedText = true;
+        try
+        {
+            branches.SelectedItem = _branchesToSelect?.FirstOrDefault(branch => branch.Name == text);
+            branches.Text = text;
+        }
+        finally
+        {
+            _settingSelectedText = false;
+        }
+
         OnSelectedValueChanged();
     }
 
@@ -113,7 +126,12 @@ public partial class BranchComboBox : GitExtensionsControl
     }
 
     private void branches_SelectedValueChanged(object? sender, EventArgs e)
-        => OnSelectedValueChanged();
+    {
+        if (!_settingSelectedText)
+        {
+            OnSelectedValueChanged();
+        }
+    }
 
     private void OnSelectedValueChanged() => SelectedValueChanged?.Invoke(this, EventArgs.Empty);
 }

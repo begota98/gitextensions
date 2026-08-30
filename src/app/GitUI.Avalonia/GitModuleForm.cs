@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
+using System.Diagnostics.CodeAnalysis;
 using GitExtensions.Extensibility.Git;
 using GitExtUtils;
 using GitUI.CommandsDialogs;
@@ -8,9 +8,6 @@ using ResourceManager.Hotkey;
 using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitUI;
-
-// Twin of GitUI/GitModuleForm.cs (reduced): access to IGitUICommands and the GitModule,
-// including the command-service bridge used by hotkeys and user scripts.
 
 /// <summary>Base window that provides access to the module and <see cref="IGitUICommands"/>.</summary>
 public class GitModuleForm : GitExtensionsForm, IGitUICommandsSource, ResourceManager.IGitModuleForm, IScriptOptionsForm
@@ -22,6 +19,7 @@ public class GitModuleForm : GitExtensionsForm, IGitUICommandsSource, ResourceMa
     private bool _scriptHotkeysLoaded;
     private IGitUICommands? _uiCommands;
 
+    /// <inheritdoc />
     public event EventHandler<GitUICommandsChangedEventArgs>? UICommandsChanged;
 
     /// <summary>For the visual designer and construction tests only, like WinForms.</summary>
@@ -38,6 +36,13 @@ public class GitModuleForm : GitExtensionsForm, IGitUICommandsSource, ResourceMa
         }
     }
 
+    public IHotkeySettingsLoader HotkeySettingsReader
+        => _hotkeySettingsLoader ??= UICommands.GetRequiredService<IHotkeySettingsLoader>();
+
+    public IScriptsRunner ScriptsRunner
+        => _scriptsRunner ??= UICommands.GetRequiredService<IScriptsRunner>();
+
+    /// <inheritdoc />
     public IGitUICommands UICommands
     {
         get => _uiCommands
@@ -54,17 +59,17 @@ public class GitModuleForm : GitExtensionsForm, IGitUICommandsSource, ResourceMa
         }
     }
 
-    public IHotkeySettingsLoader HotkeySettingsReader
-        => _hotkeySettingsLoader ??= UICommands.GetRequiredService<IHotkeySettingsLoader>();
-
     /// <summary>Gets the module of the currently set <see cref="UICommands"/>.</summary>
     public IGitModule Module => UICommands.Module;
 
-    public IScriptsRunner ScriptsRunner
-        => _scriptsRunner ??= UICommands.GetRequiredService<IScriptsRunner>();
-
-    public virtual IScriptOptionsProvider GetScriptOptionsProvider()
-        => ScriptOptionsProviderBase.Default;
+    protected override bool ExecuteCommand(int command)
+    {
+        IScriptsManager scriptsManager = UICommands.GetRequiredService<IScriptsManager>();
+        ScriptInfo? script = scriptsManager.GetScript(command);
+        return script is not null
+            ? ScriptsRunner.RunScript(script, this, UICommands, GetScriptOptionsProvider())
+            : base.ExecuteCommand(command);
+    }
 
     public override bool ProcessHotkey(WinFormsShims.Keys keyData)
     {
@@ -101,14 +106,8 @@ public class GitModuleForm : GitExtensionsForm, IGitUICommandsSource, ResourceMa
         _scriptHotkeysLoaded = true;
     }
 
-    protected override bool ExecuteCommand(int command)
-    {
-        IScriptsManager scriptsManager = UICommands.GetRequiredService<IScriptsManager>();
-        ScriptInfo? script = scriptsManager.GetScript(command);
-        return script is not null
-            ? ScriptsRunner.RunScript(script, this, UICommands, GetScriptOptionsProvider())
-            : base.ExecuteCommand(command);
-    }
+    public virtual IScriptOptionsProvider GetScriptOptionsProvider()
+        => ScriptOptionsProviderBase.Default;
 
     protected override void OnApplicationActivated()
     {

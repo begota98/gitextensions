@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
 using Avalonia.Headless.NUnit;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
@@ -148,6 +149,133 @@ public sealed class FrameworkControlParityTests
     }
 
     [AvaloniaTest]
+    public void Native_dialog_button_should_not_scale_its_source_bounds_when_pressed()
+    {
+        Button button = new()
+        {
+            Name = "btnNative",
+            Classes = { "gitextensions-native-dialog-action" },
+            Content = "Action",
+            Width = 100,
+            Height = 30,
+        };
+        Window window = Show(ThemeVariant.Light, button);
+        try
+        {
+            Border chrome = Find<Border>(button, "PART_NativeButtonChrome");
+            ContentPresenter presenter = chrome.GetVisualDescendants().OfType<ContentPresenter>().Single();
+            button.HorizontalContentAlignment.Should().Be(HorizontalAlignment.Center);
+            button.VerticalContentAlignment.Should().Be(VerticalAlignment.Center);
+            presenter.HorizontalAlignment.Should().Be(HorizontalAlignment.Center);
+            presenter.VerticalAlignment.Should().Be(VerticalAlignment.Center);
+            Point normalOrigin = button.TranslatePoint(default, window)!.Value;
+            using (AvaloniaControlStateDriver.Apply(
+                       window,
+                       new CaptureStatePlan { Id = "hover", Kind = CaptureStateKind.Hover, TargetField = "btnNative" }))
+            {
+                GetColor(chrome.Background).Should().Be(
+                    GetResourceColor("GitExtensionsNativeButtonPointerOverBackgroundBrush", ThemeVariant.Light));
+                GetColor(chrome.BorderBrush).Should().Be(
+                    GetResourceColor("GitExtensionsNativeButtonPointerOverBorderBrush", ThemeVariant.Light));
+            }
+
+            button.Focus().Should().BeTrue();
+            Dispatcher.UIThread.RunJobs();
+            GetColor(chrome.BorderBrush).Should().Be(
+                GetResourceColor("GitExtensionsHighlightBackgroundBrush", ThemeVariant.Light));
+
+            using (AvaloniaControlStateDriver.Apply(
+                       window,
+                       new CaptureStatePlan { Id = "pressed", Kind = CaptureStateKind.Pressed, TargetField = "btnNative" }))
+            {
+                Dispatcher.UIThread.RunJobs();
+                button.TranslatePoint(default, window).Should().Be(normalOrigin);
+            }
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    public void Native_combo_box_should_use_desktop_arrow_and_popup_selection_chrome()
+    {
+        ComboBox comboBox = new()
+        {
+            Width = 200,
+            Height = 23,
+            ItemsSource = new[] { "first", "second" },
+            SelectedIndex = 0,
+        };
+        Window window = Show(ThemeVariant.Light, comboBox);
+        try
+        {
+            Border overlay = Find<Border>(comboBox, "DropDownOverlay");
+            PathIcon glyph = Find<PathIcon>(comboBox, "DropDownGlyph");
+            overlay.Width.Should().Be(17);
+            glyph.Width.Should().Be(7);
+            glyph.Height.Should().Be(4);
+
+            comboBox.IsDropDownOpen = true;
+            Dispatcher.UIThread.RunJobs();
+            ComboBoxItem selected = comboBox.ContainerFromIndex(0) as ComboBoxItem
+                ?? throw new AssertionException("The selected ComboBox row was not materialized.");
+            ContentPresenter selectedPresenter = selected.GetVisualDescendants().OfType<ContentPresenter>().Single();
+            Popup popup = Find<Popup>(comboBox, "PART_Popup");
+            Border popupBorder = popup.Child as Border
+                ?? throw new AssertionException("The ComboBox popup border was not materialized.");
+            popupBorder.Name.Should().Be("PopupBorder");
+            GetColor(popupBorder.Background).Should().Be(
+                GetResourceColor("GitExtensionsWindowBackgroundBrush", ThemeVariant.Light));
+            GetColor(popupBorder.BorderBrush).Should().Be(
+                GetResourceColor("GitExtensionsWindowTextBrush", ThemeVariant.Light));
+            GetColor(selected.Background).Should().Be(
+                GetResourceColor("GitExtensionsHighlightBackgroundBrush", ThemeVariant.Light));
+            GetColor(selected.Foreground).Should().Be(
+                GetResourceColor("GitExtensionsHighlightForegroundBrush", ThemeVariant.Light));
+            GetColor(selectedPresenter.Background).Should().Be(
+                GetResourceColor("GitExtensionsHighlightBackgroundBrush", ThemeVariant.Light));
+            GetColor(selectedPresenter.Foreground).Should().Be(
+                GetResourceColor("GitExtensionsHighlightForegroundBrush", ThemeVariant.Light));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    public void Native_list_should_keep_focus_on_the_selected_row_without_a_container_frame()
+    {
+        ListBox list = new()
+        {
+            Classes = { "gitextensions-native-list-items" },
+            ItemsSource = new[] { "selected" },
+            SelectedIndex = 0,
+        };
+        Window window = Show(ThemeVariant.Light, list);
+        try
+        {
+            ListBoxItem item = list.ContainerFromIndex(0) as ListBoxItem
+                ?? throw new AssertionException("The selected native-list row was not materialized.");
+            list.Focus().Should().BeTrue();
+            Dispatcher.UIThread.RunJobs();
+            ContentPresenter presenter = item.GetVisualDescendants().OfType<ContentPresenter>().Single();
+
+            list.FocusAdorner.Should().BeNull();
+            item.FocusAdorner.Should().BeNull();
+            presenter.BorderThickness.Should().Be(new Thickness(1));
+            GetColor(presenter.BorderBrush).Should().Be(
+                GetResourceColor("GitExtensionsHighlightBackgroundBrush", ThemeVariant.Light));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
     public void Scrollbars_splitters_and_tooltips_should_use_desktop_chrome_metrics()
     {
         ScrollBar vertical = new() { Orientation = Avalonia.Layout.Orientation.Vertical };
@@ -204,6 +332,12 @@ public sealed class FrameworkControlParityTests
                 "semantic.system.tooltip.background",
                 "semantic.app.reset.hard.background");
             roles.Values.Should().OnlyContain(color => System.Text.RegularExpressions.Regex.IsMatch(color, "^#[0-9A-F]{8}$"));
+            CaptureNode text = surface.Root.Children.Should().ContainSingle().Which;
+            surface.Root.Colors.Background.Should().Be("#FFF0F0F0");
+            text.Colors.Background.Should().Be(surface.Root.Colors.Background);
+            text.Colors.Foreground.Should().Be("#FF000000");
+            text.Colors.DisabledForeground.Should().Be("#FF6D6D6D");
+            text.Colors.DisabledBackground.Should().Be(surface.Root.Colors.Background);
         }
         finally
         {

@@ -141,6 +141,68 @@ public sealed class SettingsDialogTests
     }
 
     [AvaloniaTest]
+    public void FormSettings_should_preserve_the_native_96_dpi_settings_shell_geometry()
+    {
+        FormSettings form = new();
+        form.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            FormSettings.TestAccessor accessor = form.GetTestAccessor();
+            form.ClientSize.Should().Be(new Avalonia.Size(958, 746));
+            accessor.SettingsTreeView.Bounds.Should().Be(new Avalonia.Rect(3, 3, 194, 686));
+
+            ContentControl pageHost = form.FindControl<ContentControl>("panelCurrentSettingsPage")!;
+            pageHost.Bounds.Should().Be(new Avalonia.Rect(203, 3, 736, 686));
+            Grid footer = form.FindControl<Grid>("flowLayoutPanel4")!;
+            footer.Bounds.Height.Should().Be(32);
+            footer.Bounds.Right.Should().Be(939);
+
+            SettingsPageHeader header = accessor.CurrentPage.Should().BeOfType<SettingsPageHeader>().Subject;
+            header.FindControl<Grid>("HeaderPanel")!.Bounds.Should().Be(new Avalonia.Rect(0, 0, 736, 58));
+            header.FindControl<Border>("linePanel")!.Bounds.Should().Be(new Avalonia.Rect(3, 43, 730, 4));
+            header.FindControl<ContentControl>("settingsPagePanel")!.Bounds.Should().Be(new Avalonia.Rect(0, 58, 736, 624));
+
+            ChecklistSettingsPage checklist = header.GetTestAccessor().Page.Should().BeOfType<ChecklistSettingsPage>().Subject;
+            checklist.FindControl<TextBlock>("label11")!.Bounds.Height.Should().Be(23);
+            Button gitStatus = checklist.FindControl<Button>("GitFound")!;
+            Button gitRepair = checklist.FindControl<Button>("GitFound_Fix")!;
+            gitStatus.IsVisible = true;
+            gitRepair.IsVisible = true;
+            Dispatcher.UIThread.RunJobs();
+            gitStatus.Bounds.Width.Should().Be(615);
+            gitRepair.Bounds.Size.Should().Be(new Avalonia.Size(85, 30));
+            checklist.FindControl<Button>("Rescan")!.Bounds.Size.Should().Be(new Avalonia.Size(150, 30));
+        }
+        finally
+        {
+            form.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    public void Settings_tree_should_preserve_the_designer_search_and_tree_spacing()
+    {
+        SettingsTreeViewUserControl tree = new();
+        Window window = new() { Content = tree, Width = 200, Height = 220 };
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            TextBox search = tree.FindControl<TextBox>("textBoxFind")!;
+            TreeView pages = tree.FindControl<TreeView>("treeView1")!;
+            search.Bounds.Should().Be(new Avalonia.Rect(0, 8, 200, 23));
+            pages.Bounds.Should().Be(new Avalonia.Rect(0, 39, 200, 181));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
     public void FormSettings_should_apply_discard_and_cancel_through_the_original_page_lifecycle()
     {
         FormSettings form = new();
@@ -2051,6 +2113,10 @@ public sealed class SettingsDialogTests
                 .Items.OfType<TreeViewItem>().Single()
                 .Items.OfType<TreeViewItem>().Single();
             childNode.Classes.Should().Contain("settings-search-match");
+
+            search.Text = string.Empty;
+            Dispatcher.UIThread.RunJobs();
+            childNode.Classes.Should().NotContain("settings-search-match");
         }
         finally
         {
@@ -2073,6 +2139,59 @@ public sealed class SettingsDialogTests
 
         page.SaveSettings();
         binding.SaveCount.Should().Be(1);
+    }
+
+    [AvaloniaTest]
+    public void SettingsPageBase_should_search_visible_enabled_text_in_breadth_first_order()
+    {
+        TestSettingsPage page = new()
+        {
+            Content = new StackPanel
+            {
+                Children =
+                {
+                    new TextBlock { Text = " First " },
+                    new Border
+                    {
+                        Child = new StackPanel
+                        {
+                            Children =
+                            {
+                                new TextBlock { Text = "Second" },
+                                new Border
+                                {
+                                    IsVisible = false,
+                                    Child = new TextBlock { Text = "Hidden descendant" },
+                                },
+                            },
+                        },
+                    },
+                    new TextBox { Text = "Third" },
+                },
+            },
+        };
+
+        page.GetSearchKeywords().Should().Equal("First", "Third", "Second");
+        page.GetSearchKeywords().Should().NotContain("Hidden descendant");
+    }
+
+    [AvaloniaTest]
+    public void SettingsPageBase_should_bind_native_combo_through_StringComboBoxAdapter()
+    {
+        ISetting<string> setting = Substitute.For<ISetting<string>>();
+        setting.FullPath.Returns("section.choice");
+        setting.Default.Returns("one");
+        ComboBox comboBox = new() { ItemsSource = new[] { "one", "two", "three" } };
+        TestSettingsPage page = new();
+        page.Settings.SetValue("section.choice", "two");
+        page.Bind(setting, comboBox);
+
+        page.LoadSettings();
+        comboBox.SelectedItem.Should().Be("two");
+
+        comboBox.SelectedItem = "three";
+        page.SaveSettings();
+        page.Settings.GetValue("section.choice").Should().Be("three");
     }
 
     private sealed class RootGroup : GroupSettingsPage
@@ -2143,7 +2262,11 @@ public sealed class SettingsDialogTests
 
         public bool SettingsLoaded => IsSettingsLoaded;
 
+        public TestSettingsSource Settings => _settings;
+
         public void AttachHost(ISettingsPageHost host) => Init(host);
+
+        public void Bind(ISetting<string> setting, ComboBox comboBox) => AddSettingBinding(setting, comboBox);
 
         protected override SettingsSource GetCurrentSettings()
         {
@@ -2172,10 +2295,14 @@ public sealed class SettingsDialogTests
 
     private sealed class TestSettingsSource : SettingsSource
     {
-        public override string? GetValue(string name) => null;
+        private readonly Dictionary<string, string?> _values = [];
+
+        public override string? GetValue(string name)
+            => _values.GetValueOrDefault(name);
 
         public override void SetValue(string name, string? value)
         {
+            _values[name] = value;
         }
     }
 

@@ -1,4 +1,4 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Input;
@@ -16,7 +16,6 @@ using ResourceManager;
 
 namespace GitUI.CommandsDialogs.SettingsDialog.Pages;
 
-// Twin of GitUI/CommandsDialogs/SettingsDialog/Pages/RevisionLinksSettingsPage.cs.
 // The editable DataGridView is represented by a typed ListBox whose row text boxes update
 // the original ExternalLinkFormat objects directly.
 public sealed partial class RevisionLinksSettingsPage : DistributedSettingsPage
@@ -442,22 +441,6 @@ public sealed partial class RevisionLinksSettingsPage : DistributedSettingsPage
             MessageChx.IsChecked == true);
     }
 
-    private void LocalBranchChx_CheckedChanged(object? sender, EventArgs e)
-    {
-        UpdateSet(
-            SelectedLinkDefinition?.SearchInParts,
-            ExternalLinkDefinition.RevisionPart.LocalBranches,
-            LocalBranchChx.IsChecked == true);
-    }
-
-    private void RemoteBranchChx_CheckedChanged(object? sender, EventArgs e)
-    {
-        UpdateSet(
-            SelectedLinkDefinition?.SearchInParts,
-            ExternalLinkDefinition.RevisionPart.RemoteBranches,
-            RemoteBranchChx.IsChecked == true);
-    }
-
     private void _NO_TRANSLATE_SearchPatternEdit_Leave(object? sender, EventArgs e)
     {
         if (SelectedLinkDefinition is { } selected)
@@ -472,6 +455,22 @@ public sealed partial class RevisionLinksSettingsPage : DistributedSettingsPage
         {
             selected.NestedSearchPattern = _NO_TRANSLATE_NestedPatternEdit.Text?.Trim();
         }
+    }
+
+    private void LocalBranchChx_CheckedChanged(object? sender, EventArgs e)
+    {
+        UpdateSet(
+            SelectedLinkDefinition?.SearchInParts,
+            ExternalLinkDefinition.RevisionPart.LocalBranches,
+            LocalBranchChx.IsChecked == true);
+    }
+
+    private void RemoteBranchChx_CheckedChanged(object? sender, EventArgs e)
+    {
+        UpdateSet(
+            SelectedLinkDefinition?.SearchInParts,
+            ExternalLinkDefinition.RevisionPart.RemoteBranches,
+            RemoteBranchChx.IsChecked == true);
     }
 
     private void _NO_TRANSLATE_RemotePatern_Leave(object? sender, EventArgs e)

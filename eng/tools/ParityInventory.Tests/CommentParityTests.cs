@@ -224,4 +224,163 @@ public sealed class CommentParityTests
         finding.Path.Should().Contain("Widget.First.cs");
         finding.Message.Should().Contain("Widget.Second.cs");
     }
+
+    [Test]
+    public void Compare_should_follow_the_declared_twin_part_for_comments()
+    {
+        using InventoryFixture fixture = new();
+        const string code = """
+            namespace Sample;
+            public partial class Widget
+            {
+                // Preserve the portable implementation contract.
+                private void Work() { }
+            }
+            """;
+        fixture.WriteOriginal("Widget.cs", code);
+        fixture.WriteTwin("Widget.NonWindows.cs", code);
+        SourceInventory original = SourceInventoryReader.Read(
+            fixture.OriginalRoot,
+            "Sample.Widget",
+            new HashSet<string>(StringComparer.Ordinal),
+            isTwin: false);
+        original = original with
+        {
+            Parts = original.Parts.Select(part => part.Path == "Widget.cs"
+                ? part with { ExpectedTwinPath = "Widget.NonWindows.cs" }
+                : part).ToArray()
+        };
+        SourceInventory twin = SourceInventoryReader.Read(
+            fixture.TwinRoot,
+            "Sample.Widget",
+            new HashSet<string>(StringComparer.Ordinal),
+            isTwin: true);
+
+        InventoryComparison comparison = InventoryComparer.Compare(original, twin);
+
+        comparison.Findings.Should().NotContain(item => item.Category == "comments");
+    }
+
+    [Test]
+    public void Run_should_keep_a_comment_with_its_unique_member_when_only_the_signature_changes()
+    {
+        using InventoryFixture fixture = new();
+        fixture.WriteOriginal("Widget.cs", """
+            namespace Sample;
+            public partial class Widget
+            {
+                // Preserve the operation contract.
+                private void Work(int value) { }
+            }
+            """);
+        fixture.WriteTwin("Widget.axaml.cs", """
+            namespace Sample;
+            public partial class Widget
+            {
+                // Preserve the operation contract.
+                private void Work(long value) { }
+            }
+            """);
+
+        InventoryReport report = fixture.Run();
+
+        report.Findings.Should().Contain(item => item.Code == "member.signature");
+        report.Findings.Should().NotContain(item => item.Category == "comments");
+    }
+
+    [Test]
+    public void Run_should_not_conflate_comments_on_overloaded_members()
+    {
+        using InventoryFixture fixture = new();
+        fixture.WriteOriginal("Widget.cs", """
+            namespace Sample;
+            public partial class Widget
+            {
+                // Describes the integer operation.
+                private void Work(int value) { }
+                private void Work(string value) { }
+            }
+            """);
+        fixture.WriteTwin("Widget.axaml.cs", """
+            namespace Sample;
+            public partial class Widget
+            {
+                private void Work(int value) { }
+                // Describes the integer operation.
+                private void Work(string value) { }
+            }
+            """);
+
+        FunctionalFinding finding = fixture.Run().Findings.Should()
+            .ContainSingle(item => item.Code == "comment.drifted").Subject;
+
+        finding.Path.Should().Contain("method:Work(int value)");
+        finding.Message.Should().Contain("method:Work(string value)");
+    }
+
+    [Test]
+    public void Run_should_record_generated_designer_shell_as_framework_deviations_without_hiding_real_comments()
+    {
+        using InventoryFixture fixture = new();
+        fixture.WriteOriginal("Widget.Designer.cs", """
+            namespace Sample;
+            public partial class Widget
+            {
+                /// <summary>Required designer variable.</summary>
+                private System.ComponentModel.IContainer components = null;
+
+                /// <summary>Clean up any resources being used.</summary>
+                /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+                protected override void Dispose(bool disposing) { }
+
+                /// <summary>Required method for Designer support - do not modify the contents of this method with the code editor.</summary>
+                private void InitializeComponent()
+                {
+                    //
+                    // actionButton
+                    //
+                    // Widget
+                    // TODO: this product rationale must still be ported.
+                }
+
+                private Button actionButton;
+            }
+            """);
+        fixture.WriteOriginal("Widget.cs", "namespace Sample; public partial class Widget { }");
+        fixture.WriteTwin("Widget.axaml.cs", """
+            namespace Sample;
+            public partial class Widget
+            {
+                /// <summary>Clean up any resources being used.</summary>
+                /// <param name="e">The window-closed event data.</param>
+                protected override void OnClosed(EventArgs e) { }
+            }
+            """);
+        fixture.WriteTwin("Widget.axaml", """
+            <UserControl xmlns="https://github.com/avaloniaui"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         x:Class="Sample.Widget">
+              <Button x:Name="actionButton" />
+            </UserControl>
+            """);
+
+        InventoryReport report = fixture.Run();
+
+        report.SchemaVersion.Should().Be(5);
+        report.Findings.Should().ContainSingle(item =>
+            item.Code == "comment.missing"
+            && item.OriginalValue == "TODO: this product rationale must still be ported.");
+        report.Findings.Should().NotContain(item => item.Category == "members");
+        report.AdaptedComments.Should().ContainSingle(item =>
+            item.OriginalText.Contains("disposing", StringComparison.Ordinal)
+            && item.TwinText.Contains("window-closed", StringComparison.Ordinal));
+        report.AcceptedFrameworkDeviations.Should().Contain(item =>
+            item.Code == "member.generated-axaml" && item.Path.EndsWith("field:components", StringComparison.Ordinal));
+        report.AcceptedFrameworkDeviations.Should().Contain(item =>
+            item.Code == "member.lifecycle-adapted" && item.TwinPart == "Widget.axaml.cs");
+        report.AcceptedFrameworkDeviations.Should().Contain(item =>
+            item.Code == "comment.generated-designer" && item.OriginalValue == "actionButton");
+        report.Summary.AcceptedFrameworkDeviationCount.Should()
+            .Be(report.AcceptedFrameworkDeviations.Count);
+    }
 }

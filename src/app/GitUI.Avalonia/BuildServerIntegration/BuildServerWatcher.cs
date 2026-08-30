@@ -35,9 +35,11 @@ public sealed class BuildServerWatcher : IBuildServerWatcher, IDisposable
     private readonly IRevisionGridInfo _revisionGridInfo;
     private readonly Func<IGitModule> _module;
     private readonly IRepoNameExtractor _repoNameExtractor;
-    private readonly Lock _observerLock = new();
     private IDisposable? _buildStatusCancellationToken;
     private IBuildServerAdapter? _buildServerAdapter;
+    private readonly Lock _observerLock = new();
+
+    internal BuildStatusColumnProvider ColumnProvider { get; }
 
     public BuildServerWatcher(RevisionGridControl revisionGrid, IRevisionGridInfo revisionGridInfo, Func<IGitModule> module)
     {
@@ -50,8 +52,6 @@ public sealed class BuildServerWatcher : IBuildServerWatcher, IDisposable
         ColumnProvider = new BuildStatusColumnProvider(OpenBuildReport);
     }
 
-    internal BuildStatusColumnProvider ColumnProvider { get; }
-
     public async Task LaunchBuildServerInfoFetchOperationAsync()
     {
         await TaskScheduler.Default;
@@ -63,6 +63,9 @@ public sealed class BuildServerWatcher : IBuildServerWatcher, IDisposable
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(launchToken);
 
         _buildServerAdapter?.Dispose();
+
+        // When a build server adapter is available (including auto-detected),
+        // ensure the column visibility and width reflect the user's display preferences
         _buildServerAdapter = buildServerAdapter;
         ColumnProvider.Column.IsAvailable = buildServerAdapter is not null;
         _revisionGrid.ApplyColumnSettings();
@@ -75,6 +78,8 @@ public sealed class BuildServerWatcher : IBuildServerWatcher, IDisposable
         }
 
         NewThreadScheduler scheduler = NewThreadScheduler.Default;
+
+        // Run this first as it (may) force start queries
         IObservable<BuildInfo> runningBuildsObservable = buildServerAdapter.GetRunningBuilds(scheduler);
         IObservable<BuildInfo> fullDayObservable = buildServerAdapter.GetFinishedBuildsSince(scheduler, DateTime.Today - TimeSpan.FromDays(3));
         IObservable<BuildInfo> fullObservable = buildServerAdapter.GetFinishedBuildsSince(scheduler);
@@ -84,6 +89,9 @@ public sealed class BuildServerWatcher : IBuildServerWatcher, IDisposable
             .DelaySubscription(anyRunningBuilds ? ShortPollInterval : LongPollInterval));
         bool shouldLookForNewlyFinishedBuilds = false;
         DateTime nowFrozen = DateTime.Now;
+
+        // All finished builds have already been retrieved,
+        // so looking for new finished builds make sense only if running builds have been found previously
         IObservable<BuildInfo> fromNowObservable = Observable.If(
             () => shouldLookForNewlyFinishedBuilds,
             buildServerAdapter.GetFinishedBuildsSince(scheduler, nowFrozen)
@@ -176,14 +184,18 @@ public sealed class BuildServerWatcher : IBuildServerWatcher, IDisposable
         return projectNames;
     }
 
-    public void OnRepositoryChanged()
-        => _buildServerAdapter?.OnRepositoryChanged();
-
-    public void Dispose()
+    private async Task<IBuildServerCredentials?> ShowBuildServerCredentialsFormAsync(
+        string buildServerUniqueKey,
+        IBuildServerCredentials buildServerCredentials)
     {
-        CancelBuildStatusFetchOperation();
-        _buildServerAdapter?.Dispose();
-        _launchCancellation.Dispose();
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        using FormBuildServerCredentials form = new(buildServerUniqueKey)
+        {
+            BuildServerCredentials = buildServerCredentials,
+        };
+        WinFormsShims.IWin32Window? owner = Avalonia.Controls.TopLevel.GetTopLevel(_revisionGrid) as WinFormsShims.IWin32Window;
+        return form.ShowDialog(owner) == DialogResult.OK ? form.BuildServerCredentials : null;
     }
 
     internal void OnBuildInfoUpdate(BuildInfo buildInfo)
@@ -215,20 +227,6 @@ public sealed class BuildServerWatcher : IBuildServerWatcher, IDisposable
         }
     }
 
-    private async Task<IBuildServerCredentials?> ShowBuildServerCredentialsFormAsync(
-        string buildServerUniqueKey,
-        IBuildServerCredentials buildServerCredentials)
-    {
-        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-
-        using FormBuildServerCredentials form = new(buildServerUniqueKey)
-        {
-            BuildServerCredentials = buildServerCredentials,
-        };
-        WinFormsShims.IWin32Window? owner = Avalonia.Controls.TopLevel.GetTopLevel(_revisionGrid) as WinFormsShims.IWin32Window;
-        return form.ShowDialog(owner) == DialogResult.OK ? form.BuildServerCredentials : null;
-    }
-
     private async Task<IBuildServerAdapter?> GetBuildServerAdapterAsync()
     {
         await TaskScheduler.Default;
@@ -237,6 +235,8 @@ public sealed class BuildServerWatcher : IBuildServerWatcher, IDisposable
         string? buildServerName = BuildServerSettings.ServerName[effectiveSettings];
         if (!string.IsNullOrEmpty(buildServerName))
         {
+            // A build server type is explicitly configured.
+            // Only bail out if integration has been explicitly disabled.
             if (BuildServerSettings.IntegrationEnabled[effectiveSettings] is false)
             {
                 return null;
@@ -244,6 +244,8 @@ public sealed class BuildServerWatcher : IBuildServerWatcher, IDisposable
         }
         else
         {
+            // Nothing configured. Auto-detect only when the user hasn't touched
+            // integration settings at all (both ServerName and IntegrationEnabled are unset).
             if (BuildServerSettings.IntegrationEnabled[effectiveSettings] is not null)
             {
                 return null;
@@ -256,6 +258,7 @@ public sealed class BuildServerWatcher : IBuildServerWatcher, IDisposable
             }
         }
 
+        // When explicitly configured, let the matching detector populate settings from remotes
         TryPopulateSettingsForBuildServer(buildServerName, BuildServerSettings.GetSettingsSource(effectiveSettings));
         Lazy<IBuildServerAdapter, IBuildServerTypeMetadata>? export = ManagedExtensibility
             .GetExports<IBuildServerAdapter, IBuildServerTypeMetadata>()
@@ -274,6 +277,8 @@ public sealed class BuildServerWatcher : IBuildServerWatcher, IDisposable
             }
 
             IBuildServerAdapter adapter = export.Value;
+
+            // To run the `StartSettingsDialog()` in the UI Thread
             adapter.Initialize(
                 this,
                 BuildServerSettings.GetSettingsSource(effectiveSettings),
@@ -293,6 +298,14 @@ public sealed class BuildServerWatcher : IBuildServerWatcher, IDisposable
         }
     }
 
+    /// <summary>
+    ///  Attempts to detect the build server type from the repository's remote URLs
+    ///  by querying registered <see cref="IBuildServerAutoDetector"/> exports.
+    ///  When detected, writes adapter-specific settings to <paramref name="settingsSource"/>
+    ///  (if not already set) so the adapter can use them without re-parsing.
+    ///  Respects <see cref="AppSettings.PrioritizedBuildServerRemoteNames"/> for remote ordering,
+    ///  so that forks resolve to the upstream project's CI rather than the fork's.
+    /// </summary>
     private string? TryAutoDetectBuildServerType(SettingsSource? settingsSource = null)
     {
         try
@@ -314,6 +327,10 @@ public sealed class BuildServerWatcher : IBuildServerWatcher, IDisposable
         return null;
     }
 
+    /// <summary>
+    ///  For an explicitly configured build server, runs the matching auto-detector
+    ///  to populate adapter-specific settings from remote URLs.
+    /// </summary>
     private void TryPopulateSettingsForBuildServer(string buildServerName, SettingsSource settingsSource)
     {
         try
@@ -334,6 +351,10 @@ public sealed class BuildServerWatcher : IBuildServerWatcher, IDisposable
         }
     }
 
+    /// <summary>
+    ///  Collects remote URLs from the current module, ordered by
+    ///  <see cref="AppSettings.PrioritizedBuildServerRemoteNames"/>.
+    /// </summary>
     private List<string> GetOrderedRemoteUrls()
     {
         IGitModule module = _module();
@@ -359,6 +380,16 @@ public sealed class BuildServerWatcher : IBuildServerWatcher, IDisposable
 
         return remoteUrls;
     }
+
+    public void Dispose()
+    {
+        CancelBuildStatusFetchOperation();
+        _buildServerAdapter?.Dispose();
+        _launchCancellation.Dispose();
+    }
+
+    public void OnRepositoryChanged()
+        => _buildServerAdapter?.OnRepositoryChanged();
 
     private void OpenBuildReport(GitRevision revision)
         => OsShellUtil.OpenUrlInDefaultBrowser(revision.BuildStatus?.Url);

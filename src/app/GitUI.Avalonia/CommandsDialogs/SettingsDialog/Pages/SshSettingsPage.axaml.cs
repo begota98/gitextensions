@@ -1,4 +1,4 @@
-using System.Runtime.Versioning;
+﻿using System.Runtime.Versioning;
 using Avalonia.Controls;
 using Avalonia.Platform.Storage;
 using GitCommands;
@@ -87,19 +87,11 @@ public sealed partial class SshSettingsPage : SettingsPageWithHeader
             : Putty.IsChecked == true
                 ? PlinkPath.Text ?? string.Empty
                 : OtherSsh.Text ?? string.Empty;
+
+        // Set persistent settings as well as the env var used by Git
         GitSshHelpers.SetGitSshEnvironmentVariable(path);
         AppSettings.SshPath = path;
         base.PageToSettings();
-    }
-
-    public bool AutoFindPuttyPaths()
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            return false;
-        }
-
-        return GetPuttyLocations().Any(AutoFindPuttyPathsInDir);
     }
 
     [SupportedOSPlatform("windows")]
@@ -129,6 +121,7 @@ public sealed partial class SshSettingsPage : SettingsPageWithHeader
             yield return Path.Join(programFilesX86, "TortoiseSvn", "bin");
         }
 
+        // Old(?) uninstaller
         string? registryLocation = GitUI.CommandsDialogs.SettingsDialog.CommonLogic.GetRegistryValue(
             Registry.LocalMachine,
             "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\PuTTY_is1",
@@ -137,6 +130,16 @@ public sealed partial class SshSettingsPage : SettingsPageWithHeader
         {
             yield return registryLocation;
         }
+    }
+
+    public bool AutoFindPuttyPaths()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return false;
+        }
+
+        return GetPuttyLocations().Any(AutoFindPuttyPathsInDir);
     }
 
     private bool AutoFindPuttyPathsInDir(string installDirectory)

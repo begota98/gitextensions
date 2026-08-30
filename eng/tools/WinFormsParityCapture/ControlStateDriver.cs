@@ -2,6 +2,7 @@
 
 using GitExtensions.ParityCapture;
 using GitUI.AutoCompletion;
+using GitUI.Editor;
 
 namespace WinFormsParityCapture;
 
@@ -9,6 +10,7 @@ internal sealed class ControlStateDriver : IDisposable
 {
     private readonly List<Action> _restoreActions = [];
     private readonly List<ToolStripDropDown> _popups = [];
+    private readonly List<ComboBoxPopup> _comboBoxPopups = [];
     private readonly Control _root;
 
     private ControlStateDriver(Control root)
@@ -18,11 +20,14 @@ internal sealed class ControlStateDriver : IDisposable
 
     public IReadOnlyList<ToolStripDropDown> Popups => _popups;
 
-    public bool RequiresScreenGrab => _popups.Count > 0;
+    public IReadOnlyList<ComboBoxPopup> ComboBoxPopups => _comboBoxPopups;
+
+    public bool RequiresScreenGrab => _popups.Count > 0 || _comboBoxPopups.Count > 0;
 
     public static ControlStateDriver Apply(Control root, CaptureStatePlan state)
     {
         ControlStateDriver driver = new(root);
+        driver.ApplyRequestedSize(state);
         object? target = state.TargetField is null ? root : FindFieldValue(root, state.TargetField);
         if (target is null)
         {
@@ -60,6 +65,41 @@ internal sealed class ControlStateDriver : IDisposable
 
         PumpEvents();
         return driver;
+    }
+
+    private void ApplyRequestedSize(CaptureStatePlan state)
+    {
+        if (state.WidthDip is not int widthDip || state.HeightDip is not int heightDip)
+        {
+            return;
+        }
+
+        Size originalSize = _root is Form originalForm ? originalForm.ClientSize : _root.Size;
+        int dpi = _root.DeviceDpi;
+        Size requestedSize = new(
+            (int)Math.Round(widthDip * dpi / 96d, MidpointRounding.AwayFromZero),
+            (int)Math.Round(heightDip * dpi / 96d, MidpointRounding.AwayFromZero));
+        if (_root is Form form)
+        {
+            form.ClientSize = requestedSize;
+        }
+        else
+        {
+            _root.Size = requestedSize;
+        }
+
+        PumpEvents();
+        _restoreActions.Add(() =>
+        {
+            if (_root is Form restoredForm)
+            {
+                restoredForm.ClientSize = originalSize;
+            }
+            else
+            {
+                _root.Size = originalSize;
+            }
+        });
     }
 
     public void Dispose()
@@ -151,14 +191,37 @@ internal sealed class ControlStateDriver : IDisposable
             return;
         }
 
-        if (target is not CheckBox checkBox)
+        CheckBox? checkBox = target as CheckBox;
+        if (checkBox is null && target is Control composite)
         {
-            throw new CaptureStateUnsupportedException("The checked state requires a CheckBox or RadioButton.");
+            CheckBox[] descendants = EnumerateDescendants(composite).OfType<CheckBox>().Take(2).ToArray();
+            if (descendants.Length == 1)
+            {
+                checkBox = descendants[0];
+            }
+        }
+
+        if (checkBox is null)
+        {
+            throw new CaptureStateUnsupportedException(
+                "The checked state requires a CheckBox, RadioButton, or a composite control with one CheckBox.");
         }
 
         CheckState previous = checkBox.CheckState;
         checkBox.CheckState = checkBox.ThreeState ? CheckState.Indeterminate : CheckState.Checked;
         _restoreActions.Add(() => checkBox.CheckState = previous);
+
+        static IEnumerable<Control> EnumerateDescendants(Control control)
+        {
+            foreach (Control child in control.Controls)
+            {
+                yield return child;
+                foreach (Control descendant in EnumerateDescendants(child))
+                {
+                    yield return descendant;
+                }
+            }
+        }
     }
 
     private void Disable(object target)
@@ -217,6 +280,7 @@ internal sealed class ControlStateDriver : IDisposable
             throw new CaptureStateUnsupportedException("The focused state requires a focusable Control.");
         }
 
+        ActivateContainingTabs(control);
         _ = control.Handle;
         Form? form = control.FindForm();
         form?.Activate();
@@ -244,6 +308,35 @@ internal sealed class ControlStateDriver : IDisposable
         _restoreActions.Add(() => previous?.Focus());
     }
 
+    private void ActivateContainingTabs(Control control)
+    {
+        TabPage[] tabPages = EnumerateParents(control)
+            .OfType<TabPage>()
+            .Reverse()
+            .ToArray();
+        foreach (TabPage tabPage in tabPages)
+        {
+            if (tabPage.Parent is not TabControl tabControl
+                || ReferenceEquals(tabControl.SelectedTab, tabPage))
+            {
+                continue;
+            }
+
+            TabPage? previous = tabControl.SelectedTab;
+            tabControl.SelectedTab = tabPage;
+            PumpEvents();
+            _restoreActions.Add(() => tabControl.SelectedTab = previous);
+        }
+
+        static IEnumerable<Control> EnumerateParents(Control child)
+        {
+            for (Control? parent = child.Parent; parent is not null; parent = parent.Parent)
+            {
+                yield return parent;
+            }
+        }
+    }
+
     private void Hover(object target)
     {
         if (target is not Control control || !control.IsHandleCreated)
@@ -251,8 +344,43 @@ internal sealed class ControlStateDriver : IDisposable
             throw new CaptureStateUnsupportedException("The hover state requires a created Control handle.");
         }
 
-        NativeMethods.SendMouseMessage(control.Handle, NativeMethods.WmMouseMove, Math.Max(1, control.ClientSize.Width / 2), Math.Max(1, control.ClientSize.Height / 2));
-        _restoreActions.Add(() => NativeMethods.SendMouseMessage(control.Handle, NativeMethods.WmMouseLeave, 0, 0));
+        (Control mouseTarget, Point mousePoint) = FindMouseTarget(control);
+        Point originalCursorPosition = NativeMethods.GetCursorPosition();
+        NativeMethods.SetCursorPosition(mouseTarget.PointToScreen(mousePoint));
+        NativeMethods.SendMouseMessage(mouseTarget.Handle, NativeMethods.WmMouseMove, mousePoint.X, mousePoint.Y);
+        _restoreActions.Add(() =>
+        {
+            NativeMethods.SendMouseMessage(mouseTarget.Handle, NativeMethods.WmMouseLeave, 0, 0);
+            NativeMethods.SetCursorPosition(originalCursorPosition);
+        });
+    }
+
+    private static (Control Control, Point Point) FindMouseTarget(Control control)
+    {
+        if (control is FileViewerInternal
+            && FindFieldValue(control, "TextEditor") is object textEditor
+            && textEditor.GetType().GetProperty("ActiveTextAreaControl")?.GetValue(textEditor) is object textAreaControl
+            && textAreaControl.GetType().GetProperty("TextArea")?.GetValue(textAreaControl) is Control textArea)
+        {
+            // parity-scaffolding: This legacy composite republishes mouse events only from the
+            // inner text area, which is the native child window Windows actually hit-tests.
+            return (textArea, new Point(
+                Math.Max(1, textArea.ClientSize.Width / 2),
+                Math.Max(1, textArea.ClientSize.Height / 2)));
+        }
+
+        Control current = control;
+        Point point = new(Math.Max(1, control.ClientSize.Width / 2), Math.Max(1, control.ClientSize.Height / 2));
+        const GetChildAtPointSkip skip = GetChildAtPointSkip.Invisible
+                                         | GetChildAtPointSkip.Disabled
+                                         | GetChildAtPointSkip.Transparent;
+        while (current.GetChildAtPoint(point, skip) is { IsHandleCreated: true } child)
+        {
+            point.Offset(-child.Left, -child.Top);
+            current = child;
+        }
+
+        return (current, point);
     }
 
     private void OpenMenu(object target)
@@ -260,6 +388,37 @@ internal sealed class ControlStateDriver : IDisposable
         if (target is ListBox { Name: "AutoComplete" } autoComplete)
         {
             OpenAutoComplete(autoComplete);
+            return;
+        }
+
+        if (target is ToolStripComboBox toolStripComboBox)
+        {
+            target = toolStripComboBox.ComboBox;
+        }
+
+        if (target is ComboBox comboBox)
+        {
+            if (!comboBox.IsHandleCreated || comboBox.Items.Count == 0)
+            {
+                throw new CaptureStateUnsupportedException("The ComboBox popup requires a created, populated control.");
+            }
+
+            bool previous = comboBox.DroppedDown;
+            comboBox.DroppedDown = true;
+            PumpEvents();
+            if (!comboBox.DroppedDown)
+            {
+                throw new CaptureStateUnsupportedException("The requested ComboBox popup declined to open.");
+            }
+
+            Rectangle bounds = NativeMethods.GetComboBoxListRectangle(comboBox.Handle);
+            if (bounds.Width <= 0 || bounds.Height <= 0)
+            {
+                throw new CaptureStateUnsupportedException("The native ComboBox popup has no drawable area.");
+            }
+
+            _comboBoxPopups.Add(new ComboBoxPopup(comboBox, bounds));
+            _restoreActions.Add(() => comboBox.DroppedDown = previous);
             return;
         }
 
@@ -389,6 +548,8 @@ internal sealed class ControlStateDriver : IDisposable
         });
     }
 }
+
+internal sealed record ComboBoxPopup(ComboBox Owner, Rectangle Bounds);
 
 internal class CaptureStateUnsupportedException(string message) : Exception(message);
 
