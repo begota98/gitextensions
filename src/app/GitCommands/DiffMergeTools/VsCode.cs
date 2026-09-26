@@ -21,6 +21,11 @@ internal sealed class VsCode : DiffMergeTool
 
     private static string[] GetFolders()
     {
+        if (OperatingSystem.IsMacOS())
+        {
+            return ["/Applications/Visual Studio Code.app/Contents/Resources/app/bin"];
+        }
+
         string folder = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         return
         [
