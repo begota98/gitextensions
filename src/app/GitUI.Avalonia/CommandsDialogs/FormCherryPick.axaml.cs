@@ -22,6 +22,10 @@ public partial class FormCherryPick : GitExtensionsDialog
     #endregion
 
     private bool _isMerge;
+    private int _lblParentsControlHeight = 15;
+    private int _lvParentsListControlHeight = 54;
+
+    private const int _parentsListItemHeight = 18;
 
     public GitRevision? Revision { get; set; }
 
@@ -46,11 +50,21 @@ public partial class FormCherryPick : GitExtensionsDialog
 
     private void WireControls()
     {
+        lvParentsList.AddColumns(columnHeader1, columnHeader2, columnHeader3, columnHeader4);
         lvParentsList.ItemTemplate = new FuncDataTemplate<CherryPickParentRow>(CreateParentRow, supportsRecycling: false);
+        lvParentsList.SizeChanged += lvParentsList_Resize;
         btnPick.Click += btnPick_Click;
         btnAbort.Click += btnAbort_Click;
         btnChooseRevision.Click += btnChooseRevision_Click;
         AcceptButton = btnPick;
+
+        EventHandler? focusInitialControl = null;
+        focusInitialControl = (_, _) =>
+        {
+            Activated -= focusInitialControl;
+            Form_Shown(this, EventArgs.Empty);
+        };
+        Activated += focusInitialControl;
     }
 
     protected override void OnRuntimeLoad(EventArgs e)
@@ -62,8 +76,25 @@ public partial class FormCherryPick : GitExtensionsDialog
             return;
         }
 
+        Form_Load(this, EventArgs.Empty);
+    }
+
+    protected override void OnClosing(WindowClosingEventArgs e)
+    {
+        Form_Closing(this, e);
+        base.OnClosing(e);
+    }
+
+    private void Form_Load(object? sender, EventArgs e)
+    {
+        _lblParentsControlHeight = Math.Max(_lblParentsControlHeight, (int)Math.Round(lblParents.Bounds.Height));
+        _lvParentsListControlHeight = Math.Max(_lvParentsListControlHeight, (int)Math.Round(lvParentsList.Bounds.Height));
         LoadSettings();
         OnRevisionChanged();
+    }
+
+    private void Form_Shown(object? sender, EventArgs e)
+    {
         if (lvParentsList.IsVisible)
         {
             lvParentsList.Focus();
@@ -74,11 +105,8 @@ public partial class FormCherryPick : GitExtensionsDialog
         }
     }
 
-    protected override void OnClosing(WindowClosingEventArgs e)
-    {
-        SaveSettings();
-        base.OnClosing(e);
-    }
+    private void Form_Closing(object? sender, WindowClosingEventArgs e)
+        => SaveSettings();
 
     private void LoadSettings()
     {
@@ -99,6 +127,8 @@ public partial class FormCherryPick : GitExtensionsDialog
     {
         commitSummaryUserControl1.Revision = Revision;
         _isMerge = Revision is not null && Module.IsMerge(Revision.ObjectId);
+
+        // We need to hide these optional components first to get a correct base value of PreferredMinimumHeight
         parentsPanel.IsVisible = _isMerge;
         lvParentsList.ItemsSource = null;
 
@@ -111,7 +141,7 @@ public partial class FormCherryPick : GitExtensionsDialog
         CherryPickParentRow[] rows = parents
             .Select((parent, index) => new CherryPickParentRow(index + 1, parent))
             .ToArray();
-        lvParentsList.Height = 54 + (24 * rows.Length);
+        lvParentsList.Height = _lvParentsListControlHeight + (_parentsListItemHeight * rows.Length);
         lvParentsList.ItemsSource = rows;
         lvParentsList.SelectedIndex = rows.Length == 0 ? -1 : 0;
     }
@@ -219,6 +249,12 @@ public partial class FormCherryPick : GitExtensionsDialog
         }
 
         OnRevisionChanged();
+    }
+
+    private void lvParentsList_Resize(object? sender, EventArgs e)
+    {
+        double fixedWidth = columnHeader1.SourceWidth + columnHeader3.SourceWidth + columnHeader4.SourceWidth;
+        columnHeader2.SourceWidth = Math.Max(0, lvParentsList.Bounds.Width - fixedWidth);
     }
 
     internal TestAccessor GetTestAccessor() => new(this);

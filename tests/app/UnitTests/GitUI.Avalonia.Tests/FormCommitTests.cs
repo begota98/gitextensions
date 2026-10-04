@@ -1,4 +1,4 @@
-using System.ComponentModel.Design;
+﻿using System.ComponentModel.Design;
 using System.Diagnostics;
 using System.Text;
 using Avalonia;
@@ -15,6 +15,7 @@ using GitCommands.UserRepositoryHistory;
 using GitExtensions.Extensibility;
 using GitExtensions.Extensibility.Git;
 using GitExtensions.Extensibility.Translations;
+using GitExtensions.ParityCapture;
 using GitExtUtils;
 using GitUI;
 using GitUI.CommandsDialogs;
@@ -24,6 +25,7 @@ using GitUI.SpellChecker;
 using GitUIPluginInterfaces;
 using Microsoft.VisualStudio.Threading;
 using NSubstitute;
+using ToolStripMenuItem = GitUI.Compat.WinFormsControls.ToolStripMenuItem;
 using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitExtensionsTests;
@@ -134,6 +136,70 @@ public sealed class FormCommitTests
     }
 
     [AvaloniaTest]
+    public async Task Lists_must_not_select_an_item_when_a_click_gives_the_focus_back([Values] bool byMouse, [Values] bool staged)
+    {
+        GitModule module = CreateRepositoryWithTwoUnstagedChanges();
+        FormCommit form = new(new GitUICommands(_serviceContainer, module));
+        try
+        {
+            form.Show();
+            FileStatusList unstaged = form.FindControl<FileStatusList>("Unstaged")!;
+            FileStatusList stagedList = form.FindControl<FileStatusList>("Staged")!;
+            await WaitForCountsAsync(unstaged, 2, stagedList, 0);
+            if (staged)
+            {
+                form.FindControl<Button>("toolStageAllItem")!
+                    .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+                await WaitForCountsAsync(unstaged, 0, stagedList, 2);
+            }
+
+            FileStatusList list = staged ? stagedList : unstaged;
+            form.GetTestAccessor().Message.Focus();
+            list.ClearSelected();
+            list.HasSelection.Should().BeFalse();
+
+            if (staged)
+            {
+                form.GetTestAccessor().RaiseStagedEnter(byMouse);
+            }
+            else
+            {
+                form.GetTestAccessor().RaiseUnstagedEnter(byMouse);
+            }
+
+            list.HasSelection.Should().Be(!byMouse,
+                "the pointer click selects its hit item after the Enter notification, while keyboard Enter restores selection");
+        }
+        finally
+        {
+            form.Close();
+            await form.GetTestAccessor().ClosePersistenceTask;
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task FormCommit_progress_bar_should_follow_the_adjacent_runtime_status_height()
+    {
+        GitModule module = CreateRepositoryWithTwoUnstagedChanges();
+        FormCommit form = new(new GitUICommands(_serviceContainer, module));
+        try
+        {
+            form.Show();
+            await WaitForCountsAsync(form.FindControl<FileStatusList>("Unstaged")!, 2,
+                form.FindControl<FileStatusList>("Staged")!, 0);
+            ProgressBar progress = form.FindControl<ProgressBar>("toolStripProgressBar1")!;
+            TextBlock counter = form.FindControl<TextBlock>("commitStagedCount")!;
+
+            progress.Height.Should().Be(counter.Height - progress.Margin.Top - progress.Margin.Bottom);
+        }
+        finally
+        {
+            form.Close();
+            await form.GetTestAccessor().ClosePersistenceTask;
+        }
+    }
+
+    [AvaloniaTest]
     public async Task FormCommit_should_add_body_only_word_wrap_to_the_message_context_menu()
     {
         int originalLineLimit = AppSettings.CommitValidationMaxCntCharsPerLine;
@@ -182,6 +248,9 @@ public sealed class FormCommitTests
             Grid tableLayoutPanel1 = form.FindControl<Grid>("tableLayoutPanel1")!;
             Grid toolbarCommit = form.FindControl<Grid>("toolbarCommit")!;
             StackPanel flowCommitButtons = form.FindControl<StackPanel>("flowCommitButtons")!;
+            Grid toolStripContainer = form.FindControl<Grid>("toolStripContainer1")!;
+            Grid topToolStripPanel = form.FindControl<Grid>("_topPanel")!;
+            Grid contentPanel = form.FindControl<Grid>("_contentPanel")!;
 
             splitMain.ColumnDefinitions.Select(column => column.Width).Should().Equal(
                 new GridLength(397),
@@ -202,6 +271,26 @@ public sealed class FormCommitTests
             splitRight.Bounds.Size.Should().Be(new Size(509, 610));
             flowCommitButtons.Bounds.Width.Should().Be(171);
             toolbarCommit.Bounds.Width.Should().Be(324);
+            topToolStripPanel.GetVisualAncestors().Should().Contain(toolStripContainer);
+            contentPanel.GetVisualAncestors().Should().Contain(toolStripContainer);
+            form.FindControl<StackPanel>("toolbarSelectionFilter")!.GetVisualAncestors().Should().Contain(topToolStripPanel);
+            unstaged.GetVisualAncestors().Should().Contain(contentPanel);
+
+            Grid toolbarStaged = form.FindControl<Grid>("toolbarStaged")!;
+            toolbarStaged.ColumnDefinitions.Select(column => column.Width).Should().Equal(
+                new GridLength(2),
+                new GridLength(23),
+                new GridLength(6),
+                new GridLength(70),
+                new GridLength(1, GridUnitType.Star),
+                new GridLength(56),
+                new GridLength(6),
+                new GridLength(23),
+                new GridLength(2));
+            Grid.GetColumn(form.FindControl<Button>("toolUnstageAllItem")!).Should().Be(1);
+            Grid.GetColumn(form.FindControl<Button>("toolUnstageItem")!).Should().Be(3);
+            Grid.GetColumn(form.FindControl<Button>("toolStageItem")!).Should().Be(5);
+            Grid.GetColumn(form.FindControl<Button>("toolStageAllItem")!).Should().Be(7);
 
             Grid.GetColumn(flowCommitButtons).Should().Be(0);
             Grid.GetRowSpan(flowCommitButtons).Should().Be(2);
@@ -228,14 +317,62 @@ public sealed class FormCommitTests
                 "StashStaged",
                 "btnResetAllChanges",
                 "btnResetUnstagedChanges");
+            new[] { "Commit", "CommitAndPush", "StashStaged", "btnResetAllChanges", "btnResetUnstagedChanges" }
+                .Select(name => form.FindControl<Button>(name)!.Width)
+                .Should().OnlyContain(width => width == 171);
+            form.FindControl<Button>("ResetSoft")!.Width.Should().Be(159);
+            ToolTip.GetTip(form.FindControl<Button>("ResetSoft")!).Should().Be(
+                "Perform a soft reset to the previous commit; leaves working directory and index untouched");
+            ToolTip.GetTip(form.FindControl<CheckBox>("StageInSuperproject")!).Should().Be(
+                "Stage current submodule in superproject after commit");
             form.FindControl<TextBlock>("commitStagedCount")!.Text.Should().Be("1/2");
             form.FindControl<Button>("Commit")!.IsEnabled.Should().BeTrue(
                 "the original validates an empty commit message after the enabled Commit button is invoked");
+            form.FindControl<Button>("toolStageItem")!.IsEnabled.Should().BeTrue();
+            form.FindControl<Button>("toolUnstageItem")!.IsEnabled.Should().BeTrue();
+
+            CaptureNode[] semanticNodes = Flatten(
+                new AvaloniaControlTreeReader(form, renderScale: 1)
+                    .ReadPrimary(form, new PixelSize(918, 644)).Root).ToArray();
+            semanticNodes.Should().Contain(node => node.FieldName == "_topPanel" && node.Dock == "Top");
+            semanticNodes.Should().Contain(node => node.FieldName == "_bottomPanel" && node.Dock == "Bottom");
+            semanticNodes.Should().Contain(node => node.FieldName == "_leftPanel" && node.Dock == "Left");
+            semanticNodes.Should().Contain(node => node.FieldName == "_rightPanel" && node.Dock == "Right");
+            semanticNodes.Should().Contain(node => node.FieldName == "_contentPanel" && node.Dock == "Fill");
+            semanticNodes.Should().NotContain(node => node.FieldName == null && node.ControlKind == "split");
         }
         finally
         {
             form.Close();
             await form.GetTestAccessor().ClosePersistenceTask;
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task FormCommit_should_keep_the_unstaged_list_current_and_focus_amend_for_a_clean_repository()
+    {
+        FormCommit form = new(new GitUICommands(_serviceContainer, CreateCleanRepository()));
+        FormCommit.TestAccessor accessor = form.GetTestAccessor();
+        try
+        {
+            form.Show();
+            await WaitUntilAsync(() => accessor.Amend.IsFocused);
+
+            accessor.CurrentFilesList.Should().BeSameAs(accessor.Unstaged);
+            accessor.Message.IsFocused.Should().BeFalse();
+
+            using (AvaloniaControlStateDriver.Apply(
+                       form,
+                       new CaptureStatePlan { Id = "normal", Kind = CaptureStateKind.Normal }))
+            {
+                accessor.Amend.IsFocused.Should().BeTrue();
+                accessor.CurrentFilesList.Should().BeSameAs(accessor.Unstaged);
+            }
+        }
+        finally
+        {
+            form.Close();
+            await accessor.ClosePersistenceTask;
         }
     }
 
@@ -302,6 +439,34 @@ public sealed class FormCommitTests
             $"amend! Target commit{Environment.NewLine}{Environment.NewLine}Target body",
             editable: true);
 
+    [AvaloniaTest]
+    public async Task FormCommit_should_load_the_git_template_instead_of_the_recovery_message_when_the_editor_is_disabled()
+    {
+        bool useFormCommitMessage = AppSettings.UseFormCommitMessage;
+        AppSettings.UseFormCommitMessage = false;
+        GitModule module = CreateRepositoryWithTwoUnstagedChanges();
+        string templatePath = Path.Combine(_workingDirectory, "commit-template.txt");
+        File.WriteAllText(templatePath, "Configured template");
+        module.SetSetting("commit.template", templatePath);
+        File.WriteAllText(Path.Combine(module.WorkingDirGitDir, "COMMIT_EDITMSG"), "Recovered message");
+
+        FormCommit form = new(new GitUICommands(_serviceContainer, module));
+        try
+        {
+            form.Show();
+            await WaitUntilAsync(() => form.GetTestAccessor().Message.Text == "Configured template");
+
+            form.GetTestAccessor().Message.Text.Should().Be("Configured template");
+            form.GetTestAccessor().Message.IsEnabled.Should().BeFalse();
+        }
+        finally
+        {
+            form.Close();
+            await form.GetTestAccessor().ClosePersistenceTask;
+            AppSettings.UseFormCommitMessage = useFormCommitMessage;
+        }
+    }
+
     private async Task AssertCommitKindAsync(CommitKind kind, string expected, bool editable)
     {
         string gitDirectory = Path.Combine(_workingDirectory, ".git");
@@ -360,8 +525,8 @@ public sealed class FormCommitTests
         FormCommit form = new(new GitUICommands(_serviceContainer, module));
         try
         {
-            form.FindControl<CheckBox>("signOffToolStripMenuItem")!.IsChecked = true;
-            form.FindControl<CheckBox>("noVerifyToolStripMenuItem")!.IsChecked = true;
+            form.FindControl<ToolStripMenuItem>("signOffToolStripMenuItem")!.IsChecked = true;
+            form.FindControl<ToolStripMenuItem>("noVerifyToolStripMenuItem")!.IsChecked = true;
             form.FindControl<CheckBox>("ResetAuthor")!.IsChecked = true;
             form.FindControl<TextBox>("toolAuthor")!.Text = "Custom Author <author@example.com>";
             form.FindControl<ComboBox>("gpgSignCommitToolStripComboBox")!.SelectedIndex = 3;
@@ -665,8 +830,8 @@ public sealed class FormCommitTests
 
             form.GetTestAccessor().Message.Text = "Commit with options";
             form.FindControl<TextBox>("toolAuthor")!.Text = "Custom Author <author@example.com>";
-            form.FindControl<CheckBox>("signOffToolStripMenuItem")!.IsChecked = true;
-            form.FindControl<CheckBox>("noVerifyToolStripMenuItem")!.IsChecked = true;
+            form.FindControl<ToolStripMenuItem>("signOffToolStripMenuItem")!.IsChecked = true;
+            form.FindControl<ToolStripMenuItem>("noVerifyToolStripMenuItem")!.IsChecked = true;
             form.FindControl<ComboBox>("gpgSignCommitToolStripComboBox")!.SelectedIndex = 1;
             Button commit = form.FindControl<Button>("Commit")!;
             await WaitUntilAsync(() => commit.IsEnabled);
@@ -701,6 +866,43 @@ public sealed class FormCommitTests
         bool result = commands.StartCommitDialog(owner: null);
 
         result.Should().BeFalse();
+    }
+
+    [Test]
+    public void StartCommitDialog_should_register_standalone_commit_plugins_for_the_dialog_lifetime()
+    {
+        GitModule module = CreateRepositoryWithTwoUnstagedChanges();
+        GitUICommands commands = new(_serviceContainer, module);
+        IGitPluginForCommit plugin = Substitute.For<IGitPluginForCommit>();
+        commands.PreCommit += (_, e) => e.Cancel = true;
+
+        PluginRegistry.PluginsRegistered.Should().BeFalse();
+        lock (PluginRegistry.Plugins)
+        {
+            PluginRegistry.Plugins.Add(plugin);
+        }
+
+        try
+        {
+            bool result = commands.StartCommitDialog(owner: null);
+
+            result.Should().BeFalse();
+            plugin.Received(1).Register(commands);
+            plugin.Received(1).Unregister(commands);
+            PluginRegistry.PluginsRegistered.Should().BeFalse();
+        }
+        finally
+        {
+            if (PluginRegistry.PluginsRegistered)
+            {
+                PluginRegistry.Unregister(commands);
+            }
+
+            lock (PluginRegistry.Plugins)
+            {
+                PluginRegistry.Plugins.Remove(plugin);
+            }
+        }
     }
 
     [AvaloniaTest]
@@ -819,6 +1021,19 @@ public sealed class FormCommitTests
         return module;
     }
 
+    private GitModule CreateCleanRepository()
+    {
+        GitModule module = new(_serviceContainer.GetRequiredService<IGitExecutorProvider>(), _workingDirectory);
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("init") { "--quiet" });
+        module.SetSetting("user.name", "Avalonia Test");
+        module.SetSetting("user.email", "avalonia@example.com");
+
+        File.WriteAllText(Path.Combine(_workingDirectory, "tracked.txt"), "initial line\n");
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("add") { "--", "tracked.txt" });
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("commit") { "--quiet", "-m", "initial" });
+        return module;
+    }
+
     private GitModule CreateRepositoryWithTwoUnstagedChanges()
     {
         GitModule module = new(_serviceContainer.GetRequiredService<IGitExecutorProvider>(), _workingDirectory);
@@ -841,6 +1056,15 @@ public sealed class FormCommitTests
         fileStatusList.SelectedGitItems = [fileStatusList.GitItemStatuses[0]];
         await WaitUntilAsync(() => fileStatusList.SelectedGitItems.Count > 0);
         fileStatusList.GetTestAccessor().DoubleClick();
+    }
+
+    private static IEnumerable<CaptureNode> Flatten(CaptureNode node)
+    {
+        yield return node;
+        foreach (CaptureNode child in node.Children.SelectMany(Flatten))
+        {
+            yield return child;
+        }
     }
 
     private static Task WaitForCountsAsync(FileStatusList unstaged, int unstagedCount, FileStatusList staged, int stagedCount)

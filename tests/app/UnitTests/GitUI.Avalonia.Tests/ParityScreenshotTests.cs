@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.Design;
+using System.ComponentModel.Design;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -117,6 +117,123 @@ public sealed partial class ParityScreenshotTests
         await CaptureParityPlanAsync();
     }
 
+    [AvaloniaTest]
+    [TestCase(typeof(FormCreateWorktree))]
+    [TestCase(typeof(FormResolveConflicts))]
+    [TestCase(typeof(FormRevisionFilter))]
+    public void Capture_factory_should_use_runtime_commands_for_repository_dialogs(Type viewType)
+    {
+        ThreadHelper.JoinableTaskContext = new Microsoft.VisualStudio.Threading.JoinableTaskContext();
+        using CaptureContext context = new();
+        Control view = CreateView(context, viewType);
+        try
+        {
+            view.GetType().Should().Be(viewType);
+            ((GitModuleForm)view).UICommands.Should().BeSameAs(context.Commands);
+        }
+        finally
+        {
+            ((Window)view).Close();
+        }
+    }
+
+    [AvaloniaTest]
+    [TestCase(false)]
+    [TestCase(true)]
+    [NonParallelizable]
+    public async Task External_stash_capture_should_wait_for_runtime_readiness_without_deterministic_mode(bool hasChanges)
+    {
+        string? originalDeterministic = Environment.GetEnvironmentVariable(CaptureDeterministicRepositoryEnvironmentVariable);
+        string? originalRepository = Environment.GetEnvironmentVariable(CaptureRepositoryEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(CaptureDeterministicRepositoryEnvironmentVariable, null);
+            Environment.SetEnvironmentVariable(CaptureRepositoryEnvironmentVariable, null);
+            AvaloniaSynchronizationContext.InstallIfNeeded();
+            ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
+            using CaptureContext repositoryOwner = new();
+            if (!hasChanges)
+            {
+                repositoryOwner.Module.GitExecutable.RunCommand(new GitArgumentBuilder("add") { "--all" });
+                repositoryOwner.Module.GitExecutable.RunCommand(new GitArgumentBuilder("commit")
+                {
+                    "--quiet", "--no-gpg-sign", "-m", "\"Clean external stash capture fixture\""
+                });
+            }
+
+            Environment.SetEnvironmentVariable(CaptureRepositoryEnvironmentVariable, repositoryOwner.WorkingDirectory);
+            using CaptureContext externalContext = new();
+            FormStash form = (FormStash)CreateView(externalContext, typeof(FormStash));
+            try
+            {
+                await PrepareViewAsync(form, externalContext);
+                form.Show();
+                form.Loading.IsVisible.Should().BeTrue("the real worktree loader has started before capture readiness is awaited");
+
+                Task readiness = WaitForAsyncViewsAsync(form, externalContext);
+                readiness.IsCompleted.Should().BeFalse("external capture must await the loader even without deterministic mode");
+                await readiness.WaitAsync(TimeSpan.FromSeconds(35));
+
+                form.Loading.IsVisible.Should().BeFalse();
+                form.Stashes.IsEnabled.Should().BeTrue();
+                form.Stashed.HasSelection.Should().Be(hasChanges);
+                if (hasChanges)
+                {
+                    form.Stashed.GitItemStatuses.Should().NotBeEmpty();
+                    form.View.GetText().Should().NotBeEmpty();
+                }
+                else
+                {
+                    form.Stashed.GitItemStatuses.Should().BeEmpty();
+                    form.View.GetText().Should().BeNullOrEmpty();
+                }
+            }
+            finally
+            {
+                form.Close();
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(CaptureDeterministicRepositoryEnvironmentVariable, originalDeterministic);
+            Environment.SetEnvironmentVariable(CaptureRepositoryEnvironmentVariable, originalRepository);
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public async Task Standalone_tree_capture_should_match_reference_repository_and_root_selection()
+    {
+        ThreadHelper.JoinableTaskContext = new Microsoft.VisualStudio.Threading.JoinableTaskContext();
+        using CaptureContext context = new();
+        using RepoObjectsTree tree = new() { UICommandsSource = context };
+        await SeedStandaloneControlAsync(tree, context);
+        TreeView nativeTree = tree.GetTestAccessor().Tree;
+        TreeViewItem branches = nativeTree.Items.Cast<TreeViewItem>().First();
+        branches.Tag.Should().BeOfType<LocalBranchTree>();
+        branches.IsExpanded.Should().BeTrue();
+        nativeTree.SelectedItem.Should().BeSameAs(branches);
+        nativeTree.SelectedItems!.Cast<object>().Should().ContainSingle().Which.Should().BeSameAs(branches);
+        foreach (TreeViewItem root in nativeTree.Items.Cast<TreeViewItem>().Skip(1))
+        {
+            root.IsExpanded.Should().Be(root.Tag is RemoteBranchTree);
+            if (root.Tag is WorktreeTree or SubmoduleTree or StashTree)
+            {
+                root.ItemCount.Should().Be(0);
+            }
+        }
+
+        Window window = new() { Width = 360, Height = 560, Content = tree };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        using (AvaloniaControlStateDriver.Apply(tree, new CaptureStatePlan { Id = "normal", Kind = CaptureStateKind.Normal }))
+        {
+            nativeTree.IsFocused.Should().BeTrue();
+        }
+
+        window.Close();
+    }
+
     private static async Task<ManifestEntry> CaptureViewAsync(
         CaptureContext context,
         ViewDescriptor descriptor,
@@ -163,7 +280,7 @@ public sealed partial class ParityScreenshotTests
 
         try
         {
-            PrepareView(view, context);
+            await PrepareViewAsync(view, context);
             window.Show();
             window.SetRenderScaling(scaleFactor);
             if (!isWindow)
@@ -574,6 +691,26 @@ public sealed partial class ParityScreenshotTests
             return new HotkeysSettingsPage(context.Commands);
         }
 
+        if (viewType == typeof(BlameViewerSettingsPage))
+        {
+            return new BlameViewerSettingsPage(context.Commands);
+        }
+
+        if (viewType == typeof(CommitDialogSettingsPage))
+        {
+            return new CommitDialogSettingsPage(context.Commands);
+        }
+
+        if (viewType == typeof(FormBrowseRepoSettingsPage))
+        {
+            return new FormBrowseRepoSettingsPage(context.Commands);
+        }
+
+        if (viewType == typeof(ShellExtensionSettingsPage))
+        {
+            return new ShellExtensionSettingsPage(context.Commands);
+        }
+
         if (viewType == typeof(SimpleHelpDisplayDialog))
         {
             return new SimpleHelpDisplayDialog
@@ -585,7 +722,9 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(FormBrowse))
         {
-            return new FormBrowse(context.Commands);
+            FormBrowse form = new(context.Commands);
+            GetFieldValue<GitUI.CommitInfo.CommitInfo>(form, "RevisionInfo").ShowBranchesAsLinks = true;
+            return form;
         }
 
         if (viewType == typeof(FormCleanupRepository))
@@ -712,6 +851,16 @@ public sealed partial class ParityScreenshotTests
             return new FormGoToCommit(context.Commands);
         }
 
+        if (viewType == typeof(FormCreateWorktree))
+        {
+            return new FormCreateWorktree(context.Commands, Path.TrimEndingDirectorySeparator(context.WorkingDirectory));
+        }
+
+        if (viewType == typeof(FormRevisionFilter))
+        {
+            return new FormRevisionFilter(context.Commands, new FilterInfo());
+        }
+
         if (viewType == typeof(FormCheckoutRevision))
         {
             FormCheckoutRevision form = new(context.Commands);
@@ -751,17 +900,7 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(FormCherryPick))
         {
-            IGitModule module = Substitute.For<IGitModule>();
-            module.WorkingDir.Returns(context.WorkingDirectory);
-            module.IsMerge(context.HeadRevision.ObjectId).Returns(true);
-            GitRevision secondParent = context.ParentRevision.Clone();
-            secondParent.Author = "Second Parent Author";
-            secondParent.Subject = "Preserve the second side of the representative merge";
-            module.GetParentRevisions(context.HeadRevision.ObjectId).Returns([context.ParentRevision, secondParent]);
-            IGitUICommands commands = Substitute.For<IGitUICommands>();
-            commands.Module.Returns(module);
-            commands.GetService(Arg.Any<Type>()).Returns(call => context.Commands.GetService(call.Arg<Type>()));
-            return new FormCherryPick(commands, context.HeadRevision);
+            return new FormCherryPick(context.Commands, context.HeadRevision);
         }
 
         if (viewType == typeof(FormRevertCommit))
@@ -828,6 +967,7 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(FormCommit))
         {
+            context.ResetCommitMessageForCapture();
             return new FormCommit(context.Commands);
         }
 
@@ -870,7 +1010,7 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(FormInit))
         {
-            return new FormInit(context.Commands, context.WorkingDirectory, gitModuleChanged: null);
+            return new FormInit(context.Commands, context.Module.WorkingDir, gitModuleChanged: null);
         }
 
         if (viewType == typeof(FormMergeBranch))
@@ -901,7 +1041,7 @@ public sealed partial class ParityScreenshotTests
         if (viewType == typeof(FormArchive))
         {
             FormArchive form = new(context.Commands) { SelectedRevision = context.HeadRevision };
-            form.SetDiffSelectedRevision(context.ParentRevision);
+            form.SetDiffSelectedRevision(context.HeadRevision);
             return form;
         }
 
@@ -1008,6 +1148,38 @@ public sealed partial class ParityScreenshotTests
 
         return (Control)(Activator.CreateInstance(viewType)
             ?? throw new InvalidOperationException($"Could not construct {viewType.FullName}."));
+    }
+
+    private static T GetFieldValue<T>(object owner, string fieldName) where T : class
+    {
+        for (Type? type = owner.GetType(); type is not null; type = type.BaseType)
+        {
+            FieldInfo? field = type.GetField(
+                fieldName,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+            if (field?.GetValue(owner) is T value)
+            {
+                return value;
+            }
+        }
+
+        throw new InvalidOperationException($"Field '{fieldName}' was not found on {owner.GetType().FullName}.");
+    }
+
+    private static async Task PrepareViewAsync(Control root, CaptureContext context)
+    {
+        if (root is Dashboard or FormBrowse)
+        {
+            // parity-scaffolding: Both hosts use the same categorized history. Seed every cell
+            // explicitly rather than depending on a preceding Dashboard capture's settings.
+            Repository repository = new(context.Module.WorkingDir);
+            await RepositoryHistoryManager.Locals.AddAsMostRecentAsync(repository.Path);
+            await RepositoryHistoryManager.Locals.AssignCategoryAsync(repository, "Development");
+            context.Commands.GetRequiredService<IUserRepositoriesListController>().ClearCache();
+            context.Commands.GetRequiredService<IRepositoryHistoryUIService>().Invalidate();
+        }
+
+        PrepareView(root, context);
     }
 
     private static void PrepareView(Control root, CaptureContext context)
@@ -1182,16 +1354,6 @@ public sealed partial class ParityScreenshotTests
             accessor.Branch.Text = "master";
         }
 
-        if (root is FormCreateWorktree formCreateWorktree)
-        {
-            IGitRef feature = Substitute.For<IGitRef>();
-            feature.Name.Returns("feature/visual-parity");
-            feature.LocalName.Returns("feature/visual-parity");
-            FormCreateWorktree.TestAccessor accessor = formCreateWorktree.GetTestAccessor();
-            accessor.SetBranches([feature]);
-            accessor.WorktreeDirectory.Text = Path.Combine(context.WorkingDirectory, "..", "visual-parity-worktree");
-        }
-
         if (root is FormManageWorktree formManageWorktree)
         {
             string rootPath = OperatingSystem.IsWindows() ? @"C:\Repos" : "/home/user/repos";
@@ -1227,11 +1389,20 @@ public sealed partial class ParityScreenshotTests
             return;
         }
 
+        SetCaptureUICommandsSource(root, context);
+    }
+
+    // parity-scaffolding: Preserve product-owned command propagation in standalone composites.
+    internal static void SetCaptureUICommandsSource(Control root, IGitUICommandsSource source)
+    {
         foreach (GitModuleControl moduleControl in new[] { root }
                      .Concat(root.GetLogicalDescendants().OfType<Control>())
                      .OfType<GitModuleControl>())
         {
-            moduleControl.UICommandsSource = context;
+            if (!moduleControl.TryGetUICommandsDirect(out _))
+            {
+                moduleControl.UICommandsSource = source;
+            }
         }
     }
 
@@ -1289,21 +1460,39 @@ public sealed partial class ParityScreenshotTests
 
         if (root is Dashboard dashboard)
         {
-            IRepositoryHistoryUIService history = Substitute.For<IRepositoryHistoryUIService>();
-            IUserRepositoriesListController controller = Substitute.For<IUserRepositoriesListController>();
-            Repository recent = new(context.WorkingDirectory);
-            Repository favourite = new(Path.GetDirectoryName(context.WorkingDirectory)!)
-            {
-                Category = "Development",
-            };
-            controller.PreRenderRepositories(Arg.Any<string>()).Returns((
-                new[] { new RecentRepoInfo(recent, topRepo: true, anchored: true) { Caption = "gitextensions" } },
-                new[] { new RecentRepoInfo(favourite, topRepo: false, anchored: false) { Caption = "avalonia-port" } }));
-            controller.IsValidGitWorkingDir(Arg.Any<string>()).Returns(true);
-            controller.GetCurrentBranchName(recent.Path).Returns(MainBranchName);
-            controller.GetCurrentBranchName(favourite.Path).Returns(FeatureBranchName);
-            dashboard.Initialize(controller, history);
+            // parity-scaffolding: Use the same isolated repository-history seed and product
+            // controller as the reference worker, not differently named synthetic repositories.
+            dashboard.Initialize(
+                context.Commands.GetRequiredService<IUserRepositoriesListController>(),
+                context.Commands.GetRequiredService<IRepositoryHistoryUIService>());
             dashboard.RefreshContent();
+            return;
+        }
+
+        if (root is RepoObjectsTree repositoryTree
+            && Environment.GetEnvironmentVariable(CaptureRepoTreeContextEnvironmentVariable) is not ("worktree" or "submodule"))
+        {
+            // parity-scaffolding: Match the reference consumer's actual refs, empty stash
+            // snapshot, root selection and expansion. Synthetic worktree/submodule states
+            // remain separate opt-in cases below, never inputs to the normal paired matrix.
+            ICheckRefs refsSource = Substitute.For<ICheckRefs>();
+            refsSource.Contains(Arg.Any<ObjectId>()).Returns(call => context.Refs.Any(gitRef => gitRef.ObjectId == call.Arg<ObjectId>()));
+            IRevisionGridInfo revisionGridInfo = Substitute.For<IRevisionGridInfo>();
+            revisionGridInfo.CurrentCheckout.Returns(context.HeadRevision.ObjectId);
+            revisionGridInfo.GetCurrentBranch().Returns(context.Module.GetSelectedBranch(emptyIfDetached: true));
+            repositoryTree.Initialize(aheadBehindDataProvider: null, _ => { }, refsSource, revisionGridInfo);
+            repositoryTree.RefreshRevisionsLoading(context.Module.GetRefs, new Lazy<IReadOnlyCollection<GitRevision>>(() => []), forceRefresh: true);
+            repositoryTree.RefreshRevisionsLoaded();
+            TreeView tree = repositoryTree.GetTestAccessor().Tree;
+            foreach (TreeViewItem rootNode in tree.Items.Cast<TreeViewItem>())
+            {
+                rootNode.IsExpanded = rootNode.Tag is RemoteBranchTree;
+            }
+
+            TreeViewItem branches = tree.Items.Cast<TreeViewItem>().First();
+            branches.IsExpanded = true;
+            tree.SelectedItems?.Clear();
+            tree.SelectedItem = branches;
             return;
         }
 
@@ -1479,7 +1668,7 @@ public sealed partial class ParityScreenshotTests
         byte[] avatar = (await new InitialsAvatarProvider().GetAvatarAsync(
             "avalonia.contributor@example.com",
             "Avalonia Contributor",
-            blame.BlameAuthor.AvatarSize))!;
+            Math.Max(1, (int)Math.Ceiling(blame.BlameAuthor.TextEditor.FontSize) + 1)))!;
         GitBlameEntry[] entries = lines
             .Select((_, index) => new GitBlameEntry
             {
@@ -1492,8 +1681,10 @@ public sealed partial class ParityScreenshotTests
             '\n',
             lines.Select((_, index) => index % 4 == 0 ? $"2026-07-{20 - (index % 7):00} - Avalonia Contributor" : string.Empty));
 
-        await accessor.BlameFile.ViewTextAsync(AppSourcePath, context.SampleBlame);
-        blame.BlameAuthor.Initialize(gutter, entries, showAvatars: true);
+        await Task.WhenAll(
+            accessor.BlameFile.ViewTextAsync(AppSourcePath, context.SampleBlame),
+            blame.BlameAuthor.ViewTextAsync("committer.txt", gutter));
+        blame.BlameAuthor.SetGitBlameGutter(entries);
     }
 
     private static void SeedChecklist(ChecklistSettingsPage checklist)
@@ -1521,8 +1712,11 @@ public sealed partial class ParityScreenshotTests
             status.Content = message;
             status.IsVisible = true;
             status.Background = new SolidColorBrush(AvaloniaThemeResources.ToMediaColor(background));
+            System.Drawing.Color controlText = status.ActualThemeVariant == ThemeVariant.Dark
+                ? System.Drawing.Color.FromArgb(240, 240, 240)
+                : System.Drawing.Color.Black;
             status.Foreground = new SolidColorBrush(
-                AvaloniaThemeResources.ToMediaColor(ColorHelper.GetTextColor(background)));
+                AvaloniaThemeResources.ToMediaColor(controlText.AdaptForeColor(background)));
             fix.IsVisible = !valid;
         }
 
@@ -1585,6 +1779,23 @@ public sealed partial class ParityScreenshotTests
         CaptureContext context,
         CaptureStatePlan? state = null)
     {
+        if (root is FormCreateWorktree formCreateWorktree)
+        {
+            ComboBox branches = formCreateWorktree.GetTestAccessor().Branches;
+            string selectedBranch = context.Module.GetSelectedBranch();
+            int expectedCount = context.Module.GetRefs(RefsFilter.Heads).Count(branch => branch.Name != selectedBranch);
+            Stopwatch branchStopwatch = Stopwatch.StartNew();
+            while ((branches.ItemCount != expectedCount || branches.PlaceholderText == GitUI.TranslatedStrings.LoadingData)
+                   && branchStopwatch.Elapsed < TimeSpan.FromSeconds(15))
+            {
+                Dispatcher.UIThread.RunJobs();
+                await Task.Delay(10);
+            }
+
+            branches.ItemCount.Should().Be(expectedCount, "the runtime worktree branch loader must finish before capture");
+            branches.PlaceholderText.Should().NotBe(GitUI.TranslatedStrings.LoadingData);
+        }
+
         if (root is CreatePullRequestForm createPullRequestForm)
         {
             CreatePullRequestForm.TestAccessor accessor = createPullRequestForm.GetTestAccessor();
@@ -1884,20 +2095,65 @@ public sealed partial class ParityScreenshotTests
             searchResults.ItemCount.Should().BeGreaterThan(0);
         }
 
-        if (Environment.GetEnvironmentVariable(CaptureDeterministicRepositoryEnvironmentVariable) == "1"
+        if ((Environment.GetEnvironmentVariable(CaptureDeterministicRepositoryEnvironmentVariable) == "1"
+             || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(CaptureRepositoryEnvironmentVariable)))
             && root is FormBrowse formBrowse)
         {
-            // parity-scaffolding: Wait for the seeded repository's status count so captures cannot race the monitor.
+            // Both internally seeded and caller-supplied paired repositories must settle HEAD
+            // in the Commit tab before a lower tab is opened; WinForms retains that hidden
+            // commit content, and opening menus must not race selection-dependent state.
+            TextBlock loadingStatus = GetRequiredControl<TextBlock>(formBrowse.RevisionGrid, "lblLoadingStatus");
+            Stopwatch revisionStopwatch = Stopwatch.StartNew();
+            while (!IsLoadingComplete(loadingStatus.Text)
+                   && revisionStopwatch.Elapsed < TimeSpan.FromSeconds(15))
+            {
+                Dispatcher.UIThread.RunJobs();
+                await Task.Delay(10);
+            }
+
+            IsLoadingComplete(loadingStatus.Text).Should().BeTrue();
+            await formBrowse.JoinLoadOperationsForTestAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            await SelectAndWaitForFormBrowseRevisionAsync(formBrowse, context.HeadRevision);
+
+            // Selection can refresh repository state again; retain the completed push counter,
+            // not ResetBeforeUpdate's transient empty text and preserved old button width.
+            await formBrowse.JoinLoadOperationsForTestAsync().WaitAsync(TimeSpan.FromSeconds(15));
+
+            // Wait for this fixture's status count so captures cannot race the monitor.
+            // An externally supplied paired repository may be clean; the internally seeded
+            // repository has three changes, but that count is not a universal capture fact.
             Button commitButton = GetRequiredControl<Button>(formBrowse, "toolStripButtonCommit");
+            string expectedStatusSuffix = $"({context.ChangedFiles.Count})";
             Stopwatch statusStopwatch = Stopwatch.StartNew();
-            while (!(commitButton.Content?.ToString()?.EndsWith("(3)", StringComparison.Ordinal) ?? false)
+            while (!(commitButton.Content?.ToString()?.EndsWith(expectedStatusSuffix, StringComparison.Ordinal) ?? false)
                    && statusStopwatch.Elapsed < TimeSpan.FromSeconds(15))
             {
                 Dispatcher.UIThread.RunJobs();
                 await Task.Delay(10);
             }
 
-            commitButton.Content?.ToString().Should().EndWith("(3)");
+            commitButton.Content?.ToString().Should().EndWith(expectedStatusSuffix);
+
+            IReadOnlyList<string> submodulePaths = context.Module.GetSubmodulesLocalPaths(recursive: false);
+            if (submodulePaths.Count > 0)
+            {
+                RepoObjectsTree.TestAccessor repoTree = formBrowse.repoObjectsTree.GetTestAccessor();
+                SubmoduleTree submoduleTree = repoTree.Tree.Items.Cast<TreeViewItem>()
+                    .Select(item => item.Tag)
+                    .OfType<SubmoduleTree>()
+                    .Single();
+                int expectedSubmoduleNodeCount = submodulePaths.Count + 1;
+                Stopwatch submoduleStopwatch = Stopwatch.StartNew();
+                while (submoduleTree.DescendantsAndSelf().OfType<SubmoduleNode>().Count() < expectedSubmoduleNodeCount
+                       && submoduleStopwatch.Elapsed < TimeSpan.FromSeconds(15))
+                {
+                    Dispatcher.UIThread.RunJobs();
+                    await Task.Delay(10);
+                }
+
+                submoduleTree.DescendantsAndSelf().OfType<SubmoduleNode>().Should().HaveCount(expectedSubmoduleNodeCount,
+                    "the paired Browse capture must wait for the repository's real submodule provider");
+            }
         }
 
         if (Environment.GetEnvironmentVariable(CaptureDeterministicRepositoryEnvironmentVariable) == "1"
@@ -1944,6 +2200,38 @@ public sealed partial class ParityScreenshotTests
             diff.TextEditor.Text.Should().NotBeEmpty();
         }
 
+        if (root is FormStash formStash)
+        {
+            // The source capture waits for the asynchronous worktree refresh before rendering.
+            // Do the same here so a transient loading overlay is never treated as dialog state.
+            Control loading = GetRequiredControl<Control>(formStash, "Loading");
+            ComboBox stashes = GetRequiredControl<ComboBox>(formStash, "Stashes");
+            Stopwatch stashStopwatch = Stopwatch.StartNew();
+            while ((loading.IsVisible || !stashes.IsEnabled)
+                   && stashStopwatch.Elapsed < TimeSpan.FromSeconds(15))
+            {
+                Dispatcher.UIThread.RunJobs();
+                await Task.Delay(10);
+            }
+
+            loading.IsVisible.Should().BeFalse();
+            stashes.IsEnabled.Should().BeTrue();
+
+            if (formStash.Stashed.HasSelection)
+            {
+                FileViewer view = GetRequiredControl<FileViewer>(formStash, "View");
+                Stopwatch diffStopwatch = Stopwatch.StartNew();
+                while (string.IsNullOrEmpty(view.TextEditor.Text)
+                       && diffStopwatch.Elapsed < TimeSpan.FromSeconds(15))
+                {
+                    Dispatcher.UIThread.RunJobs();
+                    await Task.Delay(10);
+                }
+
+                view.TextEditor.Text.Should().NotBeEmpty();
+            }
+        }
+
         CommitDiff? commitDiff = root as CommitDiff
             ?? root.GetLogicalDescendants()
                 .OfType<CommitDiff>()
@@ -1978,6 +2266,57 @@ public sealed partial class ParityScreenshotTests
         loadingStatuses.Should().OnlyContain(status => IsLoadingComplete(status.Text));
     }
 
+    private static async Task SelectAndWaitForFormBrowseRevisionAsync(FormBrowse formBrowse, GitRevision revision)
+    {
+        Stopwatch selectionStopwatch = Stopwatch.StartNew();
+        int stableObservationCount = 0;
+        while (stableObservationCount < 10 && selectionStopwatch.Elapsed < TimeSpan.FromSeconds(15))
+        {
+            if (formBrowse.RevisionGrid.SelectedRevision?.ObjectId != revision.ObjectId)
+            {
+                formBrowse.RevisionGrid.SetSelectedRevision(revision.ObjectId).Should().BeTrue();
+            }
+
+            Dispatcher.UIThread.RunJobs();
+            stableObservationCount = formBrowse.RevisionGrid.GetSelectedRevisions() is [{ ObjectId: var selectedId }]
+                                     && selectedId == revision.ObjectId
+                ? stableObservationCount + 1
+                : 0;
+            await Task.Delay(25);
+        }
+
+        stableObservationCount.Should().Be(10,
+            "the paired Browse capture must retain repository HEAD after queued selection work settles");
+        formBrowse.RevisionGrid.GetSelectedRevisions().Should().ContainSingle()
+            .Which.ObjectId.Should().Be(revision.ObjectId);
+
+        // Commit details are lazy when another lower tab is selected. The revision is
+        // still selected, but its hidden header is not a valid readiness signal.
+        if (formBrowse.CommitInfoTabControl.SelectedItem != formBrowse.CommitInfoTabPage)
+        {
+            return;
+        }
+
+        // The revision list and primary commit-details loaders complete independently.
+        // Wait for the selected revision's header and message before recording it.
+        CommitInfo.TestAccessor commitInfo = formBrowse.RevisionInfo.GetTestAccessor();
+        Stopwatch commitInfoStopwatch = Stopwatch.StartNew();
+        while ((!commitInfo.Header.GetTestAccessor().RevisionHeader.GetPlainText()
+            .Contains(revision.ObjectId.ToString(), StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(commitInfo.CommitMessage.GetPlainText())
+                || string.IsNullOrWhiteSpace(commitInfo.RevisionInfo.GetPlainText()))
+               && commitInfoStopwatch.Elapsed < TimeSpan.FromSeconds(15))
+        {
+            Dispatcher.UIThread.RunJobs();
+            await Task.Delay(10);
+        }
+
+        commitInfo.Header.GetTestAccessor().RevisionHeader.GetPlainText()
+            .Should().Contain(revision.ObjectId.ToString());
+        commitInfo.CommitMessage.GetPlainText().Should().NotBeNullOrWhiteSpace();
+        commitInfo.RevisionInfo.GetPlainText().Should().NotBeNullOrWhiteSpace();
+    }
+
     // parity-scaffolding: File-backed editor dialogs must be compared only after their real loader settles.
     private static async Task WaitForEditorContentAsync(FileViewer editor, string fileName)
     {
@@ -2010,6 +2349,13 @@ public sealed partial class ParityScreenshotTests
 
     private static (double Width, double Height) GetCaptureSize(Type viewType)
     {
+        if (viewType == typeof(FilterToolBar))
+        {
+            // parity-scaffolding: The native AutoSize strip resolves to this standalone
+            // viewport at the shared reference font; do not compare it to the generic host.
+            return (551, 25);
+        }
+
         if (viewType == typeof(SettingControlBindingsCaptureSurface)
             || viewType == typeof(SettingControlBindingsNullCaptureSurface))
         {
@@ -2018,7 +2364,8 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(BranchSelector))
         {
-            return (325, 54);
+            // The source AutoSize layout contracts the blank change label and grows the second row.
+            return (322, 58);
         }
 
         if (viewType == typeof(InteractiveGitActionControl))
@@ -2028,12 +2375,12 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(GitUI.UserControls.Settings.SettingsCheckBox))
         {
-            return (200, 20);
+            return (200, 19);
         }
 
         if (viewType == typeof(WaitSpinner))
         {
-            return (38.4, 38.4);
+            return (48, 48);
         }
 
         if (viewType == typeof(EmptyRepoControl))
@@ -2051,6 +2398,11 @@ public sealed partial class ParityScreenshotTests
             return (682, 485);
         }
 
+        if (viewType == typeof(FileViewer))
+        {
+            return (757, 518);
+        }
+
         if (viewType == typeof(ErrorControl))
         {
             return (2080, 1447);
@@ -2063,7 +2415,7 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(WatermarkComboBox) || viewType == typeof(CaseSensitiveComboBox))
         {
-            return (200, 22.4);
+            return (250, 23);
         }
 
         if (viewType == typeof(SimplePrompt))
@@ -2104,6 +2456,40 @@ public sealed partial class ParityScreenshotTests
             return (824, 532);
         }
 
+        if (viewType == typeof(FormAddFiles))
+        {
+            // parity-scaffolding: The 120-DPI Designer normalizes to the source's native-96 runtime client.
+            return (443, 65);
+        }
+
+        if (viewType == typeof(FormApplyPatch))
+        {
+            return (711, 436);
+        }
+
+        if (viewType == typeof(FormClone))
+        {
+            // parity-scaffolding: Source AutoSize grows the client to the deterministic runtime content.
+            return (647, 372);
+        }
+
+        if (viewType == typeof(FormInit))
+        {
+            // parity-scaffolding: Source AutoSize grows the client to the deterministic runtime content.
+            return (542, 190);
+        }
+
+        if (viewType == typeof(FormMergeBranch))
+        {
+            // parity-scaffolding: Source AutoSize resolves the translated help and options content at runtime.
+            return (783, 424);
+        }
+
+        if (viewType == typeof(FormRebase))
+        {
+            return (1034, 461);
+        }
+
         if (viewType == typeof(FormBlame))
         {
             return (784, 762);
@@ -2117,6 +2503,17 @@ public sealed partial class ParityScreenshotTests
         if (viewType == typeof(FormGitCommandLog))
         {
             return (659, 470);
+        }
+
+        if (viewType == typeof(FormFileHistory))
+        {
+            return (748, 444);
+        }
+
+        if (viewType == typeof(FormStash))
+        {
+            // The source Designer is authored at 192 DPI; use its native-96 client size.
+            return (708, 520);
         }
 
         if (viewType == typeof(FormCleanupRepository))
@@ -2138,9 +2535,33 @@ public sealed partial class ParityScreenshotTests
             return (784, 561);
         }
 
+        if (viewType == typeof(FormCreateBranch))
+        {
+            return (570, 386);
+        }
+
+        if (viewType == typeof(FormCheckoutBranch))
+        {
+            // The shared dirty fixture keeps the local-changes row visible; use the source
+            // runtime client height rather than clipping its branch row and footer.
+            return (724, 185);
+        }
+
+        if (viewType == typeof(FormDeleteBranch))
+        {
+            return (412, 91);
+        }
+
+        if (viewType == typeof(FormRenameBranch))
+        {
+            return (484, 42);
+        }
+
         if (viewType == typeof(FormDeleteRemoteBranch))
         {
-            return (403, 167);
+            // WinForms AutoSize expands the 139-pixel Designer client to 152 pixels when the
+            // deterministic fixture has no local tracking-branch candidates.
+            return (403, 152);
         }
 
         if (viewType == typeof(FormResetAnotherBranch))
@@ -2166,7 +2587,8 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(EnvironmentInfo))
         {
-            return (137, 78);
+            // WinForms AutoSize expands the Designer's 165x78 control for the deterministic runtime text.
+            return (346, 123);
         }
 
         if (viewType == typeof(FormCommandlineHelp))
@@ -2238,7 +2660,7 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(FormBrowse))
         {
-            return (1400, 850);
+            return (923, 573);
         }
 
         if (viewType == typeof(CreatePullRequestForm))
@@ -2348,12 +2770,13 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(FormArchive))
         {
-            return (610, 609);
+            return (594, 571);
         }
 
         if (viewType == typeof(FormCherryPick))
         {
-            return (630, 470);
+            // parity-scaffolding: Source AutoSize contracts the single-parent state to its runtime client.
+            return (614, 332);
         }
 
         if (viewType == typeof(FormRevertCommit))
@@ -2383,7 +2806,7 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(FormVerify))
         {
-            return (900, 600);
+            return (859, 575);
         }
 
         if (viewType == typeof(FormPull))
@@ -2458,8 +2881,9 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(FormChooseTranslation))
         {
-            // The WinForms full-window PrintWindow surface includes non-client chrome.
-            return (816, 578);
+            // The Avalonia surface is client-only; the reference tree retains its native
+            // non-client pixels separately and declares the 800x539 client crop.
+            return (800, 539);
         }
 
         if (viewType == typeof(FormCommit))
@@ -2474,7 +2898,7 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(GourceStart))
         {
-            return (574.4, 132);
+            return (574, 132);
         }
 
         if (typeof(Window).IsAssignableFrom(viewType))
@@ -2797,6 +3221,33 @@ public sealed partial class ParityScreenshotTests
 
             """;
 
+        public void ResetCommitMessageForCapture()
+        {
+            // The paired WinForms capture can persist its draft while disposing the form.
+            // A deterministic capture repository is throwaway input, so every host must
+            // begin FormCommit from the same empty persisted-message state.
+            string gitDirectory = Module.WorkingDirGitDir;
+            DeleteCaptureStateFile(Path.Combine(gitDirectory, "COMMITMESSAGE"));
+            DeleteCaptureStateFile(Path.Combine(gitDirectory, "GitExtensions.amend"));
+
+            static void DeleteCaptureStateFile(string path)
+            {
+                const int RetryCount = 20;
+                for (int attempt = 1; ; attempt++)
+                {
+                    try
+                    {
+                        File.Delete(path);
+                        return;
+                    }
+                    catch (IOException) when (attempt < RetryCount)
+                    {
+                        Thread.Sleep(50);
+                    }
+                }
+            }
+        }
+
         public void Dispose()
         {
             _serviceContainer.Dispose();
@@ -2834,6 +3285,11 @@ public sealed partial class ParityScreenshotTests
                 Module.GitExecutable.RunCommand(new GitArgumentBuilder("remote") { "add", RemoteName, "https://example.com/gitextensions/parity.git" });
                 Module.SetSetting($"remote.{RemoteName}.color", "#7B3FB2");
                 Module.GitExecutable.RunCommand(new GitArgumentBuilder("update-ref") { $"refs/remotes/{RemoteName}/{MainBranchName}", "HEAD" });
+
+                // FormSparseWorkingCopy loads the actual repository metadata file asynchronously.
+                // Seed representative content without enabling sparse checkout so every capture host
+                // observes the same editor state while the repository topology remains unchanged.
+                File.WriteAllText(Path.Combine(_workingDirectory, ".git", "info", "sparse-checkout"), "/src/\n/README.md\n");
 
                 File.AppendAllText(Path.Combine(sourceDirectory, "App.cs"), "// Unstaged visual parity adjustment\n");
                 File.WriteAllText(Path.Combine(_workingDirectory, "CHANGELOG.md"), "Avalonia visual parity harness\n");

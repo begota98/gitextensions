@@ -2225,7 +2225,7 @@ public sealed partial class GitModule : IGitModule
                 {
                     string fullPath = GetWindowsPath(path);
                     bool isDeleted = !Directory.Exists(fullPath);
-                    worktrees.Add(new GitWorktree(fullPath, headType, sha1, branch, isDeleted));
+                    worktrees.Add(new GitWorktree(fullPath, headType, sha1, branch, isDeleted) { IsMain = worktrees.Count == 0 });
                 }
 
                 path = null;
@@ -2262,7 +2262,7 @@ public sealed partial class GitModule : IGitModule
         {
             string fullPath = GetWindowsPath(path);
             bool isDeleted = !Directory.Exists(fullPath);
-            worktrees.Add(new GitWorktree(fullPath, headType, sha1, branch, isDeleted));
+            worktrees.Add(new GitWorktree(fullPath, headType, sha1, branch, isDeleted) { IsMain = worktrees.Count == 0 });
         }
 
         return worktrees;

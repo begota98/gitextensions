@@ -21,11 +21,11 @@
                Focusable="True"
                FocusAdorner="{x:Null}"
                Background="{DynamicResource GitExtensionsPanelBackgroundBrush}"
-               Foreground="{DynamicResource GitExtensionsControlForegroundBrush}">
+               Foreground="{DynamicResource GitExtensionsWindowTextBrush}">
       <ListBox.ContextMenu>
         <!-- The 265-DIP ToolStrip item canvas plus its retained one-pixel native border. -->
         <wf:ContextMenuStrip x:Name="mainContextMenu"
-                             Classes="gitextensions-revision-context-menu"
+                             Classes="gitextensions-toolstrip-context-menu"
                              Width="266">
           <wf:ToolStripMenuItem x:Name="markRevisionAsBadToolStripMenuItem" Header="Mark revision as bad">
             <MenuItem.Icon><Image Classes="gitextensions-icon-16" Source="{x:Static properties:Images.BisectBad}" /></MenuItem.Icon>
@@ -154,6 +154,11 @@
         </wf:ContextMenuStrip>
       </ListBox.ContextMenu>
       <ListBox.Styles>
+        <!-- WinForms keeps the grid BackColor at PanelBackground but paints its empty
+             DataGridView viewport with BackgroundColor = SystemColors.Window. -->
+        <Style Selector="ListBox#_gridView /template/ ScrollViewer#PART_ScrollViewer">
+          <Setter Property="Background" Value="{DynamicResource GitExtensionsWindowBackgroundBrush}" />
+        </Style>
         <!-- Rows use the original font- and DPI-derived height: the graph renderer draws each
              row's lane segment assuming adjacent rows abut, so container padding stays zero. -->
         <Style Selector="ListBoxItem">
@@ -161,18 +166,18 @@
           <Setter Property="MinHeight" Value="0" />
         </Style>
         <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
-          <Setter Property="Background" Value="{DynamicResource GitExtensionsHighlightBackgroundBrush}" />
+          <Setter Property="Background" Value="{DynamicResource GitExtensionsDataGridViewSelectionBackgroundBrush}" />
           <Setter Property="Foreground" Value="{DynamicResource GitExtensionsRevisionSelectedSubjectBrush}" />
         </Style>
         <Style Selector="ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-          <Setter Property="Background" Value="{DynamicResource GitExtensionsHighlightBackgroundBrush}" />
+          <Setter Property="Background" Value="{DynamicResource GitExtensionsDataGridViewSelectionBackgroundBrush}" />
         </Style>
         <Style Selector="ListBox:not(:focus-within) ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
           <Setter Property="Background" Value="{DynamicResource GitExtensionsInactiveSelectionBackgroundBrush}" />
           <Setter Property="Foreground" Value="{DynamicResource GitExtensionsControlForegroundBrush}" />
         </Style>
         <Style Selector="ListBox.context-menu-open ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
-          <Setter Property="Background" Value="{DynamicResource GitExtensionsHighlightBackgroundBrush}" />
+          <Setter Property="Background" Value="{DynamicResource GitExtensionsDataGridViewSelectionBackgroundBrush}" />
           <Setter Property="Foreground" Value="{DynamicResource GitExtensionsRevisionSelectedSubjectBrush}" />
         </Style>
         <Style Selector="TextBlock.revision-body">

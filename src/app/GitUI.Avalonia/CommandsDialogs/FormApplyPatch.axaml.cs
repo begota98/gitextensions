@@ -33,6 +33,7 @@ public partial class FormApplyPatch : GitModuleForm
     private readonly TranslationString _applyPatchMsgBox = new("Apply patch");
 
     private static readonly List<PatchFile> Skipped = [];
+    private bool? _usePatchDirectory;
 
     public FormApplyPatch()
     {
@@ -54,14 +55,20 @@ public partial class FormApplyPatch : GitModuleForm
         InitializeComplete();
     }
 
+    // Avalonia applies named radio groups when the controls attach; clear the peer in both
+    // setters so a pre-show selection has the same immediate exclusivity as WinForms.
     public void SetPatchFile(string name)
     {
+        _usePatchDirectory = false;
+        PatchDirMode.IsChecked = false;
         PatchFileMode.IsChecked = true;
         PatchFile.Text = name;
     }
 
     public void SetPatchDir(string name)
     {
+        _usePatchDirectory = true;
+        PatchFileMode.IsChecked = false;
         PatchDirMode.IsChecked = true;
         PatchDir.Text = name;
     }
@@ -71,11 +78,37 @@ public partial class FormApplyPatch : GitModuleForm
         base.OnRuntimeLoad(e);
 
         Text = $"{_applyPatchMsgBox.Text} ({Module.WorkingDir})";
+        if (_usePatchDirectory is bool usePatchDirectory)
+        {
+            // Named groups are finalized when Avalonia attaches the controls. Reapply an
+            // explicit pre-show selection at the lifecycle point where WinForms retains it.
+            PatchFileMode.IsChecked = !usePatchDirectory;
+            PatchDirMode.IsChecked = usePatchDirectory;
+        }
+
         IgnoreWhitespace.IsChecked = AppSettings.ApplyPatchIgnoreWhitespace;
         SignOff.IsChecked = AppSettings.ApplyPatchSignOff;
-        PatchFile.Focus();
-        PatchFile.SelectAll();
-        EnableButtons();
+
+        if (Module.InTheMiddleOfPatch())
+        {
+            // Preserve the Designer defaults for a new patch while activating the original
+            // continuation-state controller when the dialog opens during an existing patch.
+            EnableButtons();
+        }
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+
+        // Avalonia applies its initial focus after Loaded; restore the source Load focus here.
+        Avalonia.Threading.Dispatcher.UIThread.Post(
+            () =>
+            {
+                PatchFile.Focus();
+                PatchFile.SelectAll();
+            },
+            Avalonia.Threading.DispatcherPriority.Input);
     }
 
     private void InitializeStaticContent()
@@ -93,7 +126,6 @@ public partial class FormApplyPatch : GitModuleForm
         SolveMergeConflicts.Click += SolveMergeConflicts_Click;
         IgnoreWhitespace.IsCheckedChanged += IgnoreWhitespace_CheckedChanged;
         SignOff.IsCheckedChanged += SignOff_CheckedChanged;
-        SolveMergeConflicts.Background = new SolidColorBrush(Colors.Goldenrod);
     }
 
     private void EnableButtons()

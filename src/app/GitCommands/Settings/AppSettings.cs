@@ -1032,6 +1032,15 @@ public static partial class AppSettings
         set => SetBool("autostash", value);
     }
 
+    /// <summary>
+    ///  Whether the submodules of a cloned repository shall be initialized, as chosen the last time.
+    /// </summary>
+    public static bool CloneInitializeAllSubmodules
+    {
+        get => GetBool("CloneInitializeAllSubmodules", true);
+        set => SetBool("CloneInitializeAllSubmodules", value);
+    }
+
     public static bool RebaseAutoStash
     {
         get => GetBool("RebaseAutostash", false);

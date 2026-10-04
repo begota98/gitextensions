@@ -1,4 +1,4 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Styling;
@@ -127,6 +127,7 @@ internal static class AvaloniaThemeResources
         DrawingColor grayText = ResolveSystemColor(settings, KnownColor.GrayText);
         DrawingColor control = ResolveSystemColor(settings, KnownColor.Control);
         DrawingColor controlText = ResolveSystemColor(settings, KnownColor.ControlText);
+        DrawingColor sourceControlText = isDark ? DrawingColor.FromArgb(240, 240, 240) : controlText;
         DrawingColor controlDark = ResolveSystemColor(settings, KnownColor.ControlDark);
         DrawingColor controlLight = ResolveSystemColor(settings, KnownColor.ControlLight);
         DrawingColor dialogControlsBackground = controlLight.MakeDarkerBy(-0.04);
@@ -163,15 +164,16 @@ internal static class AvaloniaThemeResources
             ? DrawingColor.FromArgb(204, 204, 204)
             : DrawingColor.FromArgb(160, 160, 160);
         DrawingColor nativeTabBorder = isDark
-            ? DrawingColor.FromArgb(74, 74, 74)
-            : DrawingColor.FromArgb(217, 217, 217);
+            ? DrawingColor.FromArgb(59, 59, 59)
+            : DrawingColor.FromArgb(229, 229, 229);
         DrawingColor nativeTabSelectedBackground = isDark ? control : window;
         DrawingColor nativeTabPageBackground = isDark ? control : DrawingColor.Transparent;
+        DrawingColor nativeListSelectionBackground = isDark
+            ? DrawingColor.FromArgb(40, 68, 91)
+            : DrawingColor.FromArgb(204, 232, 255);
         DrawingColor highlight = ResolveSystemColor(settings, KnownColor.Highlight);
         DrawingColor highlightText = ResolveSystemColor(settings, KnownColor.HighlightText);
-        DrawingColor dataGridViewSelectionBackground = isDark
-            ? highlight
-            : DrawingColor.FromArgb(0, 120, 212);
+        DrawingColor dataGridViewSelectionBackground = highlight;
         DrawingColor inactiveSelection = ResolveSystemColor(settings, KnownColor.InactiveCaption);
         DrawingColor inactiveSelectionText = ResolveSystemColor(settings, KnownColor.InactiveCaptionText);
         DrawingColor info = ResolveSystemColor(settings, KnownColor.Info);
@@ -179,7 +181,27 @@ internal static class AvaloniaThemeResources
         DrawingColor sectionBorder = isDark
             ? DrawingColor.FromArgb(47, 47, 47)
             : DrawingColor.FromArgb(224, 224, 224);
-        DrawingColor treeConnector = ColorHelper.Lerp(panel, windowText, isDark ? 0.38f : 0.46f);
+        DrawingColor separatorShadow = ResolveNativeSystemColor(isDark, KnownColor.ButtonShadow);
+        DrawingColor separatorWindow = ResolveNativeSystemColor(isDark, KnownColor.Window);
+        DrawingColor separatorDark = DrawingColor.FromArgb(
+            ((separatorShadow.R * 70) + (separatorWindow.R * 30) + 50) / 100,
+            ((separatorShadow.G * 70) + (separatorWindow.G * 30) + 50) / 100,
+            ((separatorShadow.B * 70) + (separatorWindow.B * 30) + 50) / 100);
+        ThemeSettings adaptationSettings = CreatePortableAdaptationSettings(settings);
+
+        // OtherColors uses AdaptBackColor for these invariant values. The resolved results
+        // are published explicitly because Avalonia resources are produced per theme rather
+        // than through WinForms' ambient static-color initialization.
+        DrawingColor otherBackground = isDark
+            ? DrawingColor.FromArgb(53, 53, 53)
+            : DrawingColor.FromArgb(251, 251, 251);
+        DrawingColor mergeConflicts = isDark
+            ? DrawingColor.FromArgb(112, 18, 18)
+            : DrawingColor.FromArgb(230, 99, 99);
+
+        // Native TreeView resolves its dotted hierarchy renderer to the same #6D6D6D
+        // pixels in the paired light, dark, and custom WinForms captures.
+        DrawingColor treeConnector = DrawingColor.FromArgb(109, 109, 109);
         DrawingColor refLabelBackground = isDark ? ColorHelper.Lerp(panel, DrawingColor.Black, 0.36f) : panel;
         DrawingColor removedBackground = ResolveAppColor(settings, AppColor.AnsiTerminalRedBackNormal);
         DrawingColor addedBackground = ResolveAppColor(settings, AppColor.AnsiTerminalGreenBackNormal);
@@ -193,10 +215,10 @@ internal static class AvaloniaThemeResources
         DrawingColor resetMixed = DrawingColor.FromArgb(255, 255, 128);
         DrawingColor resetHard = DrawingColor.FromArgb(255, 128, 128);
         DrawingColor warningPanel = DrawingColor.FromArgb(230, 99, 99);
-        DrawingColor interactiveAction = DrawingColor.LightSkyBlue.AdaptBackColor();
-        DrawingColor interactiveConflict = DrawingColor.Orange.AdaptBackColor();
-        DrawingColor commitSummaryTags = DrawingColor.LightSteelBlue.AdaptBackColor();
-        DrawingColor commitSummaryBranches = DrawingColor.LightSalmon.AdaptBackColor();
+        DrawingColor interactiveAction = DrawingColor.LightSkyBlue;
+        DrawingColor interactiveConflict = DrawingColor.Orange.AdaptBackColor(adaptationSettings);
+        DrawingColor commitSummaryTags = DrawingColor.LightSteelBlue.AdaptBackColor(adaptationSettings);
+        DrawingColor commitSummaryBranches = DrawingColor.LightSalmon.AdaptBackColor(adaptationSettings);
         if (isDark)
         {
             resetSoft = resetSoft.DimColor();
@@ -252,6 +274,15 @@ internal static class AvaloniaThemeResources
         SetBrush(resources, "GitExtensionsTextInputBackgroundBrush", textInputBackground);
         SetBrush(resources, "GitExtensionsDialogControlsBackgroundBrush", dialogControlsBackground);
         SetBrush(resources, "GitExtensionsReadOnlyTextInputBackgroundBrush", readOnlyTextInputBackground);
+
+        // These source consumers use raw SystemColors/SystemBrushes, unlike the
+        // configurable KnownColor resources. A custom CSS override must not cross
+        // that boundary or turn tree search/disabled gutter paint into editor selection.
+        SetBrush(resources, "GitExtensionsNativeTreeSearchBackgroundBrush", ResolveNativeSystemColor(isDark, KnownColor.Info));
+        SetBrush(resources, "GitExtensionsNativeTreeSearchForegroundBrush", ResolveNativeSystemColor(isDark, KnownColor.InfoText));
+        SetBrush(resources, "GitExtensionsNativeTreeDefaultBackgroundBrush", ResolveNativeSystemColor(isDark, KnownColor.Window));
+        SetBrush(resources, "GitExtensionsNativeDisabledGutterBackgroundBrush", ResolveNativeSystemColor(isDark, KnownColor.InactiveBorder));
+        SetBrush(resources, "GitExtensionsCleanupPreviewBackgroundBrush", isDark ? controlLight : control);
         SetBrush(resources, "GitExtensionsDataGridViewGridLineBrush", dataGridViewGridLine);
         SetBrush(resources, "GitExtensionsNativeGroupBoxBorderBrush", nativeGroupBoxBorder);
         SetBrush(resources, "GitExtensionsNativeButtonBackgroundBrush", nativeButtonBackground);
@@ -261,6 +292,16 @@ internal static class AvaloniaThemeResources
         SetBrush(resources, "GitExtensionsNativeButtonDisabledBackgroundBrush", nativeButtonDisabledBackground);
         SetBrush(resources, "GitExtensionsNativeButtonDisabledBorderBrush", nativeButtonDisabledBorder);
         SetBrush(resources, "GitExtensionsNativeButtonDisabledForegroundBrush", nativeButtonDisabledForeground);
+        resources["GitExtensionsNativeFlatButtonDarkMode"] = isDark;
+        SetBrush(resources, "GitExtensionsNativeFlatButtonBackgroundBrush", isDark ? nativeButtonBackground : control);
+        SetBrush(resources, "GitExtensionsNativeFlatButtonHoverBackgroundBrush", isDark ? DrawingColor.FromArgb(69, 69, 69) : LowFlatButtonColor(control));
+        SetBrush(resources, "GitExtensionsNativeFlatButtonPressedBackgroundBrush", isDark ? nativeButtonPressedBackground : LowFlatButtonColor(ResolveSystemColor(settings, KnownColor.ControlLightLight)));
+        SetBrush(resources, "GitExtensionsNativeFlatButtonDisabledBackgroundBrush", isDark ? nativeButtonDisabledBackground : control);
+        SetBrush(resources, "GitExtensionsNativeFlatButtonBorderBrush", isDark ? nativeButtonBorder : DrawingColor.Transparent);
+        SetBrush(resources, "GitExtensionsNativeFlatButtonHoverBorderBrush", isDark ? nativeButtonBorder : DrawingColor.Transparent);
+        SetBrush(resources, "GitExtensionsNativeFlatButtonPressedBorderBrush", isDark ? nativeButtonPressedBorder : DrawingColor.Transparent);
+        SetBrush(resources, "GitExtensionsNativeFlatButtonDisabledBorderBrush", isDark ? nativeButtonDisabledBorder : DrawingColor.Transparent);
+        SetBrush(resources, "GitExtensionsNativeFlatButtonFocusBrush", isDark ? DrawingColor.Black : ResolveSystemColor(settings, KnownColor.ControlDark));
         SetBrush(resources, "GitExtensionsNativeTabBorderBrush", nativeTabBorder);
         SetBrush(resources, "GitExtensionsNativeTabSelectedBackgroundBrush", nativeTabSelectedBackground);
         SetBrush(resources, "GitExtensionsNativeTabUnselectedBackgroundBrush", control);
@@ -268,6 +309,7 @@ internal static class AvaloniaThemeResources
         SetBrush(resources, "GitExtensionsCommitMessageBackgroundBrush", commitMessageBackground);
         SetBrush(resources, "GitExtensionsControlBackgroundBrush", control);
         SetBrush(resources, "GitExtensionsControlForegroundBrush", controlText);
+        SetBrush(resources, "GitExtensionsSourceControlTextBrush", sourceControlText);
         SetBrush(resources, "GitExtensionsControlBorderBrush", controlDark);
         SetBrush(resources, "GitExtensionsControlPointerOverBackgroundBrush", controlLight);
         SetBrush(resources, "GitExtensionsControlPressedBackgroundBrush", controlDark);
@@ -284,6 +326,10 @@ internal static class AvaloniaThemeResources
         SetBrush(resources, "GitExtensionsToolTipForegroundBrush", infoText);
         SetBrush(resources, "GitExtensionsPaneBorderBrush", sectionBorder);
         SetBrush(resources, "GitExtensionsSectionBorderBrush", sectionBorder);
+        SetBrush(resources, "GitExtensionsFileStatusSplitterBrush", sectionBorder);
+        SetBrush(resources, "GitExtensionsOtherBackgroundBrush", otherBackground);
+        SetBrush(resources, "GitExtensionsMergeConflictsBackgroundBrush", mergeConflicts);
+        SetBrush(resources, "GitExtensionsMergeConflictsForegroundBrush", controlText);
         SetBrush(resources, "GitExtensionsRefLabelBackgroundBrush", refLabelBackground);
         SetBrush(resources, "GitExtensionsBranchRefBrush", ResolveAppColor(settings, AppColor.Branch));
         SetBrush(resources, "GitExtensionsRemoteBranchRefBrush", ResolveAppColor(settings, AppColor.RemoteBranch));
@@ -295,6 +341,61 @@ internal static class AvaloniaThemeResources
         SetBrush(resources, "GitExtensionsSelectionBackgroundBrush", selection);
         SetBrush(resources, "GitExtensionsSelectionPointerOverBackgroundBrush", ColorHelper.Lerp(selection, windowText, 0.08f));
         SetBrush(resources, "GitExtensionsSelectionForegroundBrush", windowText);
+        SetBrush(resources, "GitExtensionsNativeSelectionBackgroundBrush", highlight);
+        SetBrush(resources, "GitExtensionsNativeSelectionForegroundBrush", highlightText);
+
+        // Native Explorer's image-based TREEVIEW selection is separate from CSS Highlight.
+        NativeTreePaintPalette treeSelection = NativeTreePaintPalette.Resolve(isDark, ToMediaColor(panel));
+        NativeTreePaintPalette treeInactiveSelection = NativeTreePaintPalette.Resolve(isDark, ToMediaColor(panel), inactive: true);
+        SetBrush(resources, "GitExtensionsNativeTreeSelectionBackgroundBrush", treeSelection.Background);
+        SetBrush(resources, "GitExtensionsNativeTreeSelectionForegroundBrush", treeSelection.Foreground);
+        SetBrush(resources, "GitExtensionsNativeTreeSelectionBorderBrush", treeSelection.Border);
+        SetBrush(resources, "GitExtensionsNativeTreeSelectionCornerBrush", treeSelection.Corner);
+        SetBrush(resources, "GitExtensionsNativeTreeSelectionAdjacentEdgeBrush", treeSelection.AdjacentEdge);
+        SetBrush(resources, "GitExtensionsNativeTreeSelectionInnerCornerBrush", treeSelection.InnerCorner);
+        SetBrush(resources, "GitExtensionsNativeTreeInactiveSelectionBackgroundBrush", treeInactiveSelection.Background);
+        SetBrush(resources, "GitExtensionsNativeTreeInactiveSelectionForegroundBrush", treeInactiveSelection.Foreground);
+        SetBrush(resources, "GitExtensionsNativeTreeInactiveSelectionBorderBrush", treeInactiveSelection.Border);
+        SetBrush(resources, "GitExtensionsNativeTreeInactiveSelectionCornerBrush", treeInactiveSelection.Corner);
+        SetBrush(resources, "GitExtensionsNativeTreeInactiveSelectionAdjacentEdgeBrush", treeInactiveSelection.AdjacentEdge);
+        SetBrush(resources, "GitExtensionsNativeTreeInactiveSelectionInnerCornerBrush", treeInactiveSelection.InnerCorner);
+        SetBrush(resources, "GitExtensionsToolStripCheckedBackgroundBrush", nativeListSelectionBackground);
+
+        // The original ProfessionalColorTable consumes the application's native
+        // SystemColors, not CSS pane borders or configurable editor-selection colors.
+        // Its high-resolution separator blend rounds the 70/30 result to nearest.
+        resources["GitExtensionsToolStripSeparatorUseSystemVisualStyle"] = settings.UseSystemVisualStyle;
+        SetBrush(resources, "GitExtensionsToolStripSeparatorDarkBrush", separatorDark);
+        SetBrush(resources, "GitExtensionsToolStripSeparatorLightBrush", ResolveNativeSystemColor(isDark, KnownColor.ButtonHighlight));
+        DrawingColor nativeWindow = ResolveNativeSystemColor(isDark, KnownColor.Window);
+        DrawingColor nativeHighlight = ResolveNativeSystemColor(isDark, KnownColor.Highlight);
+
+        // ProfessionalColorTable's non-gradient selected and pressed branches mix
+        // native Window/Highlight at 70/30 and 50/50, rounding the result to nearest.
+        resources["GitExtensionsNativeToolStripSplitUseSystemVisualStyle"] = settings.UseSystemVisualStyle;
+        SetBrush(resources, "GitExtensionsNativeToolStripSplitProfessionalSelectedBrush", BlendNativeColors(nativeWindow, nativeHighlight, 30));
+        SetBrush(resources, "GitExtensionsNativeToolStripSplitProfessionalPressedBrush", BlendNativeColors(nativeWindow, nativeHighlight, 50));
+        SetBrush(resources, "GitExtensionsNativeToolStripSplitProfessionalBorderBrush", nativeHighlight);
+        SetBrush(resources, "GitExtensionsNativeToolStripSplitProfessionalSplitterBrush", isDark ? DrawingColor.Silver : nativeHighlight);
+
+        // An opened split dropdown uses the menu-title gradient, not the pressed
+        // primary-button fill: native ButtonFace contributes 23% and then 50%.
+        DrawingColor nativeButtonFace = ResolveNativeSystemColor(isDark, KnownColor.ButtonFace);
+        DrawingColor openBegin = BlendNativeColors(nativeWindow, nativeButtonFace, 23);
+        DrawingColor openEnd = BlendNativeColors(nativeWindow, nativeButtonFace, 50);
+        resources["GitExtensionsNativeToolStripSplitProfessionalOpenBrush"] = new LinearGradientBrush
+        {
+            StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
+            EndPoint = new RelativePoint(0, 1, RelativeUnit.Relative),
+            GradientStops =
+            [
+                new GradientStop(MediaColor.FromArgb(openBegin.A, openBegin.R, openBegin.G, openBegin.B), 0),
+                new GradientStop(MediaColor.FromArgb(openEnd.A, openEnd.R, openEnd.G, openEnd.B), 1),
+            ],
+        };
+        SetBrush(resources, "GitExtensionsNativeToolStripSplitProfessionalOpenBorderBrush",
+            BlendNativeColors(ResolveNativeSystemColor(isDark, KnownColor.ButtonShadow),
+                ResolveNativeSystemColor(isDark, KnownColor.ControlText), 20));
         SetBrush(resources, "GitExtensionsRevisionAlternatingRowBrush", alternatingRow);
         SetBrush(resources, "GitExtensionsRevisionAuthoredBrush", ResolveAppColor(settings, AppColor.AuthoredHighlight));
         SetBrush(resources, "GitExtensionsRevisionSelectedSubjectBrush", isDark ? controlText : highlightText);
@@ -309,6 +410,9 @@ internal static class AvaloniaThemeResources
         SetBrush(resources, "GitExtensionsResetSoftBackgroundBrush", resetSoft);
         SetBrush(resources, "GitExtensionsResetMixedBackgroundBrush", resetMixed);
         SetBrush(resources, "GitExtensionsResetHardBackgroundBrush", resetHard);
+        SetBrush(resources, "GitExtensionsInvalidSettingBackgroundBrush", resetHard);
+        SetBrush(resources, "GitExtensionsInvalidSettingForegroundBrush", resetHard.GetTextColor());
+        SetBrush(resources, "GitExtensionsSettingReadOnlyBackgroundBrush", isDark ? textInputBackground : control);
         SetBrush(resources, "GitExtensionsResetSoftForegroundBrush", resetSoft.GetTextColor());
         SetBrush(resources, "GitExtensionsResetMixedForegroundBrush", resetMixed.GetTextColor());
         SetBrush(resources, "GitExtensionsResetHardForegroundBrush", resetHard.GetTextColor());
@@ -394,6 +498,33 @@ internal static class AvaloniaThemeResources
         // Windows reference colors when a partial/test theme has no invariant value.
         return TryGetLightSystemColor(name, out color) ? color : DrawingColor.FromKnownColor(name);
     }
+
+    private static ThemeSettings CreatePortableAdaptationSettings(ThemeSettings settings)
+    {
+        Dictionary<AppColor, DrawingColor> appColors = Theme.AppColorNames
+            .ToDictionary(name => name, name => ResolveAppColor(settings, name));
+        Dictionary<KnownColor, DrawingColor> systemColors = MappedSystemColors
+            .ToDictionary(name => name, name => ResolveSystemColor(settings, name));
+        Theme projectedTheme = new(appColors, systemColors, settings.Theme.Id);
+        return new ThemeSettings(
+            projectedTheme,
+            settings.InvariantTheme,
+            settings.Variations,
+            settings.UseSystemVisualStyle);
+    }
+
+    internal static DrawingColor ResolveNativeSystemColor(bool isDark, KnownColor name)
+        => isDark && TryGetDarkSystemColor(name, out DrawingColor dark)
+            ? dark
+            : TryGetLightSystemColor(name, out DrawingColor light)
+                ? light
+                : DrawingColor.FromKnownColor(name);
+
+    private static DrawingColor BlendNativeColors(DrawingColor window, DrawingColor highlight, int highlightPercent)
+        => DrawingColor.FromArgb(
+            ((window.R * (100 - highlightPercent)) + (highlight.R * highlightPercent) + 50) / 100,
+            ((window.G * (100 - highlightPercent)) + (highlight.G * highlightPercent) + 50) / 100,
+            ((window.B * (100 - highlightPercent)) + (highlight.B * highlightPercent) + 50) / 100);
 
     private static bool TryGetLightSystemColor(KnownColor name, out DrawingColor color)
     {
@@ -481,6 +612,16 @@ internal static class AvaloniaThemeResources
 
         color = value is null ? DrawingColor.Empty : System.Drawing.ColorTranslator.FromHtml(value);
         return !color.IsEmpty;
+    }
+
+    private static DrawingColor LowFlatButtonColor(DrawingColor color)
+    {
+        // ButtonBaseAdapter.ColorData.LowButtonFace/LowHighlight use this source rule.
+        float factor = color.GetBrightness() >= 0.5f ? 0.9f : 1.2f;
+        return DrawingColor.FromArgb(
+            Math.Min(255, (int)(color.R * factor)),
+            Math.Min(255, (int)(color.G * factor)),
+            Math.Min(255, (int)(color.B * factor)));
     }
 
     private static void PublishColor(ResourceDictionary resources, string key, DrawingColor color)

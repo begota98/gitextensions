@@ -9,11 +9,17 @@ using Avalonia.Input;
 using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using GitCommands;
+using GitCommands.Git;
+using GitExtensions.Extensibility;
+using GitExtensions.Extensibility.Git;
 using GitExtensions.ParityCapture;
 using GitUI.CommandsDialogs;
 using GitUI.CommandsDialogs.SettingsDialog.Pages;
 using GitUI.Compat;
 using GitUI.HelperDialogs;
+using GitUIPluginInterfaces;
+using NSubstitute;
 using WinFormsInputParityToAvalonia;
 using WinFormsKeys = GitExtensions.Shims.WinForms.Keys;
 
@@ -45,7 +51,41 @@ public sealed class InputAccessibilityTests
                 Path.Combine(repositoryRoot, "src", "plugins", "Gource")),
         ]));
         WinFormsInputMetadata.ByType.Should().HaveCount(142);
-        WinFormsInputMetadata.ByType.Values.Sum(controls => controls.Count).Should().Be(1502);
+        WinFormsInputMetadata.ByType.Values.Sum(controls => controls.Count).Should().Be(1531);
+        WinFormsInputMetadata.SourceByType.Should().ContainKey("GitUI.CommandsDialogs.FormBrowse");
+        WinFormsInputMetadata.SourceByType["GitUI.CommandsDialogs.FormBrowse"]
+            .Single(item => item.FieldName == "toolStripButtonPull")
+            .SourceType.Should().Be("ToolStripSplitButton");
+        WinFormsInputMetadata.SourceByType["GitUI.CommandsDialogs.RevisionDiffControl"]
+            .Single(item => item.FieldName == "LeftSplitContainer")
+            .SourceType.Should().Be("SplitContainer");
+        WinFormsInputMetadata.AutoSizeRootTypes.Should().Contain("GitUI.CommandsDialogs.FormCompareToBranch");
+        WinFormsInputMetadata.DesignerDpiByType["GitUI.CommandsDialogs.FormFormatPatch"]
+            .Should().Be(new DesignerDpiMetadata(120, 120));
+    }
+
+    [Test]
+    public void Generated_dashboard_metadata_should_include_named_native_layout_and_menu_fields()
+    {
+        const string DashboardType = "GitUI.CommandsDialogs.BrowseDialog.DashboardControl.Dashboard";
+        const string RepositoryListType = "GitUI.CommandsDialogs.BrowseDialog.DashboardControl.UserRepositoriesList";
+        WinFormsInputMetadata.SourceByType[DashboardType]
+            .Single(item => item.FieldName == "tableLayoutPanel1").SourceType.Should().Be("TableLayoutPanel");
+        foreach (string name in new[] { "tableLayoutPanel1", "tableLayoutPanel2" })
+        {
+            WinFormsInputMetadata.SourceByType[RepositoryListType]
+                .Single(item => item.FieldName == name).SourceType.Should().Be("TableLayoutPanel");
+        }
+
+        WinFormsInputMetadata.SourceByType[RepositoryListType]
+            .Single(item => item.FieldName == "menuStripRecentMenu").SourceType.Should().Be("MenuStrip");
+        WinFormsInputMetadata.SourceByType[RepositoryListType]
+            .Single(item => item.FieldName == "mnuTop").SourceType.Should().Be("ToolStripMenuItem");
+        DesignerLayoutMetadata header = WinFormsInputMetadata.LayoutByType[RepositoryListType]
+            .Single(item => item.FieldName == "tableLayoutPanel1");
+        header.Dock.Should().Be("Bottom");
+        header.AutoSize.Should().BeTrue();
+        header.Margin.Should().Be(new Thickness(2));
     }
 
     [Test]
@@ -70,6 +110,40 @@ public sealed class InputAccessibilityTests
         remotes.Single(item => item.FieldName == "panel1").Padding.Should().Be(new Thickness(8));
         remotes.Single(item => item.FieldName == "pnlManagementContainer").Padding.Should().Be(new Thickness(8, 4, 8, 8));
         remotes.Single(item => item.FieldName == "pnlMgtDetails").Dock.Should().Be("Top");
+
+        IReadOnlyList<DesignerLayoutMetadata> commit = WinFormsInputMetadata.LayoutByType[
+            "GitUI.CommandsDialogs.SettingsDialog.Pages.CommitDialogSettingsPage"];
+        commit.Single(item => item.FieldName == "lblCommitDialogNumberOfPreviousMessages")
+            .Anchor.Should().Equal("Left");
+        WinFormsInputMetadata.SourceByType[
+                "GitUI.CommandsDialogs.SettingsDialog.Pages.CommitDialogSettingsPage"]
+            .Single(item => item.FieldName == "_NO_TRANSLATE_CommitDialogNumberOfPreviousMessages")
+            .SourceType.Should().Be("NumericUpDown");
+
+        IReadOnlyList<DesignerLayoutMetadata> about = WinFormsInputMetadata.LayoutByType[
+            "GitUI.CommandsDialogs.FormAbout"];
+        about.Single(item => item.FieldName == "label2").Anchor.Should().Equal("Top", "Left", "Right");
+
+        WinFormsInputMetadata.LayoutByType[
+                "GitUI.CommandsDialogs.SettingsDialog.Pages.ShellExtensionSettingsPage"]
+            .Single(item => item.FieldName == "menuHelp")
+            .AutoSize.Should().BeTrue();
+
+        IReadOnlyList<DesignerLayoutMetadata> formatPatch = WinFormsInputMetadata.LayoutByType[
+            "GitUI.CommandsDialogs.FormFormatPatch"];
+        formatPatch.Single(item => item.FieldName == "Browse").Margin.Should().Be(new Thickness(3));
+        formatPatch.Single(item => item.FieldName == "lblPatches").Padding.Should().Be(new Thickness(0, 5, 0, 0));
+
+        IReadOnlyList<DesignerLayoutMetadata> stash = WinFormsInputMetadata.LayoutByType[
+            "GitUI.CommandsDialogs.FormStash"];
+        stash.Single(item => item.FieldName == "StashKeepIndex").Margin.Should().Be(new Thickness(3));
+        stash.Single(item => item.FieldName == "toolStrip1").Padding.Should().Be(new Thickness(2));
+
+        DesignerLayoutMetadata branchChanges = WinFormsInputMetadata.LayoutByType[
+                "GitUI.UserControls.BranchSelector"]
+            .Single(item => item.FieldName == "lbChanges");
+        branchChanges.HasExplicitForeground.Should().BeTrue();
+        branchChanges.HasExplicitBackground.Should().BeFalse();
     }
 
     [AvaloniaTest]
@@ -115,6 +189,26 @@ public sealed class InputAccessibilityTests
 
         clone.Close();
         commit.Close();
+    }
+
+    [AvaloniaTest]
+    public void Radio_button_TabStop_should_follow_the_checked_control_like_WinForms()
+    {
+        IGitModule module = Substitute.For<IGitModule>();
+        module.GetRefs(Arg.Any<RefsFilter>()).Returns([]);
+        IGitUICommands commands = Substitute.For<IGitUICommands>();
+        commands.Module.Returns(module);
+        FormCompareToBranch form = new(commands, default);
+        GitUI.UserControls.BranchSelector.TestAccessor accessor = form.GetTestAccessor().BranchSelector.GetTestAccessor();
+
+        KeyboardNavigation.GetIsTabStop(accessor.LocalBranch).Should().BeFalse();
+        KeyboardNavigation.GetIsTabStop(accessor.Remotebranch).Should().BeTrue();
+
+        accessor.LocalBranch.IsChecked = true;
+
+        KeyboardNavigation.GetIsTabStop(accessor.LocalBranch).Should().BeTrue();
+        KeyboardNavigation.GetIsTabStop(accessor.Remotebranch).Should().BeFalse();
+        form.Close();
     }
 
     [AvaloniaTest]
@@ -226,13 +320,21 @@ public sealed class InputAccessibilityTests
     }
 
     [AvaloniaTest]
-    [TestCase(Key.Apps, RawInputModifiers.None)]
-    [TestCase(Key.F10, RawInputModifiers.Shift)]
-    public void Context_menu_keys_should_open_the_focused_controls_menu(Key key, RawInputModifiers modifiers)
+    [TestCase(Key.Apps, RawInputModifiers.None, false)]
+    [TestCase(Key.F10, RawInputModifiers.Shift, false)]
+    [TestCase(Key.Apps, RawInputModifiers.None, true)]
+    [TestCase(Key.F10, RawInputModifiers.Shift, true)]
+    public void Context_menu_keys_should_open_the_focused_controls_menu(Key key, RawInputModifiers modifiers, bool cancel)
     {
         ListBox list = new() { Name = "lstItems", ItemsSource = new[] { "one", "two" }, SelectedIndex = 0 };
         ContextMenu menu = new() { ItemsSource = new[] { new MenuItem { Header = "Action" } } };
         list.ContextMenu = menu;
+        int openingCount = 0;
+        menu.Opening += (_, e) =>
+        {
+            openingCount++;
+            e.Cancel = cancel;
+        };
         Window window = new() { Width = 240, Height = 120, Content = list };
         InputAccessibility.Apply(window);
         window.Show();
@@ -242,9 +344,11 @@ public sealed class InputAccessibilityTests
             item.Focus(NavigationMethod.Tab).Should().BeTrue();
 
             window.KeyPress(key, modifiers, key == Key.Apps ? PhysicalKey.ContextMenu : PhysicalKey.F10, keySymbol: null);
+            window.KeyRelease(key, modifiers, key == Key.Apps ? PhysicalKey.ContextMenu : PhysicalKey.F10, keySymbol: null);
             Dispatcher.UIThread.RunJobs();
 
-            menu.IsOpen.Should().BeTrue();
+            openingCount.Should().Be(1);
+            menu.IsOpen.Should().Be(!cancel);
         }
         finally
         {

@@ -1,7 +1,8 @@
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Avalonia.Styling;
 using GitCommands;
 using GitExtensions.Extensibility.Git;
 using GitExtensions.Extensibility.Plugins;
@@ -12,6 +13,7 @@ using GitUI.Properties;
 using GitUI.Theming;
 using GitUIPluginInterfaces;
 using ResourceManager;
+using LinkLabel = GitUI.Compat.WinFormsControls.LinkLabel;
 
 namespace GitUI.CommandsDialogs.BrowseDialog.DashboardControl;
 
@@ -31,22 +33,35 @@ public partial class Dashboard : GitModuleControl
     public Dashboard()
     {
         InitializeComponent();
-        createItem.Click += (_, _) => UICommands.StartInitializeDialog(this, Module.WorkingDir, OnModuleChanged);
-        cloneItem.Click += (_, _) => UICommands.StartCloneDialog(this, null, false, OnModuleChanged);
-        openItem.Click += (_, _) => OpenRepositoryRequested?.Invoke(this, EventArgs.Empty);
-        developItem.Click += (_, _) => OsShellUtil.OpenUrlInDefaultBrowser("https://github.com/gitextensions/gitextensions");
-        donateItem.Click += (_, _) => OsShellUtil.OpenUrlInDefaultBrowser("https://opencollective.com/gitextensions");
-        translateItem.Click += (_, _) => OsShellUtil.OpenUrlInDefaultBrowser("https://github.com/gitextensions/gitextensions/wiki/Translations");
-        issuesItem.Click += (_, _) =>
+        AttachedToLogicalTree += dashboard_ParentChanged;
+        DetachedFromLogicalTree += dashboard_ParentChanged;
+        SizeChanged += (_, _) => tableLayoutPanel1.Height = Math.Max(Bounds.Height, tableLayoutPanel1.MinHeight);
+        tableLayoutPanel1.SizeChanged += (_, _) =>
         {
-            UserEnvironmentInformation.CopyInformation();
-            OsShellUtil.OpenUrlInDefaultBrowser("https://github.com/gitextensions/gitextensions/issues");
+            // Native TableLayoutPanel truncates each percentage column independently.
+            // Avalonia Grid retains fractions; allocate from the current client width instead
+            // of rounding captured pixels or changing the authored percentages.
+            double remainingWidth = Math.Max(0, tableLayoutPanel1.Bounds.Width - 213);
+            double outsideWidth = Math.Floor(remainingWidth * 7.142857 / 100);
+            double repositoryWidth = Math.Floor(remainingWidth * 85.71428 / 100);
+            tableLayoutPanel1.ColumnDefinitions[0].Width = new GridLength(outsideWidth);
+            tableLayoutPanel1.ColumnDefinitions[2].Width = new GridLength(repositoryWidth);
         };
-        InitializeComplete();
-    }
 
-    public event EventHandler? ConfigureRepositoriesRequested;
-    public event EventHandler? OpenRepositoryRequested;
+        // Native UserControl.Focus selects its first input once the window is shown.
+        Loaded += (_, _) =>
+        {
+            if (IsEffectivelyVisible)
+            {
+                OnVisibleChanged(EventArgs.Empty);
+            }
+        };
+        IsVisible = false;
+        InitializeComplete();
+
+        // apply scaling
+        userRepositoriesList.HeaderHeight = 68;
+    }
 
     public void Initialize(IRepositoryHistoryUIService repositoryHistoryUIService)
         => Initialize(
@@ -61,46 +76,82 @@ public partial class Dashboard : GitModuleControl
             controller,
             repositoryHistoryUIService,
             () => UICommands);
-        userRepositoriesList.ConfigureRequested += (_, _) => ConfigureRepositoriesRequested?.Invoke(this, EventArgs.Empty);
         userRepositoriesList.GitModuleChanged += OnModuleChanged;
+    }
+
+    protected virtual void OnVisibleChanged(EventArgs e)
+    {
+        // Focus the control in order for the search bar to have focus once the dashboard is shown
+        userRepositoriesList.Focus();
     }
 
     public void RefreshContent()
     {
-        DashboardTheme selectedTheme = ActualThemeVariant == ThemeVariant.Dark ? DashboardTheme.Dark : DashboardTheme.Light;
+        DashboardTheme selectedTheme = ThemeModule.Settings.Theme.SystemColorMode == GitExtensions.Shims.WinForms.SystemColorMode.Dark
+            ? DashboardTheme.Dark : DashboardTheme.Light;
 
-        createItem.Content = CreateLinkContent(Images.RepoCreate, _createRepository.Text);
-        openItem.Content = CreateLinkContent(Images.RepoOpen, _openRepository.Text);
-        cloneItem.Content = CreateLinkContent(Images.CloneRepoGit, _cloneRepository.Text);
-        developItem.Content = CreateLinkContent(Images.Develop.AdaptLightness(), _develop.Text);
-        donateItem.Content = CreateLinkContent(Images.DollarSign, _donate.Text);
-        translateItem.Content = CreateLinkContent(Images.Translate.AdaptLightness(), _translate.Text);
-        issuesItem.Content = CreateLinkContent(Images.Bug, _issues.Text);
-
-        Button[] dynamicLinks = [.. flpnlStart.Children.OfType<Button>().Where(button => button.Tag is IRepositoryHostPlugin)];
-        foreach (Button button in dynamicLinks)
-        {
-            flpnlStart.Children.Remove(button);
-        }
+        // The source recreates anonymous LinkLabels on refresh. Keep their runtime ownership
+        // and order instead of adding permanent Designer fields and stale translated content.
+        StackPanel startLinks = (StackPanel)flpnlStart.Child!;
+        StackPanel contributionLinks = (StackPanel)flpnlContribute.Child!;
+        contributionLinks.Children.Clear();
+        contributionLinks.Children.Add(lblContribute);
+        CreateLink(contributionLinks, _develop.Text, Images.Develop.AdaptLightness(), GitHubItem_Click);
+        CreateLink(contributionLinks, _donate.Text, Images.DollarSign, DonateItem_Click);
+        CreateLink(contributionLinks, _translate.Text, Images.Translate.AdaptLightness(), TranslateItem_Click);
+        CreateLink(contributionLinks, _issues.Text, Images.Bug, IssuesItem_Click);
+        startLinks.Children.Clear();
+        CreateLink(startLinks, _createRepository.Text, Images.RepoCreate, createItem_Click);
+        CreateLink(startLinks, _openRepository.Text, Images.RepoOpen, openItem_Click);
+        CreateLink(startLinks, _cloneRepository.Text, Images.CloneRepoGit, cloneItem_Click);
 
         foreach (IRepositoryHostPlugin gitHoster in PluginRegistry.GitHosters)
         {
-            // Avalonia uses the native button/access-key path for the original clickable LinkLabel.
-            Button button = new()
-            {
-                Classes = { "dashboard-link" },
-                Content = CreateLinkContent(Images.CloneRepoGitHub, string.Format(_cloneFork.Text, gitHoster.Name)),
-                Tag = gitHoster,
-            };
-            button.Click += (_, _) => UICommands.StartCloneForkFromHoster(this, gitHoster, GitModuleChanged);
-            flpnlStart.Children.Add(button);
+            CreateLink(startLinks, string.Format(_cloneFork.Text, gitHoster.Name), Images.CloneRepoGitHub,
+                (repoSender, eventArgs) => UICommands.StartCloneForkFromHoster(this, gitHoster, GitModuleChanged));
         }
 
-        backgroundImage.Source = selectedTheme.BackgroundImage;
+        // The source paints its tiled BackgroundImage in the Dashboard's client, not
+        // in the scrolling child table. Keep the tile origin fixed when focus scrolls.
+        ((ScrollViewer)Content!).Background = new ImageBrush((IImageBrushSource)selectedTheme.BackgroundImage)
+        {
+            TileMode = TileMode.Tile,
+            Stretch = Stretch.None,
+            AlignmentX = AlignmentX.Left,
+            AlignmentY = AlignmentY.Top,
+            DestinationRect = new RelativeRect(new Rect(default, selectedTheme.BackgroundImage.Size), RelativeUnit.Absolute),
+        };
         pnlLogo.Background = new SolidColorBrush(selectedTheme.LogoBackColor);
-        pnlStart.Background = new SolidColorBrush(selectedTheme.StartBackColor);
-        pnlContribute.Background = new SolidColorBrush(selectedTheme.ContributeBackColor);
+        flpnlStart.Background = new SolidColorBrush(selectedTheme.StartBackColor);
+        flpnlContribute.Background = new SolidColorBrush(selectedTheme.ContributeBackColor);
+        Resources["DashboardLinkForegroundBrush"] = new SolidColorBrush(selectedTheme.PrimaryText);
+        Resources["DashboardLinkHoverForegroundBrush"] = new SolidColorBrush(selectedTheme.AccentedText);
         lblContribute.Foreground = new SolidColorBrush(selectedTheme.SecondaryHeadingText);
+        lblContribute.FontFamily = new FontFamily(AppSettings.Font.Name);
+        lblContribute.FontSize = AvaloniaFontSettings.ToDeviceIndependentPixels(AppSettings.Font.Size + 5.5F);
+        lblContribute.FontStyle = FontStyle.Normal;
+        lblContribute.FontWeight = FontWeight.Normal;
+        lblContribute.Padding = WinFormsTextMeasurer.GetTextRendererPadding(lblContribute);
+
+        // Native LinkLabel AutoSize measures its text plus padding, not an extra image column.
+        // Keep the source runtime minimum-height calculation so smaller hosts scroll instead
+        // of silently clipping the last start or contribution command.
+        Avalonia.Size heading = WinFormsTextMeasurer.MeasureTextRenderer(lblContribute, lblContribute.Text ?? string.Empty);
+        lblContribute.Width = Math.Ceiling(heading.Width);
+        lblContribute.Height = Math.Ceiling(heading.Height);
+        double contributionHeight = SizeLinks((StackPanel)flpnlContribute.Child!)
+            + lblContribute.Height + lblContribute.Margin.Top + lblContribute.Margin.Bottom
+            + flpnlContribute.Padding.Top + flpnlContribute.Padding.Bottom;
+
+        // Native onLayout fixes the contribution Height and MinimumSize before sizing start links.
+        flpnlContribute.Height = contributionHeight;
+        flpnlContribute.MinHeight = contributionHeight;
+        double startHeight = SizeLinks(startLinks) + flpnlStart.Padding.Top + flpnlStart.Padding.Bottom;
+        flpnlStart.MinHeight = startHeight;
+        tableLayoutPanel1.MinHeight = pnlLogo.Height + startHeight + contributionHeight;
+
+        // Dock.Fill inside native AutoScroll uses the host/minimum height, not the background's preferred size.
+        tableLayoutPanel1.Height = Math.Max(Bounds.Height, tableLayoutPanel1.MinHeight);
         userRepositoriesList.MainBackColor = AvaloniaThemeResources.ToMediaColor(
             AvaloniaThemeResources.ResolveSystemColor(ThemeModule.Settings, System.Drawing.KnownColor.Window));
         userRepositoriesList.BranchNameColor = selectedTheme.SecondaryText;
@@ -110,38 +161,148 @@ public partial class Dashboard : GitModuleControl
         userRepositoriesList.HeaderBackColor = selectedTheme.HeaderBackColor;
         userRepositoriesList.HoverColor = selectedTheme.StartBackColor;
         userRepositoriesList.SearchBackColor = selectedTheme.SearchBackColor;
+        Background = new SolidColorBrush(userRepositoriesList.MainBackColor);
         userRepositoriesList.ShowRecentRepositories(reloadData: false);
+
+        return;
+
+        static void CreateLink(StackPanel container, string text, IImage icon, EventHandler<RoutedEventArgs> handler)
+        {
+            LinkLabel linkLabel = new DashboardLinkLabel()
+            {
+                Classes = { "dashboard-link" },
+                Content = CreateLinkContent(icon, text),
+                FontFamily = new FontFamily(AppSettings.Font.Name),
+                FontSize = AvaloniaFontSettings.ToDeviceIndependentPixels(AppSettings.Font.Size),
+                FontStyle = AppSettings.Font.Italic ? FontStyle.Italic : FontStyle.Normal,
+                FontWeight = AppSettings.Font.Bold ? FontWeight.Bold : FontWeight.Normal,
+                Margin = new Thickness(3, 0, 3, 8),
+                Padding = new Thickness(24, 3, 3, 3),
+                TabIndex = container.Children.Count,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+            };
+            linkLabel.Click += handler;
+            container.Children.Add(linkLabel);
+        }
+
+        static double SizeLinks(StackPanel panel)
+        {
+            double height = 0;
+            LinkLabel[] links = [.. panel.Children.OfType<LinkLabel>()];
+            foreach (LinkLabel link in links)
+            {
+                TextBlock text = ((Grid)link.Content!).Children.OfType<TextBlock>().Single();
+                Avalonia.Size measured = WinFormsTextMeasurer.MeasureTextRenderer(text, text.Text ?? string.Empty);
+                link.Width = Math.Ceiling(measured.Width) + link.Padding.Left + link.Padding.Right;
+                link.Height = Math.Ceiling(measured.Height) + link.Padding.Top + link.Padding.Bottom;
+                height += link.Height + link.Margin.Top + link.Margin.Bottom;
+            }
+
+            return height - (links.LastOrDefault()?.Margin.Bottom ?? 0);
+        }
     }
 
     private static Control CreateLinkContent(IImage icon, string text)
-        => new StackPanel
+    {
+        TextBlock caption = new DashboardTextBlock()
         {
-            Orientation = Orientation.Horizontal,
-            Spacing = 7,
+            Text = text,
+            FontFamily = new FontFamily(AppSettings.Font.Name),
+            FontSize = AvaloniaFontSettings.ToDeviceIndependentPixels(AppSettings.Font.Size),
+            FontStyle = AppSettings.Font.Italic ? FontStyle.Italic : FontStyle.Normal,
+            FontWeight = AppSettings.Font.Bold ? FontWeight.Bold : FontWeight.Normal,
+            VerticalAlignment = VerticalAlignment.Top,
+
+            // Native LinkLabel clips once at its HWND client. This anonymous renderer
+            // has a smaller Skia line box, which must not clip native-em descenders.
+            ClipToBounds = false,
+        };
+        caption.Padding = WinFormsTextMeasurer.GetTextRendererPadding(caption);
+        return new Grid
+        {
             Children =
             {
                 new Image
                 {
-                    Width = 18,
-                    Height = 18,
+                    Width = 16,
+                    Height = 16,
                     Source = icon,
+
+                    // Label.CalcImageRenderBounds insets a left-aligned image by two pixels.
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    VerticalAlignment = VerticalAlignment.Top,
                 },
-                new TextBlock
-                {
-                    Text = text,
-                    VerticalAlignment = VerticalAlignment.Center,
-                },
+                caption,
             },
         };
+    }
 
-    private void OnModuleChanged(object? sender, GitModuleEventArgs e)
-        => GitModuleChanged?.Invoke(this, e);
+    protected virtual void OnModuleChanged(object? sender, GitModuleEventArgs e)
+    {
+        EventHandler<GitModuleEventArgs>? handler = GitModuleChanged;
+        handler?.Invoke(this, e);
+    }
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        if (change.Property == IsVisibleProperty)
+        {
+            OnVisibleChanged(EventArgs.Empty);
+        }
+    }
+
+    private void dashboard_ParentChanged(object sender, EventArgs e)
+    {
+        IsVisible = Parent is not null;
+    }
+
+    private static void TranslateItem_Click(object? sender, EventArgs e)
+    {
+        OsShellUtil.OpenUrlInDefaultBrowser(@"https://github.com/gitextensions/gitextensions/wiki/Translations");
+    }
+
+    private static void GitHubItem_Click(object? sender, EventArgs e)
+    {
+        OsShellUtil.OpenUrlInDefaultBrowser(@"https://github.com/gitextensions/gitextensions");
+    }
+
+    private static void IssuesItem_Click(object? sender, EventArgs e)
+    {
+        UserEnvironmentInformation.CopyInformation();
+        OsShellUtil.OpenUrlInDefaultBrowser(@"https://github.com/gitextensions/gitextensions/issues");
+    }
+
+    private void openItem_Click(object? sender, EventArgs e)
+    {
+        IGitModule? module = FormOpenDirectory.OpenModule(this, UICommands.GetRequiredService<IGitExecutorProvider>(), currentModule: null);
+        if (module is not null)
+        {
+            OnModuleChanged(this, new GitModuleEventArgs(module));
+        }
+    }
+
+    private void cloneItem_Click(object? sender, EventArgs e)
+    {
+        UICommands.StartCloneDialog(this, null, false, OnModuleChanged);
+    }
+
+    private void createItem_Click(object? sender, EventArgs e)
+    {
+        UICommands.StartInitializeDialog(this, Module.WorkingDir, OnModuleChanged);
+    }
+
+    private static void DonateItem_Click(object? sender, EventArgs e)
+    {
+        OsShellUtil.OpenUrlInDefaultBrowser(FormDonate.DonationUrl);
+    }
 
     internal TestAccessor GetTestAccessor() => new(this);
 
     internal readonly struct TestAccessor(Dashboard dashboard)
     {
         internal UserRepositoriesList Repositories => dashboard.userRepositoriesList;
-        internal Button Open => dashboard.openItem;
+        internal Button Open => ((StackPanel)dashboard.flpnlStart.Child!).Children.OfType<LinkLabel>().ElementAt(1);
     }
 }

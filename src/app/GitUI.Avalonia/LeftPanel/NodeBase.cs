@@ -1,9 +1,13 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Media;
 
+using GitCommands;
+using GitUI.Compat;
+using WinFormsShims = GitExtensions.Shims.WinForms;
+
 namespace GitUI.LeftPanel;
 
-/// <summary>Common repository-tree model shared by roots and their child nodes.</summary>
+/// <summary>A common base class for both <see cref="Node"/> and <see cref="Tree"/>.</summary>
 internal abstract class NodeBase
 {
     protected NodeBase(RepoObjectsTree owner, NodeBase? parent, string caption, IImage icon, bool isBold = false, bool isItalic = false)
@@ -25,23 +29,19 @@ internal abstract class NodeBase
     /// <summary>The child nodes.</summary>
     protected internal Nodes Nodes { get; protected set; }
 
-    internal bool HasChildren => TreeViewNode.Items.Count > 0;
+    internal bool HasChildren => Nodes.Count > 0;
 
     public NodeBase? Parent { get; private set; }
 
     /// <summary>The corresponding tree node.</summary>
-    public TreeViewItem TreeViewNode { get; }
+    protected internal virtual TreeViewItem TreeViewNode { get; protected set; }
 
     /// <summary>
     /// Marks this node to be included in multi-selection. See <see cref="Select(bool, bool)"/>.
-    /// Avalonia owns the selected-item collection, so this property projects the native selection
-    /// state instead of retaining a second selection flag.
+    /// This flag is independent of the tree's single highlighted node, so keyboard
+    /// navigation does not change which references participate in multi-selection.
     /// </summary>
-    protected internal bool IsSelected
-    {
-        get => Owner.IsNodeSelected(TreeViewNode);
-        set => Owner.SetNodeSelected(TreeViewNode, value);
-    }
+    protected internal bool IsSelected { get; set; }
 
     /// <summary>
     /// Gets whether the commit that the node represents is currently visible in the revision grid.
@@ -77,13 +77,14 @@ internal abstract class NodeBase
     protected internal void Select(bool select, bool includingDescendants = false)
     {
         IsSelected = select;
+        ApplyStyle(); // toggle multi-selected node style
 
         // recursively process descendants if required
         if (includingDescendants && HasChildren)
         {
             foreach (NodeBase child in DescendantsAndSelf().Skip(1))
             {
-                child.IsSelected = select;
+                child.Select(select);
             }
         }
     }
@@ -96,6 +97,56 @@ internal abstract class NodeBase
         Caption = caption;
         TreeViewNode.Header = RepoObjectsTree.CreateHeader(caption, icon, isBold, isItalic);
     }
+
+    #region style / appearance
+    public virtual void ApplyStyle()
+    {
+        SetFont(GetFontStyle());
+        ToolTip.SetTip(TreeViewNode, null);
+    }
+
+    protected virtual WinFormsShims.FontStyle GetFontStyle()
+        => IsSelected ? WinFormsShims.FontStyle.Underline : WinFormsShims.FontStyle.Regular;
+
+    private void SetFont(WinFormsShims.FontStyle style)
+    {
+        if (TreeViewNode.Header is not StackPanel panel
+            || panel.Children.OfType<TextBlock>().FirstOrDefault() is not TextBlock text)
+        {
+            return;
+        }
+
+        if (style == WinFormsShims.FontStyle.Regular)
+        {
+            ResetFont();
+            return;
+        }
+
+        if (text is NativeTreeTextBlock nativeText)
+        {
+            nativeText.UsesAmbientFont = false;
+        }
+
+        text.FontFamily = new FontFamily(AppSettings.Font.Name);
+        text.FontSize = AvaloniaFontSettings.ToDeviceIndependentPixels(AppSettings.Font.Size);
+
+        text.FontWeight = style.HasFlag(WinFormsShims.FontStyle.Bold) ? FontWeight.Bold : FontWeight.Normal;
+        text.FontStyle = style.HasFlag(WinFormsShims.FontStyle.Italic) ? Avalonia.Media.FontStyle.Italic : Avalonia.Media.FontStyle.Normal;
+        text.TextDecorations = style.HasFlag(WinFormsShims.FontStyle.Underline)
+            ? TextDecorations.Underline
+            : null;
+    }
+
+    private void ResetFont()
+    {
+        if (TreeViewNode.Header is StackPanel panel
+            && panel.Children.OfType<NativeTreeTextBlock>().FirstOrDefault() is { } text)
+        {
+            text.UsesAmbientFont = true;
+            text.TextDecorations = null;
+        }
+    }
+    #endregion
 
     internal virtual void OnDoubleClick()
     {

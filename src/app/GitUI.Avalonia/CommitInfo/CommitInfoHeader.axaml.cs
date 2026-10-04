@@ -1,5 +1,6 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using GitCommands;
 using GitExtensions.Extensibility.Git;
 using GitExtUtils;
@@ -24,6 +25,13 @@ public partial class CommitInfoHeader : GitModuleControl
     public CommitInfoHeader()
     {
         InitializeComponent();
+
+        // WinForms raises the source handler before its default Copy action. Avalonia's
+        // SelectableTextBlock consumes Ctrl+C in the bubble route, including an empty
+        // selection; tunnel preserves the source's unconditional helper copy exactly once.
+        rtbRevisionHeader.AddHandler(KeyDownEvent, rtbRevisionHeader_KeyDown, RoutingStrategies.Tunnel);
+        rtbRevisionHeader.LinkClicked += rtbRevisionHeader_LinkClicked;
+        rtbRevisionHeader.PointerPressed += rtbRevisionHeader_MouseDown;
         InitializeComplete();
 
         TabbedHeaderLabelFormatter labelFormatter = new();
@@ -31,6 +39,14 @@ public partial class CommitInfoHeader : GitModuleControl
 
         _commitDataManager = new CommitDataManager(() => Module);
         _commitDataHeaderRenderer = new CommitDataHeaderRenderer(labelFormatter, _dateFormatter, headerRenderer, _linkFactory);
+
+        // The source XHTML loader inserts SelectedRtf for its first author link, clearing
+        // explicit paragraph tabs. Both painting and ContentsResized use half-inch defaults.
+        const int richEditDefaultTabInterval = 48;
+        const int richEditFormattingInset = 1; // Borderless RichEdit's EM_GETRECT origin, not public Padding.
+        rtbRevisionHeader.NativeFormattingInset = richEditFormattingInset;
+        rtbRevisionHeader.NativeContentOverhang = richEditFormattingInset * 2;
+        rtbRevisionHeader.SetTabStops([], [], richEditDefaultTabInterval);
     }
 
     // Avalonia constraint: ContextMenu is the native counterpart of ContextMenuStrip.
@@ -51,6 +67,8 @@ public partial class CommitInfoHeader : GitModuleControl
             rtbRevisionHeader.SelectionStart = 0; // scroll up
             rtbRevisionHeader.SelectionEnd = 0;   // scroll up
 
+            // The original header/table AutoSize around the RichEdit contents rectangle
+            // and visible avatar. Leave the parent unconstrained so its final row fits.
             LoadAuthorImage(revision);
         });
     }

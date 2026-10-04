@@ -2,10 +2,25 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:local="using:GitUI.SpellChecker"
+             xmlns:wf="using:GitUI.Compat.WinFormsControls"
              x:Class="GitUI.SpellChecker.EditNetSpell"
              d:DesignWidth="386"
              d:DesignHeight="336">
+  <UserControl.Resources>
+    <wf:ContextMenuStrip x:Key="SpellCheckContextMenuResource"
+                         x:Name="SpellCheckContextMenu"
+                         Classes="gitextensions-toolstrip-context-menu">
+      <Separator x:Name="toolStripSeparator1" />
+    </wf:ContextMenuStrip>
+  </UserControl.Resources>
   <UserControl.Styles>
+    <Style Selector="TextBox#TextBox">
+      <Setter Property="Background" Value="{DynamicResource GitExtensionsCommitEditorBackgroundBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource GitExtensionsWindowTextBrush}" />
+    </Style>
+    <Style Selector="TextBox#TextBox.winforms-watermark">
+      <Setter Property="Foreground" Value="{DynamicResource GitExtensionsKnownColorGrayTextBrush}" />
+    </Style>
     <Style Selector="ListBox#AutoComplete > ListBoxItem">
       <Setter Property="Height" Value="15" />
       <Setter Property="MinHeight" Value="15" />
@@ -19,11 +34,18 @@
                      TextBox#TextBox:focus /template/ Border#PART_BorderElement,
                      TextBox#TextBox:disabled /template/ Border#PART_BorderElement">
       <Setter Property="Background" Value="{DynamicResource GitExtensionsCommitEditorBackgroundBrush}" />
-      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="{StaticResource GitExtensionsTransparentBrush}" />
       <Setter Property="BorderThickness" Value="0" />
     </Style>
     <Style Selector="TextBox#TextBox:disabled">
+      <Setter Property="Background" Value="{DynamicResource GitExtensionsCommitEditorBackgroundBrush}" />
       <Setter Property="Foreground" Value="{DynamicResource GitExtensionsWindowTextBrush}" />
+    </Style>
+    <Style Selector="TextBox#TextBox[IsReadOnly=true]">
+      <Setter Property="Background" Value="{DynamicResource GitExtensionsCommitEditorReadOnlyBackgroundBrush}" />
+    </Style>
+    <Style Selector="TextBox#TextBox[IsReadOnly=true] /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="{DynamicResource GitExtensionsCommitEditorReadOnlyBackgroundBrush}" />
     </Style>
   </UserControl.Styles>
   <!-- Avalonia has no ambient UserControl size, so preserve the original Designer surface dimensions. -->
@@ -31,20 +53,15 @@
     <TextBox x:Name="TextBox"
              AcceptsReturn="True"
              AcceptsTab="True"
-             Background="{DynamicResource GitExtensionsCommitEditorBackgroundBrush}"
-             BorderBrush="Transparent"
+             BorderBrush="{StaticResource GitExtensionsTransparentBrush}"
              BorderThickness="0"
              FocusAdorner="{x:Null}"
-             Foreground="{DynamicResource GitExtensionsWindowTextBrush}"
              HorizontalContentAlignment="Left"
              Padding="0"
              ScrollViewer.HorizontalScrollBarVisibility="Auto"
              ScrollViewer.VerticalScrollBarVisibility="Auto"
-             VerticalContentAlignment="Top">
-      <TextBox.ContextMenu>
-        <ContextMenu x:Name="SpellCheckContextMenu" />
-      </TextBox.ContextMenu>
-    </TextBox>
+             VerticalContentAlignment="Top"
+             ContextMenu="{StaticResource SpellCheckContextMenuResource}" />
     <local:SpellCheckAdorner x:Name="SpellCheckAdorner"
                              IsHitTestVisible="False" />
     <Canvas Panel.ZIndex="2">

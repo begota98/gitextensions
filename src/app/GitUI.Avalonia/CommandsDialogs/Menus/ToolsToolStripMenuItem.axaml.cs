@@ -5,6 +5,7 @@ using GitExtensions.Extensibility;
 using GitExtUtils;
 using GitUI.CommandsDialogs.BrowseDialog;
 using GitUI.Compat;
+using GitUI.Infrastructure;
 using ResourceManager;
 using ResourceManager.Hotkey;
 
@@ -28,6 +29,14 @@ internal partial class ToolsToolStripMenuItem : ToolStripMenuItemEx
         gitBashToolStripMenuItem.Click += gitBashToolStripMenuItem_Click;
         gitGUIToolStripMenuItem.Click += GitGuiToolStripMenuItemClick;
         kGitToolStripMenuItem.Click += KGitToolStripMenuItemClick;
+        startAuthenticationAgentToolStripMenuItem.Click += StartAuthenticationAgentToolStripMenuItemClick;
+        generateOrImportKeyToolStripMenuItem.Click += GenerateOrImportKeyToolStripMenuItemClick;
+
+        if (!OperatingSystem.IsWindows())
+        {
+            toolStripSeparator6.IsVisible = false;
+            PuTTYToolStripMenuItem.IsVisible = false;
+        }
 
         // The original menu item carries a static Keys.F12 accelerator; FormBrowse routes it
         // while this submenu is closed because Avalonia otherwise only displays the gesture.
@@ -43,6 +52,13 @@ internal partial class ToolsToolStripMenuItem : ToolStripMenuItemEx
         gitGUIToolStripMenuItem.InputGesture = GetGesture(FormBrowse.Command.GitGui);
         kGitToolStripMenuItem.InputGesture = GetGesture(FormBrowse.Command.GitGitK);
         settingsToolStripMenuItem.InputGesture = GetGesture(FormBrowse.Command.OpenSettings);
+
+        // Keep the WinForms shortcut labels as well as the executable gestures. Avalonia
+        // formats Ctrl+OemComma differently and that string also sizes the parent popup.
+        WinFormsToolStripMenuSizer.SetShortcutDisplayString(gitBashToolStripMenuItem, hotkeys.GetShortcutDisplay(FormBrowse.Command.GitBash));
+        WinFormsToolStripMenuSizer.SetShortcutDisplayString(gitGUIToolStripMenuItem, hotkeys.GetShortcutDisplay(FormBrowse.Command.GitGui));
+        WinFormsToolStripMenuSizer.SetShortcutDisplayString(kGitToolStripMenuItem, hotkeys.GetShortcutDisplay(FormBrowse.Command.GitGitK));
+        WinFormsToolStripMenuSizer.SetShortcutDisplayString(settingsToolStripMenuItem, hotkeys.GetShortcutDisplay(FormBrowse.Command.OpenSettings));
 
         base.RefreshShortcutKeys(hotkeys);
 
@@ -73,6 +89,16 @@ internal partial class ToolsToolStripMenuItem : ToolStripMenuItemEx
     private void KGitToolStripMenuItemClick(object? sender, EventArgs e)
     {
         UICommands.Module.RunGitK();
+    }
+
+    private void StartAuthenticationAgentToolStripMenuItemClick(object? sender, EventArgs e)
+    {
+        PuttyHelpers.StartPageant(UICommands.Module.WorkingDir);
+    }
+
+    private void GenerateOrImportKeyToolStripMenuItemClick(object? sender, EventArgs e)
+    {
+        PuttyHelpers.StartPuttygen(UICommands.Module.WorkingDir);
     }
 
     private void OnShowSettingsClick(object? sender, EventArgs e)
@@ -109,6 +135,7 @@ internal partial class ToolsToolStripMenuItem : ToolStripMenuItemEx
         public MenuItem GitBashMenuItem => menu.gitBashToolStripMenuItem;
         public MenuItem GitGuiMenuItem => menu.gitGUIToolStripMenuItem;
         public MenuItem GitKMenuItem => menu.kGitToolStripMenuItem;
+        public MenuItem PuTTYMenuItem => menu.PuTTYToolStripMenuItem;
         public MenuItem GitCommandLogMenuItem => menu.gitcommandLogToolStripMenuItem;
         public MenuItem SettingsMenuItem => menu.settingsToolStripMenuItem;
     }

@@ -1,9 +1,13 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:compat="using:GitUI.Compat"
-             x:Class="GitUI.UserControls.OutputHistoryControl">
+             x:Class="GitUI.UserControls.OutputHistoryControl"
+             Background="{DynamicResource GitExtensionsKnownColorControlBrush}"
+             Foreground="{DynamicResource GitExtensionsWindowTextBrush}">
   <compat:ThemeAwareTextEditor x:Name="TextBox"
                                Margin="0"
+                               BorderThickness="2"
+                               BorderBrush="{DynamicResource GitExtensionsControlBorderBrush}"
                                IsReadOnly="True"
                                ShowLineNumbers="False"
                                WordWrap="False"

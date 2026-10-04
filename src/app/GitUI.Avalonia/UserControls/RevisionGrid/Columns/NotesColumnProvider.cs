@@ -7,9 +7,14 @@ namespace GitUI.UserControls.RevisionGrid.Columns;
 
 internal sealed class NotesColumnProvider : ColumnProvider
 {
-    public NotesColumnProvider()
+    private readonly ICommitDataManager? _commitDataManager;
+    private readonly RevisionGridControl _grid;
+
+    public NotesColumnProvider(RevisionGridControl grid, ICommitDataManager? commitDataManager)
         : base("Notes", new GridLength(50), minimumWidth: 25, resizable: true)
     {
+        _commitDataManager = commitDataManager;
+        _grid = grid;
     }
 
     public override void ApplySettings()
@@ -24,10 +29,18 @@ internal sealed class NotesColumnProvider : ColumnProvider
         return textBlock;
     }
 
-    public override void UpdateCell(Control control, GitRevision revision)
+    public override void OnCellPainting(Control control, GitRevision revision)
     {
-        ((TextBlock)control).Text = FirstLine(revision.Notes) ?? string.Empty;
-        UpdateToolTip(control, revision);
+        TextBlock textBlock = (TextBlock)control;
+        if (FirstLine(revision.Notes) is string firstLine)
+        {
+            _grid.DrawColumnText(textBlock, firstLine);
+        }
+        else
+        {
+            _grid.DrawColumnText(textBlock, string.Empty);
+            _commitDataManager?.InitiateDelayedLoadingOfDetails(revision);
+        }
     }
 
     public override bool TryGetToolTip(GitRevision revision, [NotNullWhen(returnValue: true)] out string? toolTip)

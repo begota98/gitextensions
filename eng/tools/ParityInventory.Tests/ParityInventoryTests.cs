@@ -1,4 +1,4 @@
-﻿using AwesomeAssertions;
+using AwesomeAssertions;
 using NUnit.Framework;
 
 namespace GitExtensions.ParityInventory.Tests;
@@ -172,6 +172,69 @@ public sealed class ParityInventoryTests
             item.Key == "SetBool:\"widget.enabled\"" && item.Access == "write");
     }
 
+    [Test]
+    public void Run_should_not_treat_compound_value_assignments_as_event_subscriptions()
+    {
+        const string code = """
+            namespace Sample;
+            public sealed class Widget
+            {
+                private void Resize(Point cursorPos, string suffix, int delta, Metrics metrics)
+                {
+                    cursorPos.X += 2;
+                    cursorPos.Y += (int)Math.Ceiling(12.5);
+                    label.Text += ", ";
+                    label.Text += suffix;
+                    bounds.Width += delta;
+                    bounds.Height += metrics.Height;
+                    bounds.Top += Count;
+                }
+            }
+            """;
+        using InventoryFixture fixture = new();
+        fixture.WriteMatching(code);
+
+        SourceInventory inventory = fixture.Run().Original;
+
+        inventory.EventWiring.Should().BeEmpty();
+        inventory.EventHandlers.Should().BeEmpty();
+    }
+
+    [Test]
+    public void Run_should_extract_delegate_variables_member_handlers_and_explicit_event_handlers()
+    {
+        const string code = """
+            namespace Sample;
+            public sealed class Widget
+            {
+                private readonly EventHandler _forwarded = HandleStatic;
+
+                private void Wire(EventHandler supplied, HandlerOwner owner)
+                {
+                    first.Click += _forwarded;
+                    second.Click += supplied;
+                    third.Click += owner.HandleClick;
+                    fourth.Click += new EventHandler(HandleClick);
+                }
+
+                private static void HandleStatic(object sender, EventArgs e) { }
+                private void HandleClick(object sender, EventArgs e) { }
+            }
+            """;
+        using InventoryFixture fixture = new();
+        fixture.WriteMatching(code);
+
+        SourceInventory inventory = fixture.Run().Original;
+
+        inventory.EventWiring.Select(item => item.Handler).Should().BeEquivalentTo(
+            "_forwarded",
+            "supplied",
+            "HandleClick",
+            "HandleClick");
+        inventory.EventHandlers.Should().Contain(["_forwarded", "supplied", "HandleClick"]);
+        inventory.EventHandlers.Should().NotContain(item => item.StartsWith("new EventHandler", StringComparison.Ordinal));
+    }
+
     [TestCase("struct")]
     [TestCase("interface")]
     public void Run_should_extract_non_class_type_members_and_comments(string declarationKind)
@@ -326,6 +389,15 @@ public sealed class ParityInventoryTests
     [TestCase("Resize", "SizeChanged")]
     [TestCase("Enter", "GotFocus")]
     [TestCase("Leave", "LostFocus")]
+    [TestCase("MouseMove", "PointerMoved")]
+    [TestCase("MouseLeave", "PointerExited")]
+    [TestCase("MouseClick", "PointerReleased")]
+    [TestCase("MouseUp", "PointerReleased")]
+    [TestCase("MouseDown", "PointerPressed")]
+    [TestCase("DoubleClick", "DoubleTapped")]
+    [TestCase("CellMouseDoubleClick", "DoubleTapped")]
+    [TestCase("PreviewKeyDown", "KeyDown")]
+    [TestCase("KeyPress", "TextInput")]
     public void Run_should_match_framework_equivalent_event_names(string originalEvent, string twinEvent)
     {
         using InventoryFixture fixture = new();
@@ -349,6 +421,73 @@ public sealed class ParityInventoryTests
         InventoryReport report = fixture.Run();
 
         report.Findings.Should().NotContain(item => item.Code.StartsWith("event.wiring", StringComparison.Ordinal));
+    }
+
+    [Test]
+    public void Run_should_read_routed_and_attached_event_registrations()
+    {
+        using InventoryFixture fixture = new();
+        fixture.WriteOriginal("Widget.cs", """
+            namespace Sample;
+            public partial class Widget
+            {
+                private void Wire()
+                {
+                    control.MouseDown += HandleMouseDown;
+                    control.DragEnter += HandleDragEnter;
+                    control.DragDrop += HandleDragDrop;
+                }
+                private void HandleMouseDown(object sender, EventArgs e) { }
+                private void HandleDragEnter(object sender, EventArgs e) { }
+                private void HandleDragDrop(object sender, EventArgs e) { }
+            }
+            """);
+        fixture.WriteTwin("Widget.axaml.cs", """
+            namespace Sample;
+            public partial class Widget
+            {
+                private void Wire()
+                {
+                    control.AddHandler(PointerPressedEvent, HandleMouseDown, RoutingStrategies.Tunnel);
+                    DragDrop.AddDragEnterHandler(control, HandleDragEnter);
+                    DragDrop.AddDropHandler(control, HandleDragDrop);
+                }
+                private void HandleMouseDown(object sender, EventArgs e) { }
+                private void HandleDragEnter(object sender, EventArgs e) { }
+                private void HandleDragDrop(object sender, EventArgs e) { }
+            }
+            """);
+
+        InventoryReport report = fixture.Run();
+
+        report.Findings.Should().NotContain(item => item.Code.StartsWith("event.wiring", StringComparison.Ordinal));
+    }
+
+    [Test]
+    public void Run_should_preserve_exact_event_names_for_unmatched_wiring()
+    {
+        using InventoryFixture fixture = new();
+        fixture.WriteOriginal("Widget.cs", """
+            namespace Sample;
+            public partial class Widget
+            {
+                private void Wire() => control.Click += HandleChanged;
+                private void HandleChanged(object sender, EventArgs e) { }
+            }
+            """);
+        fixture.WriteTwin("Widget.axaml.cs", """
+            namespace Sample;
+            public partial class Widget
+            {
+                private void Wire() => control.PointerReleased += HandleChanged;
+                private void HandleChanged(object sender, EventArgs e) { }
+            }
+            """);
+
+        InventoryReport report = fixture.Run();
+
+        report.Findings.Should().Contain(item => item.Path == "event.wiring/control.Click->HandleChanged");
+        report.Findings.Should().Contain(item => item.Path == "event.wiring/control.PointerReleased->HandleChanged");
     }
 
     [Test]
@@ -441,6 +580,51 @@ public sealed class ParityInventoryTests
 
         comparison.Findings.Should().ContainSingle(item =>
             item.Code == "member.partial" && item.Path == "member/field:second/part");
+    }
+
+    [Test]
+    public void Run_should_record_an_exact_reviewed_framework_partial_adaptation()
+    {
+        using InventoryFixture fixture = new();
+        fixture.WriteOriginal(
+            "Widget.Designer.cs",
+            "namespace Sample; public partial class Widget { private int clock; }");
+        fixture.WriteTwin(
+            "Widget.axaml",
+            "<UserControl xmlns=\"https://github.com/avaloniaui\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" x:Class=\"Sample.Widget\" />");
+        fixture.WriteTwin(
+            "Widget.axaml.cs",
+            "namespace Sample; public partial class Widget { private int clock; }");
+        fixture.WriteFrameworkAdaptations("""
+            {
+              "schemaVersion": 4,
+              "deviations": [
+                {
+                  "typeName": "Sample.Widget",
+                  "code": "member.partial",
+                  "path": "member/field:clock/part",
+                  "originalPart": "Widget.Designer.cs",
+                  "originalAccessibility": "private",
+                  "originalSignature": "int clock",
+                  "twinPart": "Widget.axaml.cs",
+                  "twinAccessibility": "private",
+                  "twinSignature": "int clock",
+                  "rationale": "AXAML cannot own this nonvisual framework component."
+                }
+              ]
+            }
+            """);
+
+        InventoryReport report = fixture.Run(useFrameworkAdaptations: true);
+
+        report.Findings.Should().BeEmpty();
+        report.AcceptedFrameworkDeviations.Should().ContainSingle(item =>
+            item.Code == "member.partial"
+            && item.Path == "member/field:clock/part"
+            && item.OriginalPart == "Widget.Designer.cs"
+            && item.OriginalValue == "private int clock"
+            && item.TwinPart == "Widget.axaml.cs"
+            && item.TwinValue == "private int clock");
     }
 
     [Test]
@@ -963,10 +1147,11 @@ public sealed class ParityInventoryTests
             {
                 private ContextMenuStrip menu;
                 private ToolStripMenuItem open;
-                private ToolStripSeparator separator;
+                private CopyContextMenuItem copy;
+                private ToolStripSeparator toolStripMenuItem1;
                 private void InitializeComponent()
                 {
-                    menu.Items.AddRange(new ToolStripItem[] { open, separator });
+                    menu.Items.AddRange(new ToolStripItem[] { open, copy, toolStripMenuItem1 });
                 }
             }
             """);
@@ -975,11 +1160,13 @@ public sealed class ParityInventoryTests
         fixture.WriteTwin("Widget.axaml", """
             <UserControl xmlns="https://github.com/avaloniaui"
                          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                         xmlns:wf="using:Sample.Compat"
-                         x:Class="Sample.Widget">
+                          xmlns:wf="using:Sample.Compat"
+                          xmlns:controls="using:Sample.Controls"
+                          x:Class="Sample.Widget">
               <wf:ContextMenuStrip x:Name="menu">
                 <wf:ToolStripMenuItem x:Name="open" Header="Open" />
-                <wf:ToolStripSeparator x:Name="separator" />
+                <controls:CopyContextMenuItem x:Name="copy" />
+                <wf:ToolStripSeparator x:Name="toolStripMenuItem1" />
               </wf:ContextMenuStrip>
             </UserControl>
             """);
@@ -991,7 +1178,55 @@ public sealed class ParityInventoryTests
         report.Twin.Menus.Should().Contain(item =>
             item.Parent == "menu" && item.Name == "open");
         report.Twin.Menus.Should().Contain(item =>
-            item.Parent == "menu" && item.Name == "separator" && item.Kind == "separator");
+            item.Parent == "menu" && item.Name == "copy");
+        report.Original.Menus.Should().Contain(item =>
+            item.Parent == "menu" && item.Name == "copy");
+        report.Twin.Menus.Should().Contain(item =>
+            item.Parent == "menu" && item.Name == "toolStripMenuItem1" && item.Kind == "separator");
+        report.Original.Menus.Should().Contain(item =>
+            item.Parent == "menu" && item.Name == "toolStripMenuItem1" && item.Kind == "separator");
+    }
+
+    [Test]
+    public void Run_should_not_mix_nested_type_fields_into_parent_menu_trees()
+    {
+        using InventoryFixture fixture = new();
+        fixture.WriteOriginal("Widget.cs", """
+            namespace Sample;
+            public sealed class Widget
+            {
+                private ContextMenuStrip menu;
+                private ToolStripMenuItem open;
+                private void InitializeComponent() => menu.Items.Add(open);
+
+                private sealed class FirstRow
+                {
+                    private bool _isExpanded;
+                }
+
+                private sealed class SecondRow
+                {
+                    private bool _isExpanded;
+                    private ContextMenuStrip menu;
+                    private ToolStripMenuItem nested;
+                    private void InitializeComponent() => menu.Items.Add(nested);
+                }
+            }
+            """);
+        fixture.WriteTwin("Widget.cs", """
+            namespace Sample;
+            public sealed class Widget
+            {
+                private ContextMenuStrip menu;
+                private ToolStripMenuItem open;
+                private void InitializeComponent() => menu.Items.Add(open);
+            }
+            """);
+
+        InventoryReport report = fixture.Run();
+
+        report.Original.Menus.Should().ContainSingle(item => item.Parent == "menu" && item.Name == "open");
+        report.Original.Menus.Should().NotContain(item => item.Name == "nested");
     }
 
     [Test]
@@ -1135,6 +1370,103 @@ public sealed class ParityInventoryTests
             item.Key == "helpTextLbl.Text" && item.InEnglishCatalog);
         report.Findings.Should().NotContain(item =>
             item.Code == "translation.key.missing" && item.Path == "translation.key/helpTextLbl.Text");
+    }
+
+    [Test]
+    public void Run_should_not_emit_a_text_key_when_axaml_explicitly_disables_text_translation()
+    {
+        using InventoryFixture fixture = new();
+        fixture.WriteOriginal("Widget.cs", "namespace Sample; public partial class Widget { }");
+        fixture.WriteTwin("Widget.axaml.cs", "namespace Sample; public partial class Widget { }");
+        fixture.WriteTwin("Widget.axaml", """
+            <UserControl xmlns="https://github.com/avaloniaui"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         xmlns:compat="clr-namespace:GitUI.Compat"
+                         x:Class="Sample.Widget">
+              <Button x:Name="overflow"
+                      compat:TranslationCompat.TranslateText="False"
+                      Content="»" />
+            </UserControl>
+            """);
+
+        InventoryReport report = fixture.Run();
+
+        report.Twin.TranslationKeys.Should().NotContain(item => item.Key == "overflow.Text");
+        report.Findings.Should().NotContain(item =>
+            item.Code.StartsWith("translation.", StringComparison.Ordinal)
+            && item.Path.Contains("overflow.Text", StringComparison.Ordinal));
+    }
+
+    [Test]
+    public void Run_should_not_treat_a_layout_panel_child_as_the_panels_translation_text()
+    {
+        using InventoryFixture fixture = new();
+        fixture.WriteOriginal("Widget.Designer.cs", """
+            namespace Sample;
+            public partial class Widget
+            {
+                private Panel footerPanel;
+            }
+            """);
+        fixture.WriteOriginal("Widget.cs", "namespace Sample; public partial class Widget { }");
+        fixture.WriteTwin("Widget.axaml.cs", "namespace Sample; public partial class Widget { }");
+        fixture.WriteTwin("Widget.axaml", """
+            <UserControl xmlns="https://github.com/avaloniaui"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         x:Class="Sample.Widget">
+              <Panel x:Name="footerPanel">
+                <TextBlock Text="Status" />
+              </Panel>
+            </UserControl>
+            """);
+
+        InventoryReport report = fixture.Run();
+
+        report.Twin.TranslationKeys.Should().NotContain(item => item.Key == "footerPanel.Text");
+        report.Findings.Should().NotContain(item =>
+            item.Code.StartsWith("translation.", StringComparison.Ordinal)
+            && item.Path.Contains("footerPanel.Text", StringComparison.Ordinal));
+    }
+
+    [Test]
+    public void Run_should_recognize_explicit_translation_registration_as_a_translation_key()
+    {
+        using InventoryFixture fixture = new();
+        fixture.WriteOriginal("Widget.Designer.cs", """
+            namespace Sample;
+            public partial class Widget
+            {
+                private TextBox editor;
+                private void InitializeComponent()
+                {
+                    editor.Text = "";
+                }
+            }
+            """);
+        fixture.WriteOriginal("Widget.cs", "namespace Sample; public partial class Widget { }");
+        fixture.WriteTwin("Widget.axaml", """
+            <UserControl xmlns="https://github.com/avaloniaui"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         x:Class="Sample.Widget">
+              <TextBox x:Name="editor" />
+            </UserControl>
+            """);
+        fixture.WriteTwin("Widget.axaml.cs", """
+            namespace Sample;
+            public partial class Widget
+            {
+                public void AddTranslationItems(ITranslation translation)
+                {
+                    translation.AddTranslationItem(nameof(Widget), nameof(editor), "Text", string.Empty);
+                }
+            }
+            """);
+
+        InventoryReport report = fixture.Run();
+
+        report.Twin.TranslationKeys.Should().ContainSingle(item => item.Key == "editor.Text");
+        report.Findings.Should().NotContain(item =>
+            item.Code == "translation.key.missing" && item.Path == "translation.key/editor.Text");
     }
 
     [Test]

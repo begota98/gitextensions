@@ -3,26 +3,41 @@
              xmlns:compat="using:GitUI.Compat"
              xmlns:wf="using:GitUI.Compat.WinFormsControls"
              xmlns:properties="using:GitUI.Properties"
+             xmlns:revisiongrid="using:GitUI.UserControls.RevisionGrid"
              x:Class="GitUI.LeftPanel.RepoObjectsTree"
-             MinWidth="190">
+             MinWidth="190"
+             Foreground="{DynamicResource GitExtensionsKnownColorControlTextBrush}">
   <UserControl.Styles>
-    <Style Selector="TreeViewItem.repo-search-result /template/ Border#PART_LayoutRoot">
-      <Setter Property="Background" Value="{DynamicResource GitExtensionsInactiveSelectionBackgroundBrush}" />
+    <Style Selector="Button.gitextensions-toolbar-button, ToggleButton.gitextensions-toolbar-button">
+      <Setter Property="Foreground" Value="{DynamicResource GitExtensionsKnownColorControlTextBrush}" />
+    </Style>
+    <Style Selector="TreeView:not(:focus-within) TreeViewItem.repo-search-result /template/ Border#PART_NativeSelectionBorder, TreeView:focus-within TreeViewItem.repo-search-result:not(:selected) /template/ Border#PART_NativeSelectionBorder">
+      <Setter Property="Background" Value="{DynamicResource GitExtensionsNativeTreeSearchBackgroundBrush}" />
+    </Style>
+    <Style Selector="TreeView:not(:focus-within) TreeViewItem.repo-search-cleared /template/ Border#PART_NativeSelectionBorder, TreeView:focus-within TreeViewItem.repo-search-cleared:not(:selected) /template/ Border#PART_NativeSelectionBorder">
+      <Setter Property="Background" Value="{DynamicResource GitExtensionsNativeTreeDefaultBackgroundBrush}" />
+    </Style>
+    <Style Selector="TreeView:not(:focus-within) TreeViewItem.repo-search-foreground TextBlock, TreeView:focus-within TreeViewItem.repo-search-foreground:not(:selected) TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource GitExtensionsNativeTreeSearchForegroundBrush}" />
     </Style>
     <Style Selector="TreeViewItem.worktree-deleted TextBlock">
       <Setter Property="Foreground" Value="{DynamicResource GitExtensionsKnownColorGrayTextBrush}" />
     </Style>
+    <Style Selector="TreeViewItem.repo-node-invisible TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource GitExtensionsKnownColorGrayTextBrush}" />
+    </Style>
   </UserControl.Styles>
-  <Grid RowDefinitions="27,26,*">
+  <Grid x:Name="repoTreePanel" RowDefinitions="25,26,*">
     <StackPanel x:Name="leftPanelToolStrip"
                 Grid.Row="0"
+                Background="{DynamicResource GitExtensionsKnownColorControlBrush}"
                 Orientation="Horizontal"
-                Margin="1,2"
-                Spacing="1">
+                Height="25"
+                Spacing="0"
+                Classes="gitextensions-tree-toolbar">
       <compat:IconButton x:Name="tsbCollapseAll"
                          compat:TranslationCompat.UseToolTipText="True"
                          Classes="gitextensions-toolbar-button gitextensions-icon-only"
-                         Content=""
                          Icon="{x:Static properties:Images.CollapseAll}" />
       <compat:IconToggleButton x:Name="tsbShowBranches"
                                compat:TranslationCompat.UseToolTipText="True"
@@ -57,33 +72,31 @@
     </StackPanel>
     <Grid x:Name="branchSearchPanel"
           Grid.Row="1"
+          Background="{DynamicResource GitExtensionsKnownColorControlBrush}"
           ColumnDefinitions="*,26">
-      <TextBox x:Name="_txtBranchCriterion"
-               Grid.Column="0"
-               Height="24"
-               Margin="1"
-               Padding="4,1"
-               VerticalContentAlignment="Center" />
       <compat:IconButton x:Name="btnSearch"
                          Grid.Column="1"
-                         Classes="gitextensions-toolbar-button gitextensions-icon-only"
+                         Classes="gitextensions-toolbar-button gitextensions-icon-only gitextensions-native-flat-button"
                          Width="26"
                          Height="26"
-                         Content=""
+                         Margin="0"
+                         Padding="2"
                          Icon="{x:Static properties:Images.Preview}" />
     </Grid>
     <TreeView x:Name="treeMain"
-              Classes="gitextensions-native-tree"
+              Classes="gitextensions-native-tree gitextensions-explorer-tree gitextensions-hide-tree-selection"
+              Focusable="True"
+              KeyboardNavigation.TabIndex="3"
               Grid.Row="2"
-              SelectionMode="Multiple"
+              Background="{DynamicResource GitExtensionsPanelBackgroundBrush}"
+              Foreground="{DynamicResource GitExtensionsWindowTextBrush}"
+              SelectionMode="Single"
               ScrollViewer.HorizontalScrollBarVisibility="Auto"
               ScrollViewer.VerticalScrollBarVisibility="Auto"
               ScrollViewer.AllowAutoHide="False">
       <TreeView.ContextMenu>
         <wf:ContextMenuStrip x:Name="menuMain">
-          <wf:ToolStripMenuItem x:Name="copyContextMenuItem" Header="_Copy to clipboard">
-            <MenuItem.Icon><Image Classes="gitextensions-icon-16" Source="{x:Static properties:Images.CopyToClipboard}" /></MenuItem.Icon>
-          </wf:ToolStripMenuItem>
+          <revisiongrid:CopyContextMenuItem x:Name="copyContextMenuItem" Header="&amp;Copy to clipboard" />
           <wf:ToolStripMenuItem x:Name="filterForSelectedRefsMenuItem" Header="_Filter for selected">
             <MenuItem.Icon><Image Classes="gitextensions-icon-16" Source="{x:Static properties:Images.ShowThisBranchOnly}" /></MenuItem.Icon>
           </wf:ToolStripMenuItem>

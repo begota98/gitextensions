@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -17,17 +18,21 @@ using Avalonia.VisualTree;
 using AvaloniaEdit;
 using GitCommands;
 using GitCommands.Settings;
+using GitCommands.UserRepositoryHistory;
 using GitExtensions.Extensibility.Git;
 using GitExtensions.Extensibility.Settings;
 using GitExtensions.ParityCapture;
+using GitExtUtils;
 using GitExtUtils.GitUI.Theming;
 using GitUI;
 using GitUI.CommandsDialogs;
 using GitUI.CommandsDialogs.AboutBoxDialog;
 using GitUI.CommandsDialogs.BrowseDialog;
+using GitUI.CommandsDialogs.BrowseDialog.DashboardControl;
 using GitUI.CommandsDialogs.CommitDialog;
 using GitUI.CommandsDialogs.SettingsDialog.Pages;
 using GitUI.Compat;
+using GitUI.Editor;
 using GitUI.HelperDialogs;
 using GitUI.SpellChecker;
 using GitUI.UserControls;
@@ -45,6 +50,67 @@ public sealed partial class ParityScreenshotTests
     private const string CaptureThemeEnvironmentVariable = "GITEXT_CAPTURE_PARITY_THEME";
     private const string P02Category = "P0_2";
 
+    [AvaloniaTest]
+    [TestCase(false)]
+    [TestCase(true)]
+    [Category("P8.6i.126")]
+    public async Task Capture_history_should_seed_the_same_category_independently_of_prior_Dashboard_cells(bool dashboardFirst)
+    {
+        AvaloniaSynchronizationContext.InstallIfNeeded();
+        ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
+        using CaptureContext context = new();
+        if (dashboardFirst)
+        {
+            Dashboard dashboard = new();
+            await PrepareViewAsync(dashboard, context);
+            IUserRepositoriesListController controller = context.Commands.GetRequiredService<IUserRepositoriesListController>();
+            (IReadOnlyList<RecentRepoInfo> recent, IReadOnlyList<RecentRepoInfo> favourites) = controller.PreRenderRepositories(string.Empty);
+            recent.Should().ContainSingle(item => item.Repo.Path == context.Module.WorkingDir);
+            favourites.Should().ContainSingle(item => item.Repo.Path == context.Module.WorkingDir && item.Repo.Category == "Development");
+        }
+
+        FormBrowse browse = new(context.Commands);
+        try
+        {
+            await PrepareViewAsync(browse, context);
+            RepositoryHistorySnapshot snapshot = context.Commands.GetRequiredService<IRepositoryHistoryUIService>().LoadSnapshot();
+            snapshot.Favourites.Should().ContainSingle(item => item.Repository.Path == context.Module.WorkingDir
+                && item.Repository.Category == "Development",
+                "Browse and Dashboard must receive the same explicit native-reference history input");
+        }
+        finally
+        {
+            browse.Close();
+        }
+    }
+
+    [Test]
+    [Category(P02Category)]
+    public void Filter_toolbar_capture_host_should_match_the_native_AutoSize_viewport()
+    {
+        GetCaptureSize(typeof(FilterToolBar)).Should().Be((551, 25));
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public async Task FormSettings_capture_should_preserve_product_compilation_visibility()
+    {
+        AvaloniaSynchronizationContext.InstallIfNeeded();
+        ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
+        using CaptureContext context = new();
+        FormSettings form = new(context.Commands);
+        try
+        {
+            bool discardVisible = form.GetTestAccessor().DiscardButton.IsVisible;
+            await PrepareViewAsync(form, context);
+            form.GetTestAccessor().DiscardButton.IsVisible.Should().Be(discardVisible);
+        }
+        finally
+        {
+            form.Close();
+        }
+    }
+
     [Test]
     [Category(P02Category)]
     public void Generic_search_capture_hosts_should_use_the_declared_shell_sizes()
@@ -57,11 +123,26 @@ public sealed partial class ParityScreenshotTests
     [Category(P02Category)]
     public void Diff_patch_capture_hosts_should_use_96_dpi_designer_dimensions()
     {
-        GetCaptureSize(typeof(BranchSelector)).Should().Be((325, 54));
+        GetCaptureSize(typeof(BranchSelector)).Should().Be((322, 58));
+        GetCaptureSize(typeof(FileViewer)).Should().Be((757, 518));
         GetCaptureSize(typeof(FormDiff)).Should().Be((1042, 685));
         // WinForms AutoSize contracts the 110-pixel Designer client to 106 pixels with the runtime font.
         GetCaptureSize(typeof(FormCompareToBranch)).Should().Be((434, 106));
         GetCaptureSize(typeof(FormFormatPatch)).Should().Be((824, 532));
+    }
+
+    [Test]
+    [Category(P02Category)]
+    public void Repository_workflow_capture_hosts_should_use_source_runtime_dimensions()
+    {
+        GetCaptureSize(typeof(FormAddFiles)).Should().Be((443, 65));
+        GetCaptureSize(typeof(FormApplyPatch)).Should().Be((711, 436));
+        GetCaptureSize(typeof(FormArchive)).Should().Be((594, 571));
+        GetCaptureSize(typeof(FormCherryPick)).Should().Be((614, 332));
+        GetCaptureSize(typeof(FormClone)).Should().Be((647, 372));
+        GetCaptureSize(typeof(FormInit)).Should().Be((542, 190));
+        GetCaptureSize(typeof(FormMergeBranch)).Should().Be((783, 424));
+        GetCaptureSize(typeof(FormRebase)).Should().Be((1034, 461));
     }
 
     [Test]
@@ -78,6 +159,15 @@ public sealed partial class ParityScreenshotTests
         GetCaptureSize(typeof(FormBlame)).Should().Be((784, 762));
         GetCaptureSize(typeof(FormLog)).Should().Be((750, 529));
         GetCaptureSize(typeof(FormGitCommandLog)).Should().Be((659, 470));
+    }
+
+    [Test]
+    [Category(P02Category)]
+    public void Repository_operation_capture_hosts_should_use_native_96_dpi_client_dimensions()
+    {
+        GetCaptureSize(typeof(FormFileHistory)).Should().Be((748, 444));
+        // The source FormStash Designer is authored at 192 DPI; these are its native-96 client dimensions.
+        GetCaptureSize(typeof(FormStash)).Should().Be((708, 520));
     }
 
     [Test]
@@ -103,7 +193,11 @@ public sealed partial class ParityScreenshotTests
     [Category(P02Category)]
     public void Branch_operation_capture_hosts_should_use_native_96_dpi_runtime_dimensions()
     {
-        GetCaptureSize(typeof(FormDeleteRemoteBranch)).Should().Be((403, 167));
+        GetCaptureSize(typeof(FormCreateBranch)).Should().Be((570, 386));
+        GetCaptureSize(typeof(FormCheckoutBranch)).Should().Be((724, 185));
+        GetCaptureSize(typeof(FormDeleteBranch)).Should().Be((412, 91));
+        GetCaptureSize(typeof(FormRenameBranch)).Should().Be((484, 42));
+        GetCaptureSize(typeof(FormDeleteRemoteBranch)).Should().Be((403, 152));
         GetCaptureSize(typeof(FormResetAnotherBranch)).Should().Be((545, 347));
     }
 
@@ -135,7 +229,7 @@ public sealed partial class ParityScreenshotTests
     public void Help_about_capture_hosts_should_use_native_96_dpi_runtime_dimensions()
     {
         GetCaptureSize(typeof(FormAbout)).Should().Be((601, 318));
-        GetCaptureSize(typeof(EnvironmentInfo)).Should().Be((137, 78));
+        GetCaptureSize(typeof(EnvironmentInfo)).Should().Be((346, 123));
         GetCaptureSize(typeof(FormCommandlineHelp)).Should().Be((394, 662));
         GetCaptureSize(typeof(FormDonate)).Should().Be((508, 237));
         GetCaptureSize(typeof(FormChangeLog)).Should().Be((849, 411));
@@ -151,7 +245,7 @@ public sealed partial class ParityScreenshotTests
         GetCaptureSize(typeof(CommitDialogSettingsPage)).Should().Be((1014, 950));
         GetCaptureSize(typeof(FormBrowseRepoSettingsPage)).Should().Be((738, 438));
         GetCaptureSize(typeof(ShellExtensionSettingsPage)).Should().Be((1502, 331));
-        GetCaptureSize(typeof(FormChooseTranslation)).Should().Be((816, 578));
+        GetCaptureSize(typeof(FormChooseTranslation)).Should().Be((800, 539));
     }
 
     [AvaloniaTest]
@@ -173,6 +267,27 @@ public sealed partial class ParityScreenshotTests
         commandNode.BoundsDip.Should().Be(
             new CaptureRectangleF { X = 32, Y = 24, Width = 75, Height = 25 });
         window.Close();
+    }
+
+    [AvaloniaTest]
+    [Category(P02Category)]
+    public void Avalonia_tree_reader_should_apply_generated_designer_metadata_to_window_roots()
+    {
+        ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
+        FormBrowse form = new() { Width = 923, Height = 573 };
+        form.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        CaptureSurface surface = new AvaloniaControlTreeReader(form, renderScale: 1)
+            .ReadPrimary(form, new PixelSize(923, 573));
+        CaptureNode toolPanel = Flatten(surface.Root).Single(node => node.FieldName == "toolPanel");
+        toolPanel.Dock.Should().Be("Fill");
+        toolPanel.Anchor.Should().Equal("Top", "Left");
+        CaptureThicknessF emptyThickness = new() { Left = 0, Top = 0, Right = 0, Bottom = 0 };
+        toolPanel.Margin.Dip.Should().Be(emptyThickness);
+        toolPanel.Padding.Dip.Should().Be(emptyThickness);
+        toolPanel.TabIndex.Should().Be(1);
+        form.Close();
     }
 
     [AvaloniaTest]
@@ -303,6 +418,34 @@ public sealed partial class ParityScreenshotTests
 
         comboBox.Text.Should().Be("feature/reset-target");
         comboBox.IsDropDownOpen.Should().BeFalse();
+    }
+
+    [AvaloniaTest]
+    [Category(P02Category)]
+    public void Capture_text_seeding_should_prefer_the_source_owner_field_over_a_nested_name()
+    {
+        DuplicateNameTextHost host = new();
+        CaptureComponentPlan component = new()
+        {
+            TypeName = typeof(DuplicateNameTextHost).FullName!,
+            TextValues = new Dictionary<string, string> { ["_textEditor"] = "Owner text" },
+            States = [new CaptureStatePlan { Id = "normal", Kind = CaptureStateKind.Normal }],
+        };
+
+        ApplyTextValues(host, component);
+
+        host.OwnerEditor.Text.Should().Be("Owner text");
+        host.NestedEditor.Text.Should().Be("Nested text");
+    }
+
+    [Test]
+    [Category(P02Category)]
+    public void EditNetSpell_capture_host_should_scale_the_96_dpi_Designer_dimensions()
+    {
+        GetPlannedCaptureHostSize(typeof(EditNetSpell), 100).Should().Be((385.25, 335.25));
+        GetPlannedCaptureHostSize(typeof(EditNetSpell), 125).Should().Be((385, 335.4));
+        GetPlannedCaptureHostSize(typeof(EditNetSpell), 150).Should().Be((385.5, 335.5));
+        GetPlannedCaptureHostSize(typeof(EditNetSpell), 200).Should().Be((385.625, 335.625));
     }
 
     [AvaloniaTest]
@@ -510,6 +653,23 @@ public sealed partial class ParityScreenshotTests
 
     [AvaloniaTest]
     [Category(P02Category)]
+    public void Avalonia_tree_reader_should_treat_controls_under_a_transparent_overflow_host_as_not_visible()
+    {
+        Button overflowItem = new() { Name = "tsbtnAdvancedFilter", Content = "Advanced filter" };
+        StackPanel overflowHost = new() { Opacity = 0, Children = { overflowItem } };
+        Window window = new() { Width = 200, Height = 80, Content = overflowHost };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        CaptureSurface surface = new AvaloniaControlTreeReader(window, renderScale: 1)
+            .ReadPrimary(window, new PixelSize(200, 80));
+
+        Flatten(surface.Root).Single(node => node.FieldName == overflowItem.Name).Visible.Should().BeFalse();
+        window.Close();
+    }
+
+    [AvaloniaTest]
+    [Category(P02Category)]
     [Category("P8.6h.3b.2b.2b.2b.5")]
     public void Avalonia_tree_reader_should_emit_revision_grid_layout_and_effective_state_semantics()
     {
@@ -543,7 +703,7 @@ public sealed partial class ParityScreenshotTests
             rootNode.Alignment.Should().BeNull();
             rootNode.TabIndex.Should().Be(0);
             rootNode.TabStop.Should().BeTrue();
-            rootNode.Expanded.Should().BeFalse();
+            rootNode.Expanded.Should().BeNull();
             gridNode.BorderStyle.Should().Be("None");
             gridNode.Anchor.Should().Equal("Top", "Left");
             gridNode.Dock.Should().Be("Fill");
@@ -552,7 +712,7 @@ public sealed partial class ParityScreenshotTests
             gridNode.TabIndex.Should().Be(0);
             gridNode.TabStop.Should().BeTrue();
             gridNode.Focused.Should().BeTrue();
-            gridNode.Expanded.Should().BeFalse();
+            gridNode.Expanded.Should().BeNull();
             decimal resolvedRowHeight = decimal.Round((decimal)RevisionGridControl.GetRowHeight(revisionGrid), 4);
             gridNode.ItemHeightDip.Should().Be(resolvedRowHeight);
 
@@ -573,6 +733,82 @@ public sealed partial class ParityScreenshotTests
             .ReadPrimary(revisionGrid, new PixelSize(682, 235))
             .Root.Children.Single(node => node.FieldName == "_gridView");
         disabledGridNode.Enabled.Should().BeFalse("child state must include inherited Avalonia disablement");
+        window.Close();
+    }
+
+    [AvaloniaTest]
+    [Category(P02Category)]
+    [TestCase(false)]
+    [TestCase(true)]
+    public void Avalonia_state_driver_should_respect_context_menu_cancellation(bool cancel)
+    {
+        ContextMenu menu = new() { ItemsSource = new[] { new MenuItem { Header = "Action" } } };
+        Button owner = new() { Name = "btnMenu", Content = "Menu", ContextMenu = menu };
+        Window window = new() { Width = 300, Height = 200, Content = owner };
+        int openingCount = 0;
+        menu.Opening += (_, e) =>
+        {
+            openingCount++;
+            e.Cancel = cancel;
+        };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            CaptureStatePlan state = new() { Id = "menu.open", Kind = CaptureStateKind.MenuOpen, TargetField = "btnMenu" };
+            if (cancel)
+            {
+                Action capture = () => AvaloniaControlStateDriver.Apply(window, state);
+                capture.Should().Throw<AvaloniaCaptureStateUnsupportedException>().WithMessage("*declined to open*");
+                menu.IsOpen.Should().BeFalse();
+            }
+            else
+            {
+                using AvaloniaControlStateDriver driver = AvaloniaControlStateDriver.Apply(window, state);
+                menu.IsOpen.Should().BeTrue();
+                driver.PopupSurfaceRoots.Should().ContainSingle();
+            }
+
+            openingCount.Should().Be(1);
+        }
+        finally
+        {
+            menu.Close();
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    [Category(P02Category)]
+    public void Avalonia_state_driver_should_preserve_the_reference_context_menu_capture_point()
+    {
+        ContextMenuCaptureHost host = new();
+        Window window = new() { Width = 300, Height = 200, Content = host };
+        PlacementMode originalPlacement = host.Menu.Placement;
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        using (AvaloniaControlStateDriver driver = AvaloniaControlStateDriver.Apply(
+                   host,
+                   new CaptureStatePlan
+                   {
+                       Id = "menu.open",
+                       Kind = CaptureStateKind.MenuOpen,
+                       TargetField = "_mainContextMenu"
+                   }))
+        {
+            Control popupRoot = driver.PopupSurfaceRoots.Should().ContainSingle().Subject;
+            PixelRect actualBounds = GetScreenBounds(popupRoot, window, renderScale: 1);
+            PixelRect captureBounds = driver.GetCaptureBounds(popupRoot, actualBounds);
+
+            captureBounds.Position.Should().Be(new PixelPoint(150, 100));
+            captureBounds.Size.Should().Be(actualBounds.Size);
+            actualBounds.Y.Should().BeLessThan(captureBounds.Y,
+                "the headless overlay slides the popup into its owner instead of preserving the desktop point");
+            host.OpeningCount.Should().Be(1);
+        }
+
+        host.Menu.Placement.Should().Be(originalPlacement);
         window.Close();
     }
 
@@ -729,8 +965,11 @@ public sealed partial class ParityScreenshotTests
                 ItemsSource = new[] { new MenuItem { Header = "Choice" } }
             }
         };
-        flyoutWindow.Content = flyoutButton;
+        TextBox flyoutFocusOwner = new() { Text = "Focus owner" };
+        flyoutWindow.Content = new StackPanel { Children = { flyoutFocusOwner, flyoutButton } };
         flyoutWindow.Show();
+        Dispatcher.UIThread.RunJobs();
+        flyoutFocusOwner.Focus();
         Dispatcher.UIThread.RunJobs();
         CaptureStatePlan flyoutState = new()
         {
@@ -743,45 +982,58 @@ public sealed partial class ParityScreenshotTests
             flyoutButton.Flyout!.IsOpen.Should().BeTrue();
             flyoutDriver.PopupSurfaceRoots.Should().ContainSingle();
             flyoutDriver.RequiresExternalSurfaceCapture.Should().BeFalse();
+            flyoutFocusOwner.IsFocused.Should().BeTrue();
         }
 
         flyoutWindow.Close();
 
         ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
+        AppSettings.TestAccessor settingsAccessor = AppSettings.GetTestAccessor();
+        string originalApplicationExecutablePath = settingsAccessor.ApplicationExecutablePath;
         string originalDictionary = AppSettings.Dictionary;
-        AppSettings.Dictionary = "None";
-        EditNetSpell hostedEditor = new() { Name = "editHosted" };
-        Window hostedEditorWindow = new() { Width = 240, Height = 100, Content = hostedEditor };
-        hostedEditorWindow.Show();
-        Dispatcher.UIThread.RunJobs();
-        CaptureStatePlan hostedFocusState = new()
+        Window? hostedEditorWindow = null;
+        try
         {
-            Id = "hosted.focused",
-            Kind = CaptureStateKind.Focus,
-            TargetField = "editHosted"
-        };
-        using (AvaloniaControlStateDriver.Apply(hostedEditorWindow, hostedFocusState))
-        {
-            hostedEditor.GetTestAccessor().TextBox.IsFocused.Should().BeTrue();
-        }
+            settingsAccessor.ApplicationExecutablePath = Path.Combine(
+                TestContext.CurrentContext.WorkDirectory,
+                "GitExtensions.Avalonia.exe");
+            AppSettings.Dictionary = "None";
+            EditNetSpell hostedEditor = new() { Name = "editHosted" };
+            hostedEditorWindow = new Window { Width = 240, Height = 100, Content = hostedEditor };
+            hostedEditorWindow.Show();
+            Dispatcher.UIThread.RunJobs();
+            CaptureStatePlan hostedFocusState = new()
+            {
+                Id = "hosted.focused",
+                Kind = CaptureStateKind.Focus,
+                TargetField = "editHosted"
+            };
+            using (AvaloniaControlStateDriver.Apply(hostedEditorWindow, hostedFocusState))
+            {
+                hostedEditor.GetTestAccessor().TextBox.IsFocused.Should().BeTrue();
+            }
 
-        CaptureStatePlan hostedTextBoxFocusState = new()
-        {
-            Id = "hosted-textbox.focused",
-            Kind = CaptureStateKind.Focus,
-            TargetField = "TextBox"
-        };
-        using (AvaloniaControlStateDriver.Apply(hostedEditorWindow, hostedTextBoxFocusState))
-        {
-            hostedEditor.GetTestAccessor().TextBox.IsFocused.Should().BeTrue();
+            CaptureStatePlan hostedTextBoxFocusState = new()
+            {
+                Id = "hosted-textbox.focused",
+                Kind = CaptureStateKind.Focus,
+                TargetField = "TextBox"
+            };
+            using (AvaloniaControlStateDriver.Apply(hostedEditorWindow, hostedTextBoxFocusState))
+            {
+                hostedEditor.GetTestAccessor().TextBox.IsFocused.Should().BeTrue();
+            }
         }
-
-        hostedEditorWindow.Close();
-        AppSettings.Dictionary = originalDictionary;
+        finally
+        {
+            hostedEditorWindow?.Close();
+            AppSettings.Dictionary = originalDictionary;
+            settingsAccessor.ApplicationExecutablePath = originalApplicationExecutablePath;
+        }
 
         Button secondTabButton = new() { Name = "btnSecondTab", Content = "Second" };
         TabItem firstTab = new() { Header = "First", Content = "First content" };
-        TabItem secondTab = new() { Header = "Second", Content = secondTabButton };
+        TabItem secondTab = new() { Name = "SecondTab", Header = "Second", Content = secondTabButton };
         TabControl tabs = new() { ItemsSource = new[] { firstTab, secondTab }, SelectedItem = firstTab };
         Window tabWindow = new() { Width = 240, Height = 100, Content = tabs };
         tabWindow.Show();
@@ -796,6 +1048,19 @@ public sealed partial class ParityScreenshotTests
         {
             tabs.SelectedItem.Should().BeSameAs(secondTab);
             secondTabButton.IsFocused.Should().BeTrue();
+        }
+
+        tabs.SelectedItem.Should().BeSameAs(firstTab);
+
+        CaptureStatePlan tabHeaderFocusState = new()
+        {
+            Id = "second-tab.focused",
+            Kind = CaptureStateKind.Focus,
+            TargetField = secondTab.Name
+        };
+        using (AvaloniaControlStateDriver.Apply(tabWindow, tabHeaderFocusState))
+        {
+            tabs.SelectedItem.Should().BeSameAs(secondTab);
         }
 
         tabs.SelectedItem.Should().BeSameAs(firstTab);
@@ -816,6 +1081,37 @@ public sealed partial class ParityScreenshotTests
         applyUnsupported.Should().Throw<AvaloniaCaptureStateUnsupportedException>()
             .WithMessage("*ToggleButton*");
         unsupportedWindow.Close();
+    }
+
+    [AvaloniaTest]
+    [Category(P02Category)]
+    public void Avalonia_state_driver_should_apply_and_restore_the_read_only_text_state()
+    {
+        Window window = new() { Width = 240, Height = 100 };
+        TextBox target = new() { Name = "txtTarget", Text = "Editable" };
+        window.Content = target;
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        target.Focus();
+        Dispatcher.UIThread.RunJobs();
+        target.IsKeyboardFocusWithin.Should().BeTrue();
+
+        using (AvaloniaControlStateDriver.Apply(
+                   window,
+                   new CaptureStatePlan
+                   {
+                       Id = "read-only",
+                       Kind = CaptureStateKind.ReadOnly,
+                       TargetField = "txtTarget",
+                   }))
+        {
+            target.IsReadOnly.Should().BeTrue();
+            target.IsKeyboardFocusWithin.Should().BeTrue();
+            window.CaptureRenderedFrame().Should().NotBeNull();
+        }
+
+        target.IsReadOnly.Should().BeFalse();
+        window.Close();
     }
 
     [AvaloniaTest]
@@ -910,8 +1206,14 @@ public sealed partial class ParityScreenshotTests
         Lazy<string?> originalApplicationDataPath = accessor.ApplicationDataPath;
         string userSettingsPath = AppSettings.SettingsFilePath;
         SettingsFileSnapshot userSettingsSnapshot = SettingsFileSnapshot.Take(userSettingsPath);
+        GitExtensions.Shims.WinForms.IIconExtractor? originalIconExtractor = GitExtensions.Shims.WinForms.ShimHost.IconExtractor;
+        FileAssociatedIconProvider iconProvider = new();
         try
         {
+            // The capture host, unlike the shipping App, does not install desktop shim services.
+            // Use the real platform icon source so file-tree screenshots exercise the same path.
+            GitExtensions.Shims.WinForms.ShimHost.IconExtractor = new AssociatedFileIconExtractor();
+            iconProvider.ResetCache();
             accessor.ApplicationDataPath = new Lazy<string?>(() => settingsDirectory);
             string settingsPath = AppSettings.SettingsFilePath;
             IsPathContained(settingsPath, settingsDirectory).Should().BeTrue(
@@ -932,6 +1234,8 @@ public sealed partial class ParityScreenshotTests
         }
         finally
         {
+            GitExtensions.Shims.WinForms.ShimHost.IconExtractor = originalIconExtractor;
+            iconProvider.ResetCache();
             accessor.ApplicationDataPath = originalApplicationDataPath;
             userSettingsSnapshot.AssertUnchanged(userSettingsPath);
             TestDirectory.Delete(settingsDirectory);
@@ -944,6 +1248,10 @@ public sealed partial class ParityScreenshotTests
         ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
         GitExtensions.Shims.WinForms.ShimHost.MessageBoxHost = new StubMessageBoxHost();
         GitExtensions.Shims.WinForms.ShimHost.Clipboard = new CaptureClipboard();
+        // parity-scaffolding: The application entry point normally creates the aggregate MEF
+        // catalog before FormBrowse opens. The capture host is the entry point here, so create
+        // the same empty base catalog before the form starts its background plugin scan.
+        ManagedExtensibility.Initialise();
 
         CapturePlan plan = CapturePlan.Load(GetCapturePlanPath());
         string? viewFilter = Environment.GetEnvironmentVariable(CaptureViewEnvironmentVariable);
@@ -1050,7 +1358,8 @@ public sealed partial class ParityScreenshotTests
         Control view = CreateView(context, descriptor.ViewType, state);
         Control captureHost = view;
         bool cropToComponent = false;
-        (double width, double height) = GetCaptureSize(captureHost.GetType());
+        bool captureSourceClient = view is Dashboard;
+        (double width, double height) = GetPlannedCaptureHostSize(captureHost.GetType(), scalePercent);
         if (descriptor.ViewType == typeof(WatermarkComboBox)
             || descriptor.ViewType == typeof(CaseSensitiveComboBox))
         {
@@ -1060,8 +1369,7 @@ public sealed partial class ParityScreenshotTests
         }
 
         double renderScale = scalePercent / 100d;
-        if (descriptor.ViewType == typeof(EditNetSpell)
-            || descriptor.ViewType == typeof(FileStatusList)
+        if (descriptor.ViewType == typeof(FileStatusList)
             || descriptor.ViewType == typeof(RevisionGridControl)
             || descriptor.ViewType == typeof(BlameViewerSettingsPage))
         {
@@ -1098,8 +1406,13 @@ public sealed partial class ParityScreenshotTests
 
         try
         {
-            PrepareView(captureHost, context);
+            await PrepareViewAsync(captureHost, context);
             window.Show();
+            // parity-scaffolding: The real application activates FormBrowse before its async
+            // revision load settles. Activate the isolated window at the same lifecycle point;
+            // activating after selecting HEAD lets Avalonia establish a new first-row anchor.
+            window.Activate();
+            Dispatcher.UIThread.RunJobs();
             // parity-scaffolding: A form may restore its persisted bounds during OnOpened;
             // the paired plan's declared size remains authoritative for every state.
             window.Width = requiresExtendedPopupViewport ? 1200 : width;
@@ -1168,12 +1481,148 @@ public sealed partial class ParityScreenshotTests
                 fileStatusList.GetTestAccessor().UpdateContextMenu().Should().BeFalse();
             }
 
-            // parity-scaffolding: Each planned state owns a fresh headless window; activate it
-            // before driving focus so a previously closed capture cannot retain the input root.
-            window.Activate();
-            Dispatcher.UIThread.RunJobs();
+            Control? defaultFocusedControl = GetStandaloneDefaultFocusedControl(view);
+            if (defaultFocusedControl is not null)
+            {
+                // parity-scaffolding: The WinForms standalone host gives its first focusable child
+                // keyboard focus before applying non-focus states; establish the same baseline.
+                defaultFocusedControl.Focus();
+                Dispatcher.UIThread.RunJobs();
+            }
+
             using AvaloniaControlStateDriver driver = AvaloniaControlStateDriver.Apply(view, state);
-            using WriteableBitmap primaryFrame = CaptureRenderedFrame(window);
+            if (view is FormBrowse capturedBrowse)
+            {
+                // The headless ListBox can establish its first-row anchor while queued layout
+                // work is drained for the requested state. Reassert the paired HEAD boundary
+                // after that drain, just as the WinForms capture worker does before rendering.
+                await SelectAndWaitForFormBrowseRevisionAsync(capturedBrowse, context.HeadRevision);
+                // A plan that starts on a lower tab can reach HEAD before the initial
+                // selection event. Apply the same product GPG-tab update that event uses so
+                // capture order does not decide whether the tab exists.
+                bool shouldShowGpgInfo = AppSettings.ShowGpgInformation.Value && !context.HeadRevision.IsArtificial;
+                if (capturedBrowse.GpgInfoTabPage.IsVisible != shouldShowGpgInfo)
+                {
+                    capturedBrowse.RefreshGpgInfo(context.HeadRevision);
+                }
+
+                capturedBrowse.GpgInfoTabPage.IsVisible.Should().Be(shouldShowGpgInfo);
+                if (capturedBrowse.CommitInfoTabControl.SelectedItem == capturedBrowse.DiffTabPage)
+                {
+                    // Selecting the lower Diff tab starts its file-list and patch loaders.
+                    // Capture the rendered patch only after both product surfaces settle.
+                    Stopwatch diffStopwatch = Stopwatch.StartNew();
+                    while ((capturedBrowse.revisionDiff.FileStatusList.AllItemsCount == 0
+                            || string.IsNullOrEmpty(capturedBrowse.revisionDiff.FileViewer.TextEditor.Text))
+                           && diffStopwatch.Elapsed < TimeSpan.FromSeconds(15))
+                    {
+                        Dispatcher.UIThread.RunJobs();
+                        await Task.Delay(10);
+                    }
+
+                    capturedBrowse.revisionDiff.FileStatusList.AllItemsCount.Should().BeGreaterThan(0);
+                    capturedBrowse.revisionDiff.FileViewer.TextEditor.Text.Should().NotBeNullOrEmpty(
+                        $"Diff selected file={capturedBrowse.revisionDiff.FileStatusList.SelectedItem?.Item.Name}, "
+                        + $"displayed revision={capturedBrowse.revisionDiff.DisplayedRevision?.ObjectId}, "
+                        + $"selected revision={capturedBrowse.RevisionGrid.SelectedRevision?.ObjectId}, "
+                        + $"items={capturedBrowse.revisionDiff.FileStatusList.AllItemsCount}, "
+                        + $"viewer mode={capturedBrowse.revisionDiff.FileViewer.GetTestAccessor().ViewMode}, "
+                        + $"preview link={capturedBrowse.revisionDiff.FileViewer.GetTestAccessor().ShowPreviewLink.IsVisible}, "
+                        + $"first id={capturedBrowse.revisionDiff.FileStatusList.SelectedFileStatusItem?.FirstRevision?.ObjectId}, "
+                        + $"second id={capturedBrowse.revisionDiff.FileStatusList.SelectedFileStatusItem?.SecondRevision.ObjectId}");
+                }
+
+                if (capturedBrowse.CommitInfoTabControl.SelectedItem == capturedBrowse.TreeTabPage)
+                {
+                    // The file-tree selection starts a separate asynchronous blob preview.
+                    // Compare the populated source preview, not an intermediate empty editor.
+                    Stopwatch treeStopwatch = Stopwatch.StartNew();
+                    while ((capturedBrowse.fileTree.FileStatusList.AllItemsCount == 0
+                            || string.IsNullOrEmpty(capturedBrowse.fileTree.FileViewer.TextEditor.Text))
+                           && treeStopwatch.Elapsed < TimeSpan.FromSeconds(15))
+                    {
+                        Dispatcher.UIThread.RunJobs();
+                        await Task.Delay(10);
+                    }
+
+                    capturedBrowse.fileTree.FileStatusList.AllItemsCount.Should().BeGreaterThan(0);
+                    capturedBrowse.fileTree.FileViewer.TextEditor.Text.Should().NotBeNullOrEmpty(
+                        $"Tree selected file={capturedBrowse.fileTree.FileStatusList.SelectedItem?.Item.Name}, "
+                        + $"displayed revision={capturedBrowse.fileTree.DisplayedRevision?.ObjectId}, "
+                        + $"selected revision={capturedBrowse.RevisionGrid.SelectedRevision?.ObjectId}, "
+                        + $"items={capturedBrowse.fileTree.FileStatusList.AllItemsCount}");
+                }
+
+                // A lower-pane loader can drain selection work after publishing its first
+                // content. Require the same stable HEAD boundary immediately before focus
+                // and rendering so a later branch-tip selection cannot leak into one theme.
+                await SelectAndWaitForFormBrowseRevisionAsync(capturedBrowse, context.HeadRevision);
+
+                // Selecting and awaiting HEAD above can publish a final revision-selection event
+                // that restores focus to the grid. WinForms receives the requested capture focus
+                // after its equivalent load settles, so reassert the same product focus route at
+                // this boundary rather than recording an intermediate grid-focused state.
+                if (state.Kind == CaptureStateKind.Focus)
+                {
+                    switch (state.Id)
+                    {
+                        case "diff-files.focused":
+                            capturedBrowse.revisionDiff.FileStatusList.Focus();
+                            break;
+                        case "file-tree.focused":
+                            capturedBrowse.fileTree.FileStatusList.Focus();
+                            break;
+                        case "diff-text.focused":
+                            capturedBrowse.revisionDiff.FileViewer.FocusViewer();
+                            break;
+                    }
+
+                    Dispatcher.UIThread.RunJobs();
+                }
+
+                if ((state.Kind == CaptureStateKind.Focus && state.TargetField == "RevisionGrid")
+                    || state.Kind == CaptureStateKind.MenuOpen)
+                {
+                    capturedBrowse.GetLogicalDescendants().OfType<Control>()
+                        .First(control => control.Name == "_gridView")
+                        .Focus();
+                    Dispatcher.UIThread.RunJobs();
+                }
+
+                if (state.Kind == CaptureStateKind.MenuOpen
+                    && state.TargetField == "commandsToolStripMenuItem")
+                {
+                    MethodInfo openingHandler = typeof(FormBrowse).GetMethod(
+                        "CommandsToolStripMenuItem_DropDownOpening",
+                        BindingFlags.Instance | BindingFlags.NonPublic)
+                        ?? throw new InvalidOperationException("FormBrowse commands-menu opening handler was not found.");
+                    openingHandler.Invoke(
+                        capturedBrowse,
+                        [capturedBrowse.commandsToolStripMenuItem, EventArgs.Empty]);
+                }
+            }
+
+            // Activation and state routing can append diagnostics or complete an editor load;
+            // the plan's deterministic text remains authoritative at the capture boundary.
+            ApplyTextValues(view, component);
+            Dispatcher.UIThread.RunJobs();
+            Control[] popupSurfaceRoots = driver.PopupSurfaceRoots.ToArray();
+            PixelRect[] actualPopupSurfaceBounds = popupSurfaceRoots
+                .Select(popupRoot => GetScreenBounds(
+                    popupRoot,
+                    TopLevel.GetTopLevel(popupRoot) ?? window,
+                    renderScale))
+                .ToArray();
+            // Headless overlay hosts clamp popup coordinates to the owner. Capture the real
+            // unobscured primary and popup pixels separately, then compose them at the state
+            // driver's requested screen bounds without scaling either bitmap.
+            bool separateOverlaySurfaces = ReferenceEquals(view, window) && popupSurfaceRoots.Length > 0;
+            using WriteableBitmap primaryFrame = separateOverlaySurfaces
+                ? CaptureWithoutOverlaySurfaces(window, popupSurfaceRoots)
+                : CaptureRenderedFrame(window);
+            using WriteableBitmap? overlayFrame = separateOverlaySurfaces
+                ? CaptureRenderedFrame(window)
+                : null;
             PixelRect primarySurfaceBounds = cropToComponent
                 ? GetScreenBounds(view, window, renderScale)
                 : ReferenceEquals(view, window)
@@ -1187,6 +1636,7 @@ public sealed partial class ParityScreenshotTests
                     primaryFrame,
                     GetScreenBounds(window, primaryFrame.PixelSize))
             ];
+            List<WriteableBitmap> overlayFrames = [];
             try
             {
                 foreach (TopLevel externalTopLevel in driver.ExternalTopLevels)
@@ -1201,29 +1651,49 @@ public sealed partial class ParityScreenshotTests
                         GetScreenBounds(externalTopLevel, externalFrame.PixelSize)));
                 }
 
-                PixelRect[] popupSurfaceBounds = driver.PopupSurfaceRoots
-                    .Select(popupRoot => GetScreenBounds(
+                PixelRect[] popupSurfaceBounds = popupSurfaceRoots
+                    .Select((popupRoot, index) => driver.GetCaptureBounds(
                         popupRoot,
-                        TopLevel.GetTopLevel(popupRoot) ?? window,
-                        renderScale))
+                        actualPopupSurfaceBounds[index]))
                     .ToArray();
-                PixelRect imageBounds = popupSurfaceBounds.Length > 0
+                List<CapturedTopLevelFrame> compositingFrames = [.. capturedFrames];
+                if (overlayFrame is not null)
+                {
+                    for (int index = 0; index < popupSurfaceRoots.Length; index++)
+                    {
+                        WriteableBitmap popupFrame = CropToScreenBounds(
+                            overlayFrame,
+                            window,
+                            actualPopupSurfaceBounds[index]);
+                        overlayFrames.Add(popupFrame);
+                        compositingFrames.Add(new CapturedTopLevelFrame(
+                            popupSurfaceRoots[index],
+                            popupFrame,
+                            popupSurfaceBounds[index]));
+                    }
+                }
+
+                PixelRect imageBounds = popupSurfaceBounds.Length > 0 && !separateOverlaySurfaces
                     ? UnionBounds([primarySurfaceBounds, .. popupSurfaceBounds])
-                    : cropToComponent && capturedFrames.Count == 1
+                    : (cropToComponent || captureSourceClient) && capturedFrames.Count == 1
                         ? primarySurfaceBounds
-                        : UnionBounds(capturedFrames.Select(frame => frame.ScreenBounds));
-                CaptureMethod captureMethod = capturedFrames.Count == 1
+                        : UnionBounds(compositingFrames.Select(frame => frame.ScreenBounds));
+                CaptureMethod captureMethod = compositingFrames.Count == 1
                     ? CaptureMethod.HeadlessSkia
                     : CaptureMethod.HeadlessSkiaComposite;
-                using RenderTargetBitmap? composite = capturedFrames.Count == 1
+                using RenderTargetBitmap? composite = compositingFrames.Count == 1
                     ? null
-                    : ComposeTopLevels(capturedFrames, imageBounds, renderScale);
-                using WriteableBitmap? componentCrop = cropToComponent
+                    : ComposeTopLevels(compositingFrames, imageBounds, renderScale);
+                using WriteableBitmap? componentCrop = captureSourceClient
+                    ? CropToScreenBounds(primaryFrame, window, primarySurfaceBounds)
+                    : cropToComponent
                                                          && capturedFrames.Count == 1
                                                          && popupSurfaceBounds.Length == 0
                     ? CropToComponent(primaryFrame, view, window, imageBounds.Size, renderScale)
                     : null;
-                using WriteableBitmap? overlayCrop = popupSurfaceBounds.Length > 0 && capturedFrames.Count == 1
+                using WriteableBitmap? overlayCrop = popupSurfaceBounds.Length > 0
+                                                          && capturedFrames.Count == 1
+                                                          && !separateOverlaySurfaces
                     ? CropToScreenBounds(primaryFrame, window, imageBounds)
                     : null;
                 if (componentCrop is not null)
@@ -1264,10 +1734,7 @@ public sealed partial class ParityScreenshotTests
                 surfaces.AddRange(driver.PopupSurfaceRoots.Select((popupRoot, index) => reader.ReadSurface(
                     popupRoot,
                     $"popup:{capturedFrames.Count - 1 + index}",
-                    GetScreenBounds(
-                        popupRoot,
-                        TopLevel.GetTopLevel(popupRoot) ?? window,
-                        renderScale))));
+                    popupSurfaceBounds[index])));
                 CaptureDocument document = CreateDocument(
                     view,
                     surfaces,
@@ -1301,6 +1768,11 @@ public sealed partial class ParityScreenshotTests
                 foreach (WriteableBitmap externalFrame in externalFrames)
                 {
                     externalFrame.Dispose();
+                }
+
+                foreach (WriteableBitmap overlaySurfaceFrame in overlayFrames)
+                {
+                    overlaySurfaceFrame.Dispose();
                 }
             }
         }
@@ -1336,6 +1808,37 @@ public sealed partial class ParityScreenshotTests
 
             Dispatcher.UIThread.RunJobs();
         }
+    }
+
+    private static Control? GetStandaloneDefaultFocusedControl(Control view)
+        => view switch
+        {
+            EditNetSpell editNetSpell => editNetSpell.GetTestAccessor().TextBox,
+            BlameViewerSettingsPage => view.FindControl<Control>("cbIgnoreWhitespace"),
+            CommitDialogSettingsPage => view.FindControl<Control>("chkAutocomplete"),
+            FormBrowseRepoSettingsPage => view.FindControl<Control>("cboTerminal"),
+            ShellExtensionSettingsPage => view.FindControl<Control>("cbAlwaysShowAllCommands"),
+            FormChooseTranslation => view.FindControl<ListBox>("lvTranslations")?
+                .GetLogicalDescendants().OfType<ListBoxItem>().FirstOrDefault(),
+            FormCommitTemplateSettings form => form.GetTestAccessor().Ok,
+            FormResetAnotherBranch form => form.GetTestAccessor().Branches,
+            _ => null,
+        };
+
+    private static (double Width, double Height) GetPlannedCaptureHostSize(Type viewType, int scalePercent)
+    {
+        (double width, double height) = GetCaptureSize(viewType);
+        if (viewType != typeof(EditNetSpell))
+        {
+            return (width, height);
+        }
+
+        double renderScale = scalePercent / 100d;
+        double targetPixelWidth = Math.Floor(width * renderScale);
+        double targetPixelHeight = Math.Floor(height * renderScale);
+        return (
+            (targetPixelWidth - 0.75) / renderScale,
+            (targetPixelHeight - 0.75) / renderScale);
     }
 
     private static CaptureDocument CreateDocument(
@@ -1418,8 +1921,8 @@ public sealed partial class ParityScreenshotTests
         return new PixelRect(
             checked(topLevelOrigin.X + ToPixel(relativeOrigin.X, renderScale)),
             checked(topLevelOrigin.Y + ToPixel(relativeOrigin.Y, renderScale)),
-            Math.Max(1, ToPixel(control.Bounds.Width, renderScale)),
-            Math.Max(1, ToPixel(control.Bounds.Height, renderScale)));
+            Math.Max(1, ToPixel(AvaloniaControlTreeReader.GetSourceClientSize(control).Width, renderScale)),
+            Math.Max(1, ToPixel(AvaloniaControlTreeReader.GetSourceClientSize(control).Height, renderScale)));
 
         static int ToPixel(double value, double scale) =>
             checked((int)Math.Round(value * scale, MidpointRounding.AwayFromZero));
@@ -1564,7 +2067,7 @@ public sealed partial class ParityScreenshotTests
     {
         foreach ((string fieldName, string text) in component.TextValues)
         {
-            Control? target = FindNamedControl(root, fieldName);
+            Control? target = FindRootFieldControl(root, fieldName) ?? FindNamedControl(root, fieldName);
             if (target is null)
             {
                 throw new InvalidDataException($"Text seed field '{fieldName}' was not found on {component.TypeName}.");
@@ -1601,6 +2104,22 @@ public sealed partial class ParityScreenshotTests
                     throw new InvalidDataException($"Text seed field '{fieldName}' does not expose a supported text boundary.");
             }
         }
+    }
+
+    private static Control? FindRootFieldControl(Control root, string fieldName)
+    {
+        for (Type? type = root.GetType(); type is not null; type = type.BaseType)
+        {
+            FieldInfo? field = type.GetField(
+                fieldName,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+            if (field?.GetValue(root) is Control control)
+            {
+                return control;
+            }
+        }
+
+        return null;
     }
 
     private static Control? FindNamedControl(Control root, string fieldName)
@@ -1696,6 +2215,34 @@ public sealed partial class ParityScreenshotTests
         throw new AvaloniaCaptureStateUnsupportedException(unsupportedMessage);
     }
 
+    private static WriteableBitmap CaptureWithoutOverlaySurfaces(
+        TopLevel topLevel,
+        IReadOnlyList<Control> popupSurfaceRoots)
+    {
+        bool[] originalVisibility = popupSurfaceRoots.Select(control => control.IsVisible).ToArray();
+        try
+        {
+            foreach (Control popupSurfaceRoot in popupSurfaceRoots)
+            {
+                popupSurfaceRoot.IsVisible = false;
+            }
+
+            Dispatcher.UIThread.RunJobs();
+            return CaptureRenderedFrame(
+                topLevel,
+                "Headless Skia did not render the popup owner's unobscured primary surface.");
+        }
+        finally
+        {
+            for (int index = 0; index < popupSurfaceRoots.Count; index++)
+            {
+                popupSurfaceRoots[index].IsVisible = originalVisibility[index];
+            }
+
+            Dispatcher.UIThread.RunJobs();
+        }
+    }
+
     private static bool HasRenderedContent(WriteableBitmap bitmap)
     {
         using ILockedFramebuffer framebuffer = bitmap.Lock();
@@ -1750,6 +2297,9 @@ public sealed partial class ParityScreenshotTests
         AppSettings.TelemetryEnabled = false;
         AppSettings.CheckForUpdates = false;
         AppSettings.ShowAvailableDiffTools = false;
+        AppSettings.ShowConEmuTab.Value = false;
+        AppSettings.Translation = "English";
+        AppSettings.CurrentTranslation = "English";
         foreach ((string key, string value) in profile.AppSettings)
         {
             AppSettings.SetString(key, value);
@@ -1788,6 +2338,47 @@ public sealed partial class ParityScreenshotTests
     {
         char[] invalid = Path.GetInvalidFileNameChars();
         return new string(value.Select(character => invalid.Contains(character) || character is '.' ? '_' : character).ToArray());
+    }
+
+    private sealed class DuplicateNameTextHost : Grid
+    {
+        private readonly TextBox _textEditor = new() { Name = "_textEditor", Text = "Owner text before seed" };
+
+        public DuplicateNameTextHost()
+        {
+            NestedEditor = new TextBox { Name = "_textEditor", Text = "Nested text" };
+            Children.Add(new Border { Child = NestedEditor });
+            Children.Add(_textEditor);
+        }
+
+        public TextBox OwnerEditor => _textEditor;
+
+        public TextBox NestedEditor { get; }
+    }
+
+    private sealed class ContextMenuCaptureHost : UserControl
+    {
+        private readonly ContextMenu _mainContextMenu;
+
+        public ContextMenuCaptureHost()
+        {
+            _mainContextMenu = new ContextMenu
+            {
+                ItemsSource = Enumerable.Range(1, 6)
+                    .Select(index => new MenuItem { Header = $"Command {index}" })
+                    .ToArray()
+            };
+            _mainContextMenu.Opening += (_, _) => OpeningCount++;
+            Content = new Button
+            {
+                Content = "Owner",
+                ContextMenu = _mainContextMenu
+            };
+        }
+
+        public int OpeningCount { get; private set; }
+
+        public ContextMenu Menu => _mainContextMenu;
     }
 
     private sealed record CaptureSettingsProfile

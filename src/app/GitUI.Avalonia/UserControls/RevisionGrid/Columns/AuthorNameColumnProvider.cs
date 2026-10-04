@@ -9,11 +9,13 @@ namespace GitUI.UserControls.RevisionGrid.Columns;
 
 internal sealed class AuthorNameColumnProvider : ColumnProvider
 {
+    private readonly RevisionGridControl _grid;
     private readonly AuthorRevisionHighlighting _authorHighlighting;
 
-    public AuthorNameColumnProvider(AuthorRevisionHighlighting authorHighlighting)
+    public AuthorNameColumnProvider(RevisionGridControl grid, AuthorRevisionHighlighting authorHighlighting)
         : base("Author Name", new GridLength(130), minimumWidth: 25, resizable: true)
     {
+        _grid = grid;
         _authorHighlighting = authorHighlighting;
     }
 
@@ -24,19 +26,28 @@ internal sealed class AuthorNameColumnProvider : ColumnProvider
 
     public override Control CreateCell()
     {
-        TextBlock textBlock = CreateTextBlock(ColumnLeftMargin, opacity: 0.85);
+        TextBlock textBlock = CreateTextBlock(ColumnLeftMargin);
         textBlock.Classes.Add("revision-author-cell");
         return textBlock;
     }
 
-    public override void UpdateCell(Control control, GitRevision revision)
+    public override void OnCellPainting(Control control, GitRevision revision)
     {
         TextBlock textBlock = (TextBlock)control;
-        textBlock.Text = revision.IsArtificial ? string.Empty : revision.Author ?? string.Empty;
-        textBlock.FontWeight = _authorHighlighting.IsHighlighted(revision)
+        bool emphasized = _authorHighlighting.IsHighlighted(revision);
+        GitExtensions.Shims.WinForms.Font normalFont = AppSettings.Font;
+
+        // The source's BoldFont replaces the normal style rather than adding Bold.
+        textBlock.FontWeight = emphasized || normalFont.Bold
             ? FontWeight.Bold
             : FontWeight.Normal;
-        UpdateToolTip(control, revision);
+        textBlock.FontStyle = !emphasized && normalFont.Italic ? FontStyle.Italic : FontStyle.Normal;
+        _grid.DrawColumnText(textBlock, textBlock.Text);
+    }
+
+    public override void OnCellFormatting(Control control, GitRevision revision)
+    {
+        ((TextBlock)control).Text = revision.IsArtificial ? string.Empty : revision.Author ?? string.Empty;
     }
 
     public override bool TryGetToolTip(GitRevision revision, [NotNullWhen(returnValue: true)] out string? toolTip)

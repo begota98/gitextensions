@@ -65,12 +65,16 @@ public class DiffViewerLineNumberControl : AbstractMargin
             return default;
         }
 
-        int digits = MaxLineNumber > 0 ? ((int)Math.Log10(MaxLineNumber) + 1) : 1;
-        double digitWidth = CreateFormattedText("0", bold: false, Brushes.Black).Width;
+        int digits = MaxLineNumber > 0 ? ((int)Math.Log10(MaxLineNumber) + 1) : 0;
+        int spaceWidth = (int)Math.Round(CreateFormattedText(" ", bold: false, Brushes.Black).Width, MidpointRounding.AwayFromZero);
+        int xWidth = (int)Math.Round(CreateFormattedText("x", bold: false, Brushes.Black).Width, MidpointRounding.AwayFromZero);
+        int wideSpaceWidth = Math.Max(1, Math.Max(spaceWidth, xWidth));
 
-        // add a space behind each number
+        // The source measures an integer WideSpaceWidth for one space and one 'x'
+        // before multiplying by the digits and their trailing spaces.
         int columnCount = _showLeftColumn ? 2 : 1;
-        return new Avalonia.Size(_textHorizontalMargin + (columnCount * digitWidth * (digits + 1)), 0);
+        int width = (int)_textHorizontalMargin + (columnCount * wideSpaceWidth * (digits + 1));
+        return new Avalonia.Size(width, 0);
     }
 
     protected override void OnTextViewChanged(TextView oldTextView, TextView newTextView)
@@ -87,6 +91,15 @@ public class DiffViewerLineNumberControl : AbstractMargin
         }
     }
 
+    protected override void OnPropertyChanged(Avalonia.AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        if (change.Property == IsEffectivelyEnabledProperty)
+        {
+            InvalidateVisual();
+        }
+    }
+
     public override void Render(DrawingContext context)
     {
         TextView? textView = TextView;
@@ -95,7 +108,14 @@ public class DiffViewerLineNumberControl : AbstractMargin
             return;
         }
 
-        IBrush background = GetBrush("GitExtensionsDiffLineNumberBackgroundBrush", GetAppColor(AppColor.LineNumberBackground));
+        // The source switches only the base fill to SystemBrushes.InactiveBorder;
+        // semantic added/removed/section backgrounds are still painted over it.
+        IBrush background = _editor.IsEffectivelyEnabled
+            ? GetBrush("GitExtensionsDiffLineNumberBackgroundBrush", GetAppColor(AppColor.LineNumberBackground))
+            : GetBrush("GitExtensionsNativeDisabledGutterBackgroundBrush", AvaloniaThemeResources.ToMediaColor(
+                AvaloniaThemeResources.ResolveNativeSystemColor(
+                    ThemeModule.Settings.Theme.SystemColorMode == GitExtensions.Shims.WinForms.SystemColorMode.Dark,
+                    System.Drawing.KnownColor.InactiveBorder)));
         IBrush numberBrush = GetBrush("GitExtensionsDiffLineNumberBrush", GetSystemColor(System.Drawing.KnownColor.GrayText));
         IBrush selectedBrush = GetBrush("GitExtensionsDiffLineNumberSelectedBrush", GetSystemColor(System.Drawing.KnownColor.WindowText));
         context.FillRectangle(background, new Avalonia.Rect(Bounds.Size));

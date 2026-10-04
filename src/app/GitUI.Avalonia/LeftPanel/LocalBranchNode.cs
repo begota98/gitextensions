@@ -1,12 +1,13 @@
 using GitExtensions.Extensibility.Git;
 using GitUI.LeftPanel.Interfaces;
+using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitUI.LeftPanel;
 
 internal sealed class LocalBranchNode : BaseBranchLeafNode, IGitRefActions, ICanRename, ICanDelete
 {
     public LocalBranchNode(LocalBranchTree tree, NodeBase parent, IGitRef gitRef, bool isCurrent)
-        : base(tree, parent, gitRef.Name, gitRef, remote: false, isCurrent)
+        : base(tree, parent, gitRef.Name, gitRef, remote: false)
     {
         IsCurrent = isCurrent;
     }
@@ -14,12 +15,27 @@ internal sealed class LocalBranchNode : BaseBranchLeafNode, IGitRefActions, ICan
     /// <summary>Indicates whether this is the currently checked-out branch.</summary>
     public bool IsCurrent { get; }
 
+    protected override WinFormsShims.FontStyle GetFontStyle()
+        => base.GetFontStyle() | (IsCurrent ? WinFormsShims.FontStyle.Bold : WinFormsShims.FontStyle.Regular);
+
+    public override bool Equals(object? obj)
+        => base.Equals(obj) && obj is LocalBranchNode;
+
+    public override int GetHashCode()
+        => base.GetHashCode();
+
     internal override void OnDoubleClick()
+        => Checkout();
+
+    internal override void OnSelected()
     {
-        if (!IsCurrent)
+        if (Tree.IgnoreSelectionChangedEvent)
         {
-            Checkout();
+            return;
         }
+
+        base.OnSelected();
+        SelectRevision();
     }
 
     internal override void OnRename()

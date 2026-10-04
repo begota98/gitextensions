@@ -66,6 +66,23 @@ public sealed class ToolStripPushButton : IconButton
         ToolTip.SetTip(this, _push.Text);
     }
 
+    protected override Avalonia.Size MeasureOverride(Avalonia.Size availableSize)
+    {
+        Avalonia.Size desired = base.MeasureOverride(availableSize);
+        if (!Classes.Contains("gitextensions-icon-only") && Content is string { Length: > 0 } text)
+        {
+            // ToolStripItemInternalLayout composes the image and padded TextRenderer text,
+            // then adds its two-pixel border on each side; it has no extra image/text gap.
+            const int imageWidth = 16;
+            const int nativeBorderWidth = 2;
+            double width = WinFormsTextMeasurer.MeasureTextRenderer(this, text).Width
+                + imageWidth + (2 * nativeBorderWidth);
+            desired = new Avalonia.Size(Math.Ceiling(width), desired.Height);
+        }
+
+        return desired;
+    }
+
     private string GetToolTipText(AheadBehindData data)
     {
         string tooltip = string.Empty;

@@ -2,8 +2,13 @@ using System.ComponentModel;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.VisualTree;
 using GitCommands;
 using GitCommands.ExternalLinks;
 using GitCommands.Git;
@@ -19,6 +24,8 @@ using Microsoft;
 using Microsoft.VisualStudio.Threading;
 using ResourceManager;
 using ResourceManager.CommitDataRenders;
+using Point = Avalonia.Point;
+using Size = Avalonia.Size;
 
 namespace GitUI.CommitInfo;
 
@@ -72,8 +79,17 @@ public partial class CommitInfo : GitModuleControl
     private string? _branchInfo;
     private string? _gitDescribeInfo;
     private IDictionary<string, int>? _tagsOrderDict;
+    private int _revisionInfoHeight;
+    private int _commitMessageHeight;
     private bool _showAllBranches;
     private bool _showAllTags;
+
+    // ContextMenu.Opening precedes Avalonia's popup placement; retain the requesting
+    // source and point locally instead of borrowing another editor's last clicked URI.
+    private XhtmlTextBlock? _contextMenuSourceControl;
+    private Point? _contextMenuSourcePosition;
+    private TopLevel? _contextMenuRoot;
+    private Point? _contextMenuPointerPosition;
 
     [DefaultValue(false)]
     public bool ShowBranchesAsLinks { get; set; }
@@ -104,9 +120,37 @@ public partial class CommitInfo : GitModuleControl
         // At this point rtbxCommitMessage.Bounds = {X = 8 Y = 8 Width = 440 Height = 0}
         // and with Height=0 we won't be receiving any ContentsResizedEvents.
         // To workaround the zero-height - force the min size.
-        // Avalonia constraint: native measurement does not need the WinForms minimum-size workaround.
+        // Avalonia measures ContentsResized through TextLayout rather than HWND events.
         _ = AppSettings.CommitFont;
         _ = AppSettings.Font;
+
+        // TextLayout replaces ContentsResized for these wrapped controls. Preserve the
+        // source configured-font line metrics, not a fixed default-font LineHeight.
+        rtbxCommitMessage.UseNativeContentsHeightMeasurement();
+        RevisionInfo.UseNativeContentsHeightMeasurement();
+        rtbxCommitMessage.ContentsResized += CommitMessage_ContentsResized;
+        RevisionInfo.ContentsResized += RevisionInfo_ContentsResized;
+
+        // WinForms AutoSize raises parent layout after the header's client size changes.
+        // A Grid with an explicit total height cannot propagate that change through its
+        // unchanged DesiredSize, so retain the same route from the actual child size.
+        commitInfoHeader.SizeChanged += (_, _) => InvalidateMeasure();
+
+        // The source first lays out its zero-contents row, then applies MinimumSize(1,1).
+        // DefaultLayout caches the resulting anchored edges, independently of Margin.
+        // These are authored Designer bounds and the constructor's minimum, not a text
+        // metric correction or dimensions inferred from a screenshot.
+        const int sourceTableWidth = 472;
+        const int sourceCommitMessageWidth = 440;
+        const int sourceCommitMessageMinimumSize = 1;
+        rtbxCommitMessage.MinWidth = sourceCommitMessageMinimumSize;
+        Thickness messageMargin = rtbxCommitMessage.Margin;
+        double initialRowHeight = messageMargin.Top + messageMargin.Bottom;
+        rtbxCommitMessage.SetNativeAnchorInsets(new Thickness(
+            messageMargin.Left,
+            messageMargin.Top,
+            sourceTableWidth - messageMargin.Left - sourceCommitMessageWidth,
+            initialRowHeight - messageMargin.Top - sourceCommitMessageMinimumSize));
 
         copyLinkToolStripMenuItem.Click += copyLinkToolStripMenuItem_Click;
         copyCommitInfoToolStripMenuItem.Click += copyCommitInfoToolStripMenuItem_Click;
@@ -118,18 +162,60 @@ public partial class CommitInfo : GitModuleControl
         showTagThisCommitDerivesFromMenuItem.Click += showTagThisCommitDerivesFromMenuItem_Click;
         addNoteToolStripMenuItem.Click += addNoteToolStripMenuItem_Click;
         commitInfoContextMenuStrip.Opening += commitInfoContextMenuStrip_Opening;
+        commitInfoContextMenuStrip.Closed += (_, _) => ClearContextMenuSource();
+        AddHandler(ContextRequestedEvent, commitInfoContextMenuStrip_ContextRequested, RoutingStrategies.Tunnel);
+
+        // Run the original Copy handlers before SelectableTextBlock's default action;
+        // its empty-selection shortcut otherwise consumes the event without copying.
+        rtbxCommitMessage.AddHandler(KeyDownEvent, RichTextBox_KeyDown, RoutingStrategies.Tunnel);
+        RevisionInfo.AddHandler(KeyDownEvent, RichTextBox_KeyDown, RoutingStrategies.Tunnel);
         commitInfoHeader.SetContextMenuStrip(commitInfoContextMenuStrip);
 
         // Avalonia constraint: controls have no DisposeCustomResources lifecycle hook.
         DetachedFromVisualTree += (_, _) => _asyncLoadCancellation.CancelCurrent();
     }
 
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        _contextMenuRoot = TopLevel.GetTopLevel(this);
+        _contextMenuRoot?.AddHandler(PointerMovedEvent, ContextMenuPointerMoved, RoutingStrategies.Tunnel, handledEventsToo: true);
+        _contextMenuRoot?.AddHandler(PointerExitedEvent, ContextMenuPointerExited, RoutingStrategies.Direct, handledEventsToo: true);
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        _contextMenuRoot?.RemoveHandler(PointerMovedEvent, ContextMenuPointerMoved);
+        _contextMenuRoot?.RemoveHandler(PointerExitedEvent, ContextMenuPointerExited);
+        _contextMenuRoot = null;
+        _contextMenuPointerPosition = null;
+        ClearContextMenuSource();
+        base.OnDetachedFromVisualTree(e);
+    }
+
+    protected override void OnRuntimeLoad()
+    {
+        base.OnRuntimeLoad();
+        ReloadHotkeys();
+    }
+
+    protected override Size MeasureOverride(Size availableSize)
+    {
+        OnLayout(availableSize);
+        return base.MeasureOverride(availableSize);
+    }
+
+    protected override Size ArrangeOverride(Size finalSize)
+    {
+        OnLayout(finalSize);
+        return base.ArrangeOverride(finalSize);
+    }
+
     protected override void OnUICommandsSourceSet(IGitUICommandsSource source)
     {
         base.OnUICommandsSourceSet(source);
 
-        // Avalonia constraint: controls receive their runtime services here rather than in OnRuntimeLoad.
-        ReloadHotkeys();
+        OnRuntimeLoad();
 
         if (source is null)
         {
@@ -207,11 +293,18 @@ public partial class CommitInfo : GitModuleControl
         commitInfoHeader.ShowCommitInfo(revision, children);
         if (!TryGetUICommandsDirect(out _))
         {
-            // Avalonia designers and headless capture hosts construct the original control
-            // without a containing GitModuleForm; keep that construction path renderable.
-            rtbxCommitMessage.SetXHTMLText(WebUtility.HtmlEncode(revision.Body ?? revision.Subject ?? string.Empty));
-            RevisionInfo.Clear();
-            return;
+            try
+            {
+                // Match the original lazy ancestor lookup when a hosted control first needs
+                // repository services. Standalone designer controls have no such ancestor.
+                _ = UICommandsSource;
+            }
+            catch (InvalidOperationException)
+            {
+                rtbxCommitMessage.SetXHTMLText(WebUtility.HtmlEncode(revision.Body ?? revision.Subject ?? string.Empty));
+                RevisionInfo.Clear();
+                return;
+            }
         }
 
         ReloadCommitInfo(cancellationToken);
@@ -650,12 +743,67 @@ public partial class CommitInfo : GitModuleControl
 
     private void commitInfoContextMenuStrip_Opening(object sender, CancelEventArgs e)
     {
-        string? link = rtbxCommitMessage.SelectedLinkUri
-            ?? RevisionInfo.SelectedLinkUri
-            ?? commitInfoHeader.SelectedLinkUri;
+        if (_contextMenuSourceControl is not { } rtb || _contextMenuSourcePosition is not { } point)
+        {
+            copyLinkToolStripMenuItem.IsVisible = false;
+            copyLinkToolStripMenuItem.Tag = null;
+            ClearContextMenuSource();
+            return;
+        }
+
+        string? link = rtb.GetContextLinkAtPoint(point);
         copyLinkToolStripMenuItem.IsVisible = link is not null;
         copyLinkToolStripMenuItem.Header = string.Format(_copyLink.Text, link);
         copyLinkToolStripMenuItem.Tag = link;
+        ClearContextMenuSource();
+    }
+
+    private void commitInfoContextMenuStrip_ContextRequested(object? sender, ContextRequestedEventArgs e)
+    {
+        ClearContextMenuSource();
+        if (e.Source is not Visual origin)
+        {
+            return;
+        }
+
+        XhtmlTextBlock? source = origin as XhtmlTextBlock
+            ?? origin.GetVisualAncestors().OfType<XhtmlTextBlock>().FirstOrDefault();
+        if (source is null)
+        {
+            return;
+        }
+
+        Point? position = e.TryGetPosition(source, out Point point) ? point
+            : _contextMenuRoot is { } root && _contextMenuPointerPosition is { } pointer
+                ? root.TranslatePoint(pointer, source)
+                : null;
+        _contextMenuSourceControl = source;
+        _contextMenuSourcePosition = position;
+    }
+
+    private void ContextMenuPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (_contextMenuRoot is { } root && e.Pointer.Type == PointerType.Mouse)
+        {
+            // Keyboard requests provide no pointer point. WinForms uses MousePosition,
+            // not the caret; track actual input in the owning window without inventing
+            // a global cursor location after the pointer leaves that window.
+            _contextMenuPointerPosition = e.GetPosition(root);
+        }
+    }
+
+    private void ContextMenuPointerExited(object? sender, PointerEventArgs e)
+    {
+        if (ReferenceEquals(e.Source, _contextMenuRoot))
+        {
+            _contextMenuPointerPosition = null;
+        }
+    }
+
+    private void ClearContextMenuSource()
+    {
+        _contextMenuSourceControl = null;
+        _contextMenuSourcePosition = null;
     }
 
     private void copyLinkToolStripMenuItem_Click(object sender, EventArgs e)
@@ -737,6 +885,108 @@ public partial class CommitInfo : GitModuleControl
         void DoCommandClick(string command)
         {
             CommandClickedEvent?.Invoke(this, new CommandEventArgs(command, null));
+        }
+    }
+
+    private void RevisionInfo_ContentsResized(int contentsHeight)
+    {
+        _revisionInfoHeight = contentsHeight;
+        InvalidateMeasure();
+    }
+
+    private void CommitMessage_ContentsResized(int contentsHeight)
+    {
+        _commitMessageHeight = contentsHeight;
+
+        // The source's additional 150%-only workaround is not a native100 height rule.
+        // Avalonia supplies its actual wrapped contents; higher-DPI equivalence is separate.
+        InvalidateMeasure();
+    }
+
+    // Avalonia has no WinForms OnLayout event. Measure/arrange supply the real parent
+    // constraint, while finite source columns prevent ScrollViewer's infinity from
+    // disabling RichEdit-style word wrapping.
+    private void OnLayout(Size availableSize)
+    {
+        if (!tableLayout.IsVisible)
+        {
+            return;
+        }
+
+        commitInfoHeader.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        double clientWidth = double.IsFinite(availableSize.Width)
+            ? availableSize.Width
+            : Math.Max(Bounds.Width, commitInfoHeader.DesiredSize.Width);
+        double width = Math.Max(clientWidth, commitInfoHeader.DesiredSize.Width);
+
+        // The two candidate widths are one layout transaction. Publishing the full-
+        // width height before the scrollbar-constrained height would invalidate the
+        // parent on every unchanged pass when a word wraps only at the narrower width.
+        rtbxCommitMessage.SuspendContentsResized();
+        RevisionInfo.SuspendContentsResized();
+        try
+        {
+            MeasureContents(width);
+            if (GetHeights(measured: true).Sum() > availableSize.Height)
+            {
+                clientWidth = Math.Max(0, clientWidth - GetVerticalScrollBarWidth());
+                width = Math.Max(clientWidth, commitInfoHeader.DesiredSize.Width);
+                MeasureContents(width);
+            }
+        }
+        finally
+        {
+            try
+            {
+                rtbxCommitMessage.ResumeContentsResized();
+            }
+            finally
+            {
+                RevisionInfo.ResumeContentsResized();
+            }
+        }
+
+        double[] heights = GetHeights();
+        double height = heights.Sum();
+
+        // Leave the first row Auto so the header retains its original AutoSize behavior.
+        for (int i = 1; i < tableLayout.RowDefinitions.Count; i++)
+        {
+            tableLayout.RowDefinitions[i].Height = new GridLength(heights[i]);
+        }
+
+        tableLayout.ColumnDefinitions[0].Width = new GridLength(width);
+        tableLayout.Width = width;
+        tableLayout.Height = height;
+        return;
+
+        double[] GetHeights(bool measured = false) =>
+        [
+            commitInfoHeader.DesiredSize.Height,
+            (measured ? rtbxCommitMessage.ContentsHeight : _commitMessageHeight) + rtbxCommitMessage.Margin.Top + rtbxCommitMessage.Margin.Bottom
+                + pnlCommitMessage.Margin.Top + pnlCommitMessage.Margin.Bottom,
+            (measured ? RevisionInfo.ContentsHeight : _revisionInfoHeight) + RevisionInfo.Margin.Top + RevisionInfo.Margin.Bottom
+        ];
+
+        double GetVerticalScrollBarWidth()
+        {
+            if (Content is not ScrollViewer scroll)
+            {
+                return 0;
+            }
+
+            scroll.ApplyTemplate();
+            ScrollBar? scrollbar = scroll.GetVisualDescendants().OfType<ScrollBar>()
+                .FirstOrDefault(bar => bar.Orientation == Orientation.Vertical);
+            return scrollbar is not null && double.IsFinite(scrollbar.Width)
+                ? scrollbar.Width
+                : scrollbar?.Bounds.Width ?? 0;
+        }
+
+        void MeasureContents(double columnWidth)
+        {
+            rtbxCommitMessage.Measure(new Size(columnWidth, double.PositiveInfinity));
+            RevisionInfo.Measure(new Size(columnWidth, double.PositiveInfinity));
         }
     }
 
@@ -931,6 +1181,10 @@ public partial class CommitInfo : GitModuleControl
 
         public MenuItem AddNoteMenuItem => _commitInfo.addNoteToolStripMenuItem;
 
+        public ContextMenu ContextMenu => _commitInfo.commitInfoContextMenuStrip;
+
+        public MenuItem CopyLinkMenuItem => _commitInfo.copyLinkToolStripMenuItem;
+
         public MenuItem ShowLocalBranchesMenuItem => _commitInfo.showContainedInBranchesToolStripMenuItem;
 
         public MenuItem ShowRemoteBranchesMenuItem => _commitInfo.showContainedInBranchesRemoteToolStripMenuItem;
@@ -944,6 +1198,12 @@ public partial class CommitInfo : GitModuleControl
         public MenuItem ShowDerivedTagMenuItem => _commitInfo.showTagThisCommitDerivesFromMenuItem;
 
         public Grid TableLayout => _commitInfo.tableLayout;
+
+        public Border CommitMessagePanel => _commitInfo.pnlCommitMessage;
+
+        public int CommitMessageHeight => _commitInfo._commitMessageHeight;
+
+        public int RevisionInfoHeight => _commitInfo._revisionInfoHeight;
 
         public IDictionary<string, int> GetSortedTags() => _commitInfo.GetSortedTags();
 

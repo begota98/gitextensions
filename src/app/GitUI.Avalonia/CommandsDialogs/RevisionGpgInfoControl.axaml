@@ -1,6 +1,9 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="GitUI.CommandsDialogs.RevisionGpgInfoControl"
+             Background="{DynamicResource GitExtensionsKnownColorControlBrush}"
+             Focusable="True"
+             FocusAdorner="{x:Null}"
              Padding="8">
   <Grid x:Name="tableLayoutPanel1" ColumnDefinitions="38,*">
     <Grid.RowDefinitions>
@@ -18,9 +21,12 @@
              Grid.Column="1"
              Margin="3"
              Padding="0"
+             Background="{DynamicResource GitExtensionsReadOnlyTextInputBackgroundBrush}"
+             FocusAdorner="{x:Null}"
              AcceptsReturn="True"
              IsReadOnly="True"
-             ScrollViewer.VerticalScrollBarVisibility="Auto"
+             VerticalContentAlignment="Top"
+             ScrollViewer.VerticalScrollBarVisibility="Visible"
              TextWrapping="NoWrap" />
     <Image x:Name="tagSignPicture"
            Grid.Row="1"
@@ -35,9 +41,12 @@
              Grid.Column="1"
              Margin="3"
              Padding="0"
+             Background="{DynamicResource GitExtensionsReadOnlyTextInputBackgroundBrush}"
+             FocusAdorner="{x:Null}"
              AcceptsReturn="True"
              IsReadOnly="True"
-             ScrollViewer.VerticalScrollBarVisibility="Auto"
+             VerticalContentAlignment="Top"
+             ScrollViewer.VerticalScrollBarVisibility="Visible"
              TextWrapping="NoWrap" />
   </Grid>
 </UserControl>

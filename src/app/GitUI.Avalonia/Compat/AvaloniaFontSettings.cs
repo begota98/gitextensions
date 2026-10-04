@@ -47,6 +47,7 @@ public static class AvaloniaFontSettings
         Application application = Application.Current
             ?? throw new InvalidOperationException("The Avalonia application was not created.");
 
+        WinFormsGraphicsTextMeasurer.ClearCache();
         ApplyFont(application, "GitExtensionsUi", AppSettings.Font);
         ApplyFont(application, "GitExtensionsCommit", AppSettings.CommitFont);
         ApplyFont(application, "GitExtensionsFixedWidth", AppSettings.FixedWidthFont);
@@ -72,6 +73,9 @@ public static class AvaloniaFontSettings
 
     internal static double ToDeviceIndependentPixels(float points)
         => points * DeviceIndependentPixelsPerPoint;
+
+    internal static float ToPoints(double deviceIndependentPixels)
+        => (float)(deviceIndependentPixels / DeviceIndependentPixelsPerPoint);
 
     private static string GetPlatformMonospaceFontName()
         => OperatingSystem.IsMacOS() ? "Menlo" : "DejaVu Sans Mono";

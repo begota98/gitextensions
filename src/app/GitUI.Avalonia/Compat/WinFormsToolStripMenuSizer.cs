@@ -1,11 +1,12 @@
 using System.Runtime.CompilerServices;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.VisualTree;
 
 namespace GitUI.Compat;
 
 /// <summary>
-/// Applies the WinForms <c>ToolStripDropDownMenu</c> 96-DPI width calculation to an Avalonia submenu.
+/// Applies the WinForms <c>ToolStripDropDownMenu</c> 96-DPI width calculation to Avalonia menu items.
 /// </summary>
 internal static class WinFormsToolStripMenuSizer
 {
@@ -15,6 +16,7 @@ internal static class WinFormsToolStripMenuSizer
     private const double TextPaddingRight = 9;
     private const double ArrowWidth = 10;
     private const double ArrowPaddingRight = 8;
+    private const double DropDownLayoutBorder = 1;
     private static readonly ConditionalWeakTable<MenuItem, ShortcutDisplay> ShortcutDisplays = new();
 
     public static void SetShortcutDisplayString(MenuItem item, string? displayString)
@@ -26,12 +28,27 @@ internal static class WinFormsToolStripMenuSizer
         }
     }
 
-    public static void Apply(MenuItem owner)
+    internal static string? GetShortcutDisplayString(MenuItem item)
+        => ShortcutDisplays.TryGetValue(item, out ShortcutDisplay? display) ? display.Value : null;
+
+    public static void Apply(ItemsControl owner)
     {
-        MenuItem[] menuItems = [.. owner.Items.OfType<MenuItem>()];
+        Apply(owner, [.. owner.Items.OfType<MenuItem>()], owner is ContextMenu or MenuItem);
+    }
+
+    public static void Apply(MenuFlyout flyout, TemplatedControl owner)
+    {
+        Apply(owner, [.. flyout.Items.OfType<MenuItem>()], false);
+    }
+
+    public static double Apply(MenuFlyout flyout, TemplatedControl owner, MenuItem excludedItem)
+        => Apply(owner, [.. flyout.Items.OfType<MenuItem>().Where(item => item != excludedItem)], false);
+
+    private static double Apply(TemplatedControl owner, MenuItem[] menuItems, bool hasLayoutBorder)
+    {
         if (menuItems.Length == 0)
         {
-            return;
+            return 0;
         }
 
         // ToolStripDropDownMenu.ShowImageMargin defaults to true. Its layout always reserves
@@ -46,7 +63,8 @@ internal static class WinFormsToolStripMenuSizer
             + maximumTextAndShortcutWidth
             + TextPaddingRight
             + ArrowWidth
-            + ArrowPaddingRight);
+            + ArrowPaddingRight)
+            - (hasLayoutBorder ? DropDownLayoutBorder : 0);
 
         foreach (MenuItem item in menuItems)
         {
@@ -59,9 +77,11 @@ internal static class WinFormsToolStripMenuSizer
                     ?.SetCurrentValue(TextBlock.TextProperty, display.Value);
             }
         }
+
+        return itemWidth;
     }
 
-    private static double MeasureText(MenuItem owner, string text)
+    private static double MeasureText(TemplatedControl owner, string text)
         => WinFormsTextMeasurer.Measure(owner, text) + TextRendererOverhang;
 
     private static double GetShortcutWidth(MenuItem item)

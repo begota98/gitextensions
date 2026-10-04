@@ -1,6 +1,7 @@
-﻿using GitCommands;
+using GitCommands;
 using GitExtensions.Extensibility.Git;
 using GitUI.Properties;
+using GitUI.UserControls.RevisionGrid;
 using GitUIPluginInterfaces;
 
 using ResourceManager;
@@ -8,23 +9,59 @@ using ResourceManager;
 namespace GitUI.LeftPanel;
 
 /// <summary>Repository-tree root for stored stashes.</summary>
-internal sealed class StashTree : Tree
+internal sealed class StashTree : BaseRevisionTree
 {
-    public StashTree(RepoObjectsTree owner, IReadOnlyCollection<GitRevision> stashes)
-        : base(owner, RepoTreeKind.Stashes, TranslatedStrings.Stashes, Images.Stash)
+    public StashTree(RepoObjectsTree owner, IReadOnlyCollection<GitRevision> stashes, ICheckRefs? refsSource = null)
+        : base(owner, RepoTreeKind.Stashes, TranslatedStrings.Stashes, Images.Stash, refsSource)
     {
-        StashNode[] nodes =
-        [
-            .. stashes
-                .Where(stash => !string.IsNullOrEmpty(stash.ReflogSelector))
-                .Select(stash => new StashNode(this, this, stash.ObjectId, stash.ReflogSelector!, stash.Subject)),
-        ];
-        foreach (StashNode node in nodes)
+        Refresh(new Lazy<IReadOnlyCollection<GitRevision>>(() => stashes));
+    }
+
+    internal void Refresh(Lazy<IReadOnlyCollection<GitRevision>> getStashRevs)
+    {
+        if (!IsAttached)
         {
-            AddChild(node);
+            return;
         }
 
-        Complete(TranslatedStrings.Stashes, Images.Stash, nodes.Length, expanded: false);
+        OwnerControl.UpdateNodes(() =>
+        {
+            TreeSelectionState selected = OwnerControl.CaptureSelectionState(this);
+            bool wasExpanded = TreeViewNode.IsExpanded;
+            TreeViewNode.Items.Clear();
+            Nodes.Clear();
+            Nodes.AddNodes(FillStashTree(getStashRevs.Value, CancellationToken.None));
+            Complete(TranslatedStrings.Stashes, Images.Stash, expanded: wasExpanded);
+            OwnerControl.RestoreSelectionState(this, selected);
+        });
+    }
+
+    private Task<Nodes> LoadNodesAsync(Lazy<IReadOnlyCollection<GitRevision>> getStashRevs, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        return Task.FromResult(FillStashTree(getStashRevs.Value, token));
+    }
+
+    private Nodes FillStashTree(IReadOnlyCollection<GitRevision> stashes, CancellationToken token)
+    {
+        Nodes nodes = new(this);
+        foreach (GitRevision stash in stashes.Where(stash => !string.IsNullOrEmpty(stash.ReflogSelector)))
+        {
+            token.ThrowIfCancellationRequested();
+
+            // Visibility is set after the grid is loaded
+            nodes.AddNode(new StashNode(this, this, stash.ObjectId, stash.ReflogSelector!, stash.Subject, visible: false));
+        }
+
+        return nodes;
+    }
+
+    protected override void PostFillTreeViewNode(bool firstTime)
+    {
+        if (firstTime)
+        {
+            TreeViewNode.IsExpanded = false;
+        }
     }
 
     public void StashAll(IWin32Window owner)

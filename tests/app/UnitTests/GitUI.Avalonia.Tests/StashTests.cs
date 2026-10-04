@@ -1,12 +1,16 @@
 using System.ComponentModel.Design;
 using System.Diagnostics;
 using System.Text;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
+using Avalonia.Styling;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using GitCommands;
 using GitCommands.Git;
 using GitCommands.UserRepositoryHistory;
@@ -16,6 +20,8 @@ using GitExtensions.Extensibility.Translations;
 using GitExtUtils;
 using GitUI;
 using GitUI.CommandsDialogs;
+using GitUI.Compat;
+using GitUI.Theming;
 using GitUIPluginInterfaces;
 using Microsoft.VisualStudio.Threading;
 using NSubstitute;
@@ -107,6 +113,41 @@ public sealed class StashTests
     }
 
     [AvaloniaTest]
+    [Category("P8_6i")]
+    public void FormStash_message_should_keep_source_info_background_when_focused()
+    {
+        AvaloniaThemeResources.Apply(Application.Current!, ThemeModule.Settings);
+        (IGitUICommands commands, IGitModule module) = CreateCommands();
+        module.GetStashes(false).Returns([]);
+        module.GetAllChangedFiles().Returns([]);
+        module.RevParse("HEAD").Returns(HeadId);
+
+        FormStash form = new(commands) { RequestedThemeVariant = ThemeVariant.Light };
+        form.Show();
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            TextBox message = form.StashMessage;
+            message.Focus();
+            Dispatcher.UIThread.RunJobs();
+
+            Border border = message.GetVisualDescendants()
+                .OfType<Border>().Single(item => item.Name == "PART_BorderElement");
+            border.Background.Should().BeOfType<SolidColorBrush>().Which.Color
+                .Should().Be(Color.FromRgb(255, 255, 225));
+            border.BorderThickness.Should().Be(default(Thickness));
+
+            Border buttonChrome = form.Stash.GetVisualDescendants()
+                .OfType<Border>().Single(item => item.Name == "PART_NativeButtonChrome");
+            buttonChrome.CornerRadius.Should().Be(new CornerRadius(4));
+        }
+        finally
+        {
+            form.Close();
+        }
+    }
+
+    [AvaloniaTest]
     public void FormStash_should_close_the_stash_dropdown_before_cancelling_on_escape()
     {
         FormStash form = new();
@@ -120,6 +161,46 @@ public sealed class StashTests
 
         form.Stashes.IsDropDownOpen.Should().BeFalse();
         form.DialogResult.Should().Be(GitExtensions.Shims.WinForms.DialogResult.None);
+    }
+
+    [AvaloniaTest]
+    [TestCase(12)]
+    [TestCase(24)]
+    public async Task FormStash_should_keep_the_source_left_width_minimum_and_fit_intrinsic_equal_column_contents(int fontSize)
+    {
+        FormStash form = new(CreateCommands().Commands);
+        try
+        {
+            form.Show();
+            await WaitUntilAsync(() => !form.Loading.IsVisible);
+            form.StashKeepIndex.FontSize = fontSize;
+            form.chkIncludeUntrackedFiles.FontSize = fontSize;
+            form.StashKeepIndex.Content = "Keep a translated index";
+            form.chkIncludeUntrackedFiles.Content = "Include the translated untracked files";
+            System.Reflection.MethodInfo measure = typeof(FormStash).GetMethod(
+                "SetMinimumStashPanelWidth", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?? throw new InvalidOperationException("The source minimum stash-panel sizing route is absent.");
+            measure.Invoke(form, null);
+            Grid split = form.FindControl<Grid>("splitContainer1")!;
+            Grid table = form.FindControl<Grid>("tableLayoutPanel1")!;
+            double firstWidth = split.ColumnDefinitions[0].Width.Value;
+
+            firstWidth.Should().BeGreaterThanOrEqualTo(280);
+            form.StashKeepIndex.DesiredSize.Width.Should().BeGreaterThan(0);
+            form.chkIncludeUntrackedFiles.DesiredSize.Width.Should().BeGreaterThan(0);
+            form.StashKeepIndex.Width.Should().Be(double.NaN);
+            form.chkIncludeUntrackedFiles.Width.Should().Be(double.NaN);
+            table.ColumnDefinitions.Should().OnlyContain(column => column.Width.IsStar);
+            firstWidth.Should().BeGreaterThanOrEqualTo(2 * form.StashKeepIndex.DesiredSize.Width);
+            firstWidth.Should().BeGreaterThanOrEqualTo(2 * form.chkIncludeUntrackedFiles.DesiredSize.Width);
+
+            measure.Invoke(form, null);
+            split.ColumnDefinitions[0].Width.Value.Should().Be(firstWidth, "preferred size must not grow from the previous client allocation");
+        }
+        finally
+        {
+            form.Close();
+        }
     }
 
     [AvaloniaTest]
@@ -144,6 +225,11 @@ public sealed class StashTests
         form.Clear.IsEnabled.Should().BeFalse();
         form.Apply.IsEnabled.Should().BeFalse();
         form.StashSelectedFiles.IsEnabled.Should().BeTrue("the first changed file is selected automatically");
+        form.Stashed.GetTestAccessor().RefreshButton.IsVisible.Should().BeTrue();
+        form.Stashed.GetTestAccessor().RefreshButton.IsEnabled.Should().BeTrue();
+        form.Stashed.FindControl<MenuItem>("tsmiShowSkipWorktreeFiles")!.IsEnabled.Should().BeTrue();
+        form.Stashed.FindControl<MenuItem>("tsmiShowUntrackedFiles")!.IsEnabled.Should().BeTrue();
+        form.Stashed.GetTestAccessor().Splitter.Height.Should().Be(0);
 
         form.StashSelectedFiles.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
 

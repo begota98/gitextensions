@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
@@ -44,6 +44,8 @@ public partial class FileViewer : GitModuleControl
     private bool _allowLinePatching;
     private IGitUICommandsSource? _commandsSource;
     private bool _hotkeysLoaded;
+    private bool _runtimeStateApplied;
+    private bool _runtimeFontApplied;
     private Bitmap? _image;
     private Action? _openWithDifftool;
     private string? _fileName;
@@ -175,6 +177,10 @@ public partial class FileViewer : GitModuleControl
             Buttons = { TaskDialogButton.Yes, TaskDialogButton.No },
             DefaultButton = TaskDialogButton.Yes,
             SizeToContent = true,
+
+            // Yes and No alone do not make the dialog cancelable, so Esc and the title bar's close
+            // button would be ignored. Cancelling is evaluated as declining below.
+            AllowCancel = true,
         };
 
         stageSelectedLinesToolStripMenuItem.Click += stageSelectedLinesToolStripMenuItem_Click;
@@ -217,13 +223,8 @@ public partial class FileViewer : GitModuleControl
 
         HotkeysEnabled = true;
         UICommandsSourceSet += OnUICommandsSourceSet;
-        AttachedToLogicalTree += (_, _) =>
-        {
-            if (TryGetUICommandsDirect(out IGitUICommands? commands))
-            {
-                BindSettingsCommands(commands);
-            }
-        };
+        AttachedToVisualTree += (_, _) => ApplyRuntimeStateIfVisible();
+        LayoutUpdated += (_, _) => ApplyRuntimeStateIfVisible();
 
         PopulateEncodings();
         _showNonPrintingChars = AppSettings.ShowNonPrintingChars.GetValue(
@@ -240,6 +241,44 @@ public partial class FileViewer : GitModuleControl
         VRulerPosition = AppSettings.DiffVerticalRulerPosition;
 
         InitializeComplete();
+    }
+
+    // WinForms initializes viewers when their owning tab loads. Avalonia can attach a
+    // hidden tab's editor early, so visual attachment alone is not a runtime-load signal.
+    private void ApplyRuntimeStateIfVisible()
+    {
+        if (!IsEffectivelyVisible || TopLevel.GetTopLevel(this) is null)
+        {
+            return;
+        }
+
+        InitializeRuntimeState();
+    }
+
+    internal void InitializeRuntimeState()
+    {
+        if (!_runtimeFontApplied)
+        {
+            // The font setting does not depend on a commands owner becoming available first.
+            Font = AppSettings.FixedWidthFont;
+            _runtimeFontApplied = true;
+        }
+
+        if (_runtimeStateApplied)
+        {
+            return;
+        }
+
+        _ = TryGetUICommandsDirect(out IGitUICommands? commands)
+            || (this.GetLogicalAncestors().OfType<GitModuleForm>().FirstOrDefault()?.TryGetUICommands(out commands) ?? false);
+        if (commands is null)
+        {
+            return;
+        }
+
+        BindSettingsCommands(commands);
+        ReloadHotkeys();
+        _runtimeStateApplied = true;
     }
 
     /// <summary>
@@ -379,9 +418,8 @@ public partial class FileViewer : GitModuleControl
     /// <summary>Reloads the configurable FileViewer hotkeys.</summary>
     public void ReloadHotkeys()
     {
-        IGitUICommands? commands = TryGetUICommandsDirect(out IGitUICommands? directCommands)
-            ? directCommands
-            : this.GetLogicalAncestors().OfType<IGitModuleForm>().FirstOrDefault()?.UICommands;
+        _ = TryGetUICommandsDirect(out IGitUICommands? commands)
+            || (this.GetLogicalAncestors().OfType<GitModuleForm>().FirstOrDefault()?.TryGetUICommands(out commands) ?? false);
         if (commands?.GetService(typeof(IHotkeySettingsLoader)) is not IHotkeySettingsLoader)
         {
             return;
@@ -1060,7 +1098,10 @@ public partial class FileViewer : GitModuleControl
                     && (text?.Contains("@@", StringComparison.Ordinal) ?? false)
                     && AppSettings.DiffDisplayAppearance.Value != DiffDisplayAppearance.GitWordDiff
                     && File.Exists(fullPath))
-                || ((item?.Item.IsNew ?? false)
+
+                // Added files, i.e. new or copied ones: patching only applies for an artificial
+                // revision, or if the file does not exist
+                || (item?.Item.IsAdded is true
                     && (item.Item.Staged is StagedStatus.WorkTree or StagedStatus.Index
                         || !File.Exists(fullPath))))
             && hasModule
@@ -1182,7 +1223,6 @@ public partial class FileViewer : GitModuleControl
     private void OnUICommandsChanged(object? sender, GitUICommandsChangedEventArgs? e)
     {
         BindSettingsCommands((sender as IGitUICommandsSource)?.UICommands);
-        ReloadHotkeys();
         Encoding = null;
     }
 
@@ -1296,6 +1336,7 @@ public partial class FileViewer : GitModuleControl
         _commandsSource = e.GitUICommandsSource;
         _commandsSource.UICommandsChanged += OnUICommandsChanged;
         OnUICommandsChanged(_commandsSource, null);
+        ApplyRuntimeStateIfVisible();
     }
 
     private void TreatAllFilesAsTextToolStripMenuItemClick(object? sender, EventArgs e)
@@ -2607,109 +2648,17 @@ public partial class FileViewer : GitModuleControl
     ///  Loads and displays the diff represented by a file-status entry.
     /// </summary>
     public Task ViewChangesAsync(FileStatusItem? item, CancellationToken cancellationToken)
-        => ViewChangesAsync(item, openWithDiffTool: null, cancellationToken);
+        => GitUIExtensions.ViewChangesAsync(this, item, cancellationToken);
 
     /// <summary>
     ///  Loads and displays the diff represented by a file-status entry and retains the
     ///  consumer's external-difftool action for the shared FileViewer hotkey.
     /// </summary>
-    public async Task ViewChangesAsync(
+    public Task ViewChangesAsync(
         FileStatusItem? item,
         Action? openWithDiffTool = null,
         CancellationToken cancellationToken = default)
-    {
-        CancellationToken viewToken = BeginView(cancellationToken);
-        if (item?.Item is null)
-        {
-            await InvokeOnOwnerMainThreadAsync(
-                () => ViewPatchCore(null, useGitColoring: false, isCombinedDiff: false, isGitWordDiff: false),
-                viewToken);
-            return;
-        }
-
-        if (item.Item.IsStatusOnly)
-        {
-            await ShowTextAsync(item.Item.Name, item.Item.ErrorMessage ?? string.Empty, item, line: null, openWithDiffTool, checkGitAttributes: false, viewToken);
-            return;
-        }
-
-        ObjectId firstId = item.FirstRevision?.ObjectId ?? item.SecondRevision.FirstParentId;
-        ObjectId secondId = item.SecondRevision.ObjectId;
-        if (!item.Item.IsSubmodule
-            && (item.Item.IsNew || firstId.IsZero || (!item.Item.IsDeleted && FileHelper.IsImage(item.Item.Name))))
-        {
-            await ViewGitItemCoreAsync(item.Item, secondId, item, line: null, openWithDiffTool, viewToken);
-            return;
-        }
-
-        bool isTracked = item.Item.IsTracked || (!item.Item.TreeId.IsZero && !secondId.IsZero);
-        if (AppSettings.DiffDisplayAppearance.Value == DiffDisplayAppearance.Difftastic && IsDifftasticEnabled.Value)
-        {
-            (ArgumentString diffArgs, string extraCacheKey) = GetDifftasticArguments();
-            ExecutionResult result = await Module.GetSingleDifftoolAsync(
-                firstId,
-                secondId,
-                item.Item.Name,
-                item.Item.OldName,
-                diffArgs,
-                cacheResult: true,
-                extraCacheKey,
-                isTracked,
-                useGitColoring: true,
-                viewToken);
-
-            if (!result.ExitedSuccessfully)
-            {
-                string output = $"Git command exit code: {result.ExitCodeDisplay}{Environment.NewLine}{result.StandardError}";
-                await ShowTextAsync(item.Item.Name, output, item, line: null, openWithDiffTool, checkGitAttributes: false, viewToken);
-                return;
-            }
-
-            await InvokeOnOwnerMainThreadAsync(() =>
-            {
-                ResetView(ViewMode.Difftastic, item.Item.Name, item, openWithDiffTool);
-                string parsedText = result.StandardOutput;
-                DifftasticHighlightService highlightService = new(
-                    ref parsedText,
-                    internalFileViewer.LineNumbersControl,
-                    out int rightColumnStart);
-                VRulerPosition = rightColumnStart;
-                SetDiffText(parsedText, highlightService, showLeftColumn: true);
-                internalFileViewer.GoToFirstChange(NumberOfContextLines);
-                TextLoaded?.Invoke(this, EventArgs.Empty);
-            }, viewToken);
-            return;
-        }
-
-        bool isGitWordDiff = AppSettings.DiffDisplayAppearance.Value == DiffDisplayAppearance.GitWordDiff;
-        bool useGitColoring = isGitWordDiff || AppSettings.UseGitColoring.Value;
-
-        (Patch? patch, string? errorMessage) = await Module.GetSingleDiffAsync(
-            firstId,
-            secondId,
-            item.Item.Name,
-            item.Item.OldName,
-            extraDiffArguments: GetExtraDiffArguments().ToString(),
-            Encoding,
-            cacheResult: true,
-            isTracked,
-            useGitColoring,
-            GitCommandConfiguration.Default,
-            viewToken);
-
-        await InvokeOnOwnerMainThreadAsync(() =>
-        {
-            viewToken.ThrowIfCancellationRequested();
-            ViewPatchCore(
-                patch?.Text ?? errorMessage,
-                useGitColoring,
-                isCombinedDiff: false,
-                isGitWordDiff,
-                item.Item.Name,
-                item,
-                openWithDiffTool);
-        }, viewToken);
-    }
+        => GitUIExtensions.ViewChangesAsync(this, item, cancellationToken, openWithDiffTool: openWithDiffTool);
 
     private async Task InvokeOnOwnerMainThreadAsync(Action action, CancellationToken cancellationToken = default)
     {
@@ -2722,6 +2671,17 @@ public partial class FileViewer : GitModuleControl
         {
             await Dispatcher.InvokeAsync(action, DispatcherPriority.Normal, cancellationToken);
         }
+    }
+
+    internal async Task<T> GetOnOwnerMainThreadAsync<T>(Func<T> action, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Dispatcher.CheckAccess())
+        {
+            return action();
+        }
+
+        return await Dispatcher.InvokeAsync(action, DispatcherPriority.Normal, cancellationToken);
     }
 
     /// <summary>Gets the retained external-difftool action.</summary>
@@ -2794,6 +2754,7 @@ public partial class FileViewer : GitModuleControl
             encodingToolStripComboBox.ItemsSource = GetAvailableEncodings()
                 .Select(encoding => encoding.EncodingName)
                 .ToArray();
+            encodingToolStripComboBox.SelectedIndex = -1;
         }
         finally
         {
@@ -2901,6 +2862,18 @@ public partial class FileViewer : GitModuleControl
         SetTranslatedToolTip(ignoreAllWhitespaces, nameof(ignoreAllWhitespaces), "Ignore all whitespace changes");
         SetTranslatedToolTip(settingsButton, nameof(settingsButton), "Settings");
         automaticContinuousScrollToolStripMenuItem.Header = TranslatedStrings.ContScrollToNextFileOnlyWithAlt;
+        if (_hotkeysLoaded)
+        {
+            // Framework constraint: Avalonia tooltips are translated explicitly, after the
+            // hotkey suffix was first applied. Restore the source ToolStrip tooltip order.
+            UpdateTooltipWithShortcut(nextChangeButton, Command.NextChange);
+            UpdateTooltipWithShortcut(previousChangeButton, Command.PreviousChange);
+            UpdateTooltipWithShortcut(increaseNumberOfLines, Command.IncreaseNumberOfVisibleLines);
+            UpdateTooltipWithShortcut(decreaseNumberOfLines, Command.DecreaseNumberOfVisibleLines);
+            UpdateTooltipWithShortcut(showEntireFileButton, Command.ShowEntireFile);
+            UpdateTooltipWithShortcut(showSyntaxHighlighting, Command.ShowSyntaxHighlighting);
+            UpdateTooltipWithShortcut(ignoreAllWhitespaces, Command.IgnoreAllWhitespace);
+        }
 
         return;
 

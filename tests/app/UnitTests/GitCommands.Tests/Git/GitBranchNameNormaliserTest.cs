@@ -72,9 +72,20 @@ public sealed class GitBranchNameNormaliserTest
     [TestCase("привет, ё-маё!", "привет,_ё-маё!")]
     [TestCase("Pokémon 195", "Pokémon_195")]
     [TestCase("Anhörung`!@#$%", "Anhörung`!@#$%")]
+    [TestCase("test\"test", "test_test")]
+    [TestCase("test<test>test", "test_test_test")]
     public void Normalise_rule04(string input, string expected)
     {
         GitBranchNameNormaliser.Rule04(input, _gitBranchNameOptions).Should().Be(expected);
+    }
+
+    [Test]
+    public void Normalise_rule04_should_follow_native_path_rules_for_pipe()
+    {
+        // Native Unix permits pipe in loose-ref filenames; Windows requires the replacement token.
+        string expected = Path.GetInvalidPathChars().Contains('|') ? "test_test" : "test|test";
+
+        GitBranchNameNormaliser.Rule04("test|test", _gitBranchNameOptions).Should().Be(expected);
     }
 
     // Branch name cannot have question-mark '?', asterisk '*', or open bracket '[' anywhere.

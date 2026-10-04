@@ -1,12 +1,15 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 using GitCommands;
 using GitExtensions.Extensibility;
 using GitExtensions.Extensibility.Git;
 using GitExtUtils;
 using GitUI.Compat;
+using GitUI.Compat.WinFormsControls;
 using GitUI.Properties;
+using GitUI.Shells;
 using GitUI.UserControls;
 using Microsoft.VisualStudio.Threading;
 using Brush = Avalonia.Media.IBrush;
@@ -18,6 +21,7 @@ partial class FormBrowse
     // This file is dedicated to init logic for FormBrowse menus and toolbars
 
     internal static readonly string FetchPullToolbarShortcutsPrefix = "pull_shortcut_";
+    private const string ToolbarSettingsPrefix = "formbrowse_toolbar_visibility_";
 
     private void InitMenusAndToolbars(string? revFilter, string? pathFilter)
     {
@@ -43,11 +47,21 @@ partial class FormBrowse
         FillNextPullActionAsDefaultToolStripMenuItems();
         RefreshDefaultPullAction();
 
-        FillUserShells(defaultShell: "Git bash");
+        FillUserShells(defaultShell: BashShell.ShellName);
 
         InsertFetchPullShortcuts();
 
-        ((MenuFlyout)toolStripButtonPull.Flyout!).Opening += (_, _) => UpdateFetchAllVisibility();
+        MenuFlyout pullDropDown = (MenuFlyout)toolStripButtonPull.Flyout!;
+        pullDropDown.Opening += (_, _) => UpdateFetchAllVisibility();
+        pullDropDown.Opened += (_, _) =>
+        {
+            // Avalonia realizes this toolbar flyout outside ToolStripDropDownItem's
+            // submenu route. Apply the source shortcut text after its row templates exist.
+            WinFormsToolStripMenuSizer.Apply(pullDropDown, pullToolStripMenuItem1);
+            Dispatcher.UIThread.Post(
+                () => WinFormsToolStripMenuSizer.Apply(pullDropDown, pullToolStripMenuItem1),
+                DispatcherPriority.Loaded);
+        };
 
         // Layout engine bug (?) which may change the order of toolbars
         // if the 1st one becomes longer than the 2nd toolbar's Location.X
@@ -121,13 +135,13 @@ partial class FormBrowse
 
     private void InsertFetchPullShortcuts()
     {
-        int i = ToolStripMain.Children.IndexOf(toolStripButtonPull);
-        ToolStripMain.Children.Insert(i++, CreateCorrespondingToolbarButton(fetchToolStripMenuItem, Images.PullFetch, Command.QuickFetch));
-        ToolStripMain.Children.Insert(i++, CreateCorrespondingToolbarButton(fetchAllToolStripMenuItem, Images.PullFetchAll));
-        ToolStripMain.Children.Insert(i++, CreateCorrespondingToolbarButton(fetchPruneAllToolStripMenuItem, Images.PullFetchPruneAll));
-        ToolStripMain.Children.Insert(i++, CreateCorrespondingToolbarButton(mergeToolStripMenuItem, Images.PullMerge, Command.QuickPull));
-        ToolStripMain.Children.Insert(i++, CreateCorrespondingToolbarButton(rebaseToolStripMenuItem1, Images.PullRebase));
-        ToolStripMain.Children.Insert(i, CreateCorrespondingToolbarButton(pullToolStripMenuItem1, Images.Pull, Command.PullOrFetch));
+        int i = ToolStripMain.Items.IndexOf(toolStripButtonPull);
+        ToolStripMain.Items.Insert(i++, CreateCorrespondingToolbarButton(fetchToolStripMenuItem, Images.PullFetch, Command.QuickFetch));
+        ToolStripMain.Items.Insert(i++, CreateCorrespondingToolbarButton(fetchAllToolStripMenuItem, Images.PullFetchAll));
+        ToolStripMain.Items.Insert(i++, CreateCorrespondingToolbarButton(fetchPruneAllToolStripMenuItem, Images.PullFetchPruneAll));
+        ToolStripMain.Items.Insert(i++, CreateCorrespondingToolbarButton(mergeToolStripMenuItem, Images.PullMerge, Command.QuickPull));
+        ToolStripMain.Items.Insert(i++, CreateCorrespondingToolbarButton(rebaseToolStripMenuItem1, Images.PullRebase));
+        ToolStripMain.Items.Insert(i, CreateCorrespondingToolbarButton(pullToolStripMenuItem1, Images.Pull, Command.PullOrFetch));
 
         IconButton CreateCorrespondingToolbarButton(
             MenuItem toolStripMenuItem,
@@ -140,6 +154,9 @@ partial class FormBrowse
                 Icon = image,
                 Name = FetchPullToolbarShortcutsPrefix + toolStripMenuItem.Name,
                 Content = toolTipText,
+                IsVisible = AppSettings.GetBool(
+                    ToolbarSettingsPrefix + FetchPullToolbarShortcutsPrefix + toolStripMenuItem.Name,
+                    defaultValue: false),
             };
             clonedToolStripMenuItem.Classes.Add("gitextensions-toolbar-button");
             clonedToolStripMenuItem.Classes.Add("gitextensions-icon-only");
@@ -157,21 +174,31 @@ partial class FormBrowse
     {
         // Show both Check and Image margins in a menu
         // Prevent submenu from closing while options are changed
-        // Avalonia's native menu owns its margins and dismissal behavior; the actions remain independently selectable.
-        (MenuItem Item, GitPullAction Action)[] items =
+        // Avalonia's StaysOpenOnClick preserves the source's ItemClicked cancellation.
+        (MenuItem Source, GitPullAction Action)[] items =
         [
-            (defaultPullDialogToolStripMenuItem, GitPullAction.None),
-            (defaultPullMergeToolStripMenuItem, GitPullAction.Merge),
-            (defaultPullRebaseToolStripMenuItem, GitPullAction.Rebase),
-            (defaultPullFetchToolStripMenuItem, GitPullAction.Fetch),
-            (defaultPullFetchAllToolStripMenuItem, GitPullAction.FetchAll),
-            (defaultPullFetchPruneAllToolStripMenuItem, GitPullAction.FetchPruneAll),
+            (pullToolStripMenuItem1, GitPullAction.None),
+            (mergeToolStripMenuItem, GitPullAction.Merge),
+            (rebaseToolStripMenuItem1, GitPullAction.Rebase),
+            (fetchToolStripMenuItem, GitPullAction.Fetch),
+            (fetchAllToolStripMenuItem, GitPullAction.FetchAll),
+            (fetchPruneAllToolStripMenuItem, GitPullAction.FetchPruneAll),
         ];
 
-        foreach ((MenuItem item, GitPullAction action) in items)
+        foreach ((MenuItem source, GitPullAction action) in items)
         {
+            MenuItem item = new ToolStripMenuItem
+            {
+                Name = $"{source.Name}SetDefault",
+                Header = source.Header,
+                Icon = CloneMenuIcon(source.Icon),
+                Tag = action,
+                ToggleType = MenuItemToggleType.CheckBox,
+                StaysOpenOnClick = true,
+            };
             item.Tag = action;
             item.Click += SetDefaultPullActionMenuItemClick;
+            setDefaultPullButtonActionToolStripMenuItem.Items.Add(item);
         }
 
         void SetDefaultPullActionMenuItemClick(object? sender, EventArgs eventArgs)
@@ -180,17 +207,84 @@ partial class FormBrowse
             AppSettings.DefaultPullAction = (GitPullAction)clickedMenuItem.Tag!;
             RefreshDefaultPullAction();
         }
+
+        static object? CloneMenuIcon(object? icon)
+        {
+            if (icon is not Image image)
+            {
+                return null;
+            }
+
+            Image clone = new()
+            {
+                Width = image.Width,
+                Height = image.Height,
+                Source = image.Source,
+                Stretch = image.Stretch,
+            };
+
+            // The source copies its image; Avalonia also needs the icon's sizing
+            // classes because the original menu may not yet have applied its styles.
+            foreach (string className in image.Classes)
+            {
+                clone.Classes.Add(className);
+            }
+
+            return clone;
+        }
     }
 
     private void FillUserShells(string defaultShell)
     {
-        userShell.IsVisible = !_hasRuntimeCommands
-            || UICommands.GetService(typeof(ITerminalLauncher)) is ITerminalLauncher;
-        ToolTip.SetTip(userShell, defaultShell);
+        MenuFlyout menu = (MenuFlyout)userShell.Flyout!;
+        menu.Items.Clear();
 
-        // a user may have a specific shell configured in settings, but the shell is no longer available
-        // set the first available shell as default
-        // The portable toolbar exposes the configured platform terminal through one native launcher button.
+        if (!OperatingSystem.IsWindows())
+        {
+            // A Unix desktop launches its configured graphical terminal through the platform
+            // launcher. Individual shell executables are not themselves terminal windows.
+            MenuItem terminal = new() { Header = "System terminal" };
+            terminal.Click += userShell_Click;
+            menu.Items.Add(terminal);
+            userShell.IsVisible = !_hasRuntimeCommands
+                || UICommands.GetService(typeof(ITerminalLauncher)) is ITerminalLauncher;
+            ToolTip.SetTip(userShell, "System terminal");
+            return;
+        }
+
+        MenuItem? selectedDefaultShell = null;
+        foreach (IShellDescriptor shell in _shellProvider.GetShells())
+        {
+            if (!shell.HasExecutable)
+            {
+                continue;
+            }
+
+            MenuItem item = new()
+            {
+                Header = shell.Name,
+                Tag = shell,
+                Icon = new Image { Source = shell.Icon, Width = 16, Height = 16 },
+            };
+            ToolTip.SetTip(item, shell.Name);
+            item.Click += userShell_Click;
+            menu.Items.Add(item);
+
+            if (selectedDefaultShell is null
+                || string.Equals(shell.Name, defaultShell, StringComparison.InvariantCultureIgnoreCase))
+            {
+                selectedDefaultShell = item;
+            }
+        }
+
+        if (selectedDefaultShell?.Tag is IShellDescriptor selectedShell)
+        {
+            userShell.Icon = selectedShell.Icon;
+            userShell.Tag = selectedShell;
+            ToolTip.SetTip(userShell, selectedShell.Name);
+        }
+
+        userShell.IsVisible = menu.Items.Count > 0;
     }
 
     private void RefreshDefaultPullAction()
@@ -241,13 +335,18 @@ partial class FormBrowse
         fetchAllToolStripMenuItem.IsVisible = hasMultipleRemotes;
 
         // Update the "set default pull action" submenu items
-        defaultPullFetchAllToolStripMenuItem.IsVisible = hasMultipleRemotes;
+        setDefaultPullButtonActionToolStripMenuItem.Items
+            .OfType<MenuItem>()
+            .Single(item => item.Tag is GitPullAction.FetchAll)
+            .IsVisible = hasMultipleRemotes;
     }
 
     private Brush UpdateCommitButtonAndGetBrush(IReadOnlyList<GitItemStatus>? status, bool showCount)
     {
         RepoStateVisualiser repoStateVisualiser = new();
         (Avalonia.Media.IImage image, Avalonia.Media.IBrush brush) = repoStateVisualiser.Invoke(status);
+        double currentWidth = double.IsNaN(toolStripButtonCommit.Width)
+            ? toolStripButtonCommit.Bounds.Width : toolStripButtonCommit.Width;
 
         if (showCount)
         {
@@ -261,6 +360,20 @@ partial class FormBrowse
             toolStripButtonCommit.Icon = RepoStateVisualiser.Clean.Item1;
             toolStripButtonCommit.Content = _commitButtonText.Text;
         }
+
+        // ToolStripItem's CommonLayoutOptions measures the current text independently of
+        // its visual parent, with border2, image16 and no text/image inset. An Avalonia
+        // presenter can still have its previous text while the closed overflow is detached;
+        // it cannot be the source of an explicit width retained after that update.
+        const int itemBorder = 2;
+        const int itemImageWidth = 16;
+        string caption = toolStripButtonCommit.Content as string ?? string.Empty;
+        double preferredWidth = Math.Max(23,
+            Math.Ceiling(WinFormsTextMeasurer.MeasureTextRenderer(toolStripButtonCommit, caption).Width)
+            + itemImageWidth + (itemBorder * 2));
+        double minimumWidth = showCount && status is null ? currentWidth : 0;
+        toolStripButtonCommit.Width = Math.Max(minimumWidth, preferredWidth);
+        NativeToolStrip.SetItemAutoSize(toolStripButtonCommit, minimumWidth <= preferredWidth);
 
         return brush;
     }

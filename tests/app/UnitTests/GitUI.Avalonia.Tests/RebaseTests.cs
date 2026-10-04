@@ -105,13 +105,13 @@ public sealed class RebaseTests
             nameof(FormRebase),
             "chkCommitterDateIsAuthorDate",
             "toolTip1",
-            $"Sets the commit date to the original author date{Environment.NewLine}(instead of the current date).");
+            "Sets the commit date to the original author date\r\n(instead of the current date).");
         translation.Received(1).AddTranslationItem(nameof(FormRebase), "chkIgnoreDate", "Text", "Ignore &date");
         translation.Received(1).AddTranslationItem(
             nameof(FormRebase),
             "chkIgnoreDate",
             "toolTip1",
-            $"Sets the author date to the current date (same as{Environment.NewLine}commit date), ignoring the original author date.");
+            "Sets the author date to the current date (same as\r\ncommit date), ignoring the original author date.");
         translation.Received(1).AddTranslationItem(nameof(FormRebase), "chkPreserveMerges", "Text", "&Preserve Merges");
         translation.Received(1).AddTranslationItem(nameof(FormRebase), "chkInteractive", "Text", "&Interactive Rebase");
         translation.Received(1).AddTranslationItem(nameof(FormRebase), "chkSpecificRange", "Text", "Specific ra&nge");
@@ -134,6 +134,47 @@ public sealed class RebaseTests
     }
 
     [AvaloniaTest]
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("Translated date tooltip")]
+    public void FormRebase_should_initialize_and_translate_the_date_tooltips_once(string? translatedTip)
+    {
+        const string ignoreDateTip = "Sets the author date to the current date (same as\r\ncommit date), ignoring the original author date.";
+        const string committerDateTip = "Sets the commit date to the original author date\r\n(instead of the current date).";
+        string? currentTranslation = AppSettings.CurrentTranslation;
+        AppSettings.CurrentTranslation = "";
+        try
+        {
+            FormRebase form = new();
+            try
+            {
+                CheckBox ignoreDate = form.FindControl<CheckBox>("chkIgnoreDate")!;
+                CheckBox committerDate = form.FindControl<CheckBox>("chkCommitterDateIsAuthorDate")!;
+                ToolTip.GetTip(ignoreDate).Should().Be(ignoreDateTip);
+                ToolTip.GetTip(committerDate).Should().Be(committerDateTip);
+                ITranslation translation = Substitute.For<ITranslation>();
+                translation.TranslateItem(nameof(FormRebase), "chkIgnoreDate", "toolTip1", Arg.Any<Func<string?>>()).Returns(translatedTip);
+                translation.TranslateItem(nameof(FormRebase), "chkCommitterDateIsAuthorDate", "toolTip1", Arg.Any<Func<string?>>()).Returns(translatedTip);
+
+                form.TranslateItems(translation);
+
+                ToolTip.GetTip(ignoreDate).Should().Be(string.IsNullOrEmpty(translatedTip) ? ignoreDateTip : translatedTip);
+                ToolTip.GetTip(committerDate).Should().Be(string.IsNullOrEmpty(translatedTip) ? committerDateTip : translatedTip);
+                translation.Received(1).TranslateItem(nameof(FormRebase), "chkIgnoreDate", "toolTip1", Arg.Is<Func<string?>>(getDefault => getDefault() == ignoreDateTip));
+                translation.Received(1).TranslateItem(nameof(FormRebase), "chkCommitterDateIsAuthorDate", "toolTip1", Arg.Is<Func<string?>>(getDefault => getDefault() == committerDateTip));
+            }
+            finally
+            {
+                form.Close();
+            }
+        }
+        finally
+        {
+            AppSettings.CurrentTranslation = currentTranslation;
+        }
+    }
+
+    [AvaloniaTest]
     public void FormRebase_should_load_refs_and_offer_interactive_rebase()
     {
         (IGitUICommands commands, IGitModule module) = CreateCommands("main", "feature", "origin/main");
@@ -151,7 +192,7 @@ public sealed class RebaseTests
         form.chkInteractive.IsChecked = true;
         form.chkAutosquash.IsEnabled.Should().BeTrue();
         form.btnEditTodo.IsVisible.Should().BeFalse();
-        form.PatchGrid.IsVisible.Should().BeFalse();
+        form.PatchGrid.IsVisible.Should().BeTrue("upstream keeps the empty commit grid visible before a rebase starts");
         form.Close();
     }
 

@@ -8,6 +8,12 @@
     "showoutputhistory": "false",
     "checksettings": "false",
     "checkforupdates": "false",
+    "commitinfoshowcontainedinbrancheslocal": "true",
+    "commitinfoshowcontainedinbranchesremote": "false",
+    "commitinfoshowcontainedinbranchesremoteifnolocal": "false",
+    "commitinfoshowcontainedintags": "true",
+    "commitinfoshowtagthiscommitderivesfrom": "true",
+    "relativedate": "false",
     "translation": "English"
   }
 }

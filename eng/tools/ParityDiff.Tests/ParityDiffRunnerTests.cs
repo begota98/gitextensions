@@ -373,6 +373,33 @@ public sealed class ParityDiffRunnerTests
 
     [Test]
     [Category("P8_6i")]
+    public void Run_should_retain_unobscured_primary_pixels_when_popup_is_composed()
+    {
+        using ParityDiffFixture fixture = new();
+        CaptureDocument reference = AddPopupSurface(
+            fixture.CreateDocument("light"),
+            imageWidth: 2,
+            imageHeight: 2,
+            primaryScreenBounds: new CaptureRectangle { X = 0, Y = 0, Width = 2, Height = 2 },
+            popupScreenBounds: new CaptureRectangle { X = 0, Y = 0, Width = 1, Height = 2 });
+        CaptureDocument candidate = AddPopupSurface(
+            fixture.CreateDocument("light"),
+            imageWidth: 2,
+            imageHeight: 2,
+            primaryScreenBounds: new CaptureRectangle { X = 0, Y = 0, Width = 2, Height = 2 },
+            popupScreenBounds: new CaptureRectangle { X = 1, Y = 0, Width = 1, Height = 2 });
+        fixture.WriteCaptureSet("reference", [reference], red: 32);
+        fixture.WriteCaptureSet("candidate", [candidate], red: 64);
+
+        CaptureComparison comparison = fixture.Run().Captures.Should().ContainSingle().Subject;
+
+        comparison.Findings.Should().Contain(finding => finding.Path == "$image/surface[popup:0]");
+        comparison.Findings.Should().Contain(finding => finding.Path == "$image/surface[primary]");
+        comparison.Pixels!.ComparedPixelCount.Should().Be(6);
+    }
+
+    [Test]
+    [Category("P8_6i")]
     public void Run_should_compare_full_primary_surface_when_legacy_client_bounds_are_invalid()
     {
         using ParityDiffFixture fixture = new();
@@ -424,6 +451,19 @@ public sealed class ParityDiffRunnerTests
             .And.Contain("Candidate cannot compose the popup.");
     }
 
+    [Test]
+    public void Run_should_compare_focus_order_within_each_container()
+    {
+        using ParityDiffFixture fixture = new();
+        CaptureDocument reference = WithFocusHierarchy(fixture.CreateDocument("light"), useGlobalTabIndexes: false);
+        CaptureDocument candidate = WithFocusHierarchy(reference, useGlobalTabIndexes: true);
+        fixture.WriteCaptureSet("reference", [reference]);
+        fixture.WriteCaptureSet("candidate", [candidate]);
+
+        fixture.Run().Captures.Should().ContainSingle().Which.Findings
+            .Should().NotContain(finding => finding.Code == "focus.order");
+    }
+
     private static CaptureDocument ChangeTarget(
         CaptureDocument document,
         Func<CaptureNode, CaptureNode> transform)
@@ -438,6 +478,51 @@ public sealed class ParityDiffRunnerTests
                 surface with
                 {
                     Root = root with { Children = [transform(target)] }
+                }
+            ]
+        };
+    }
+
+    private static CaptureDocument WithFocusHierarchy(CaptureDocument document, bool useGlobalTabIndexes)
+    {
+        CaptureSurface surface = document.Surfaces.Single();
+        CaptureNode template = surface.Root.Children
+            .SelectMany(node => node.Children.Count == 0 ? [node] : node.Children)
+            .First();
+        CaptureNode First(string name, int localIndex, int globalIndex) => template with
+        {
+            Id = $"root/{name}",
+            FieldName = name,
+            Name = name,
+            Text = name,
+            TabIndex = useGlobalTabIndexes ? globalIndex : localIndex,
+            Children = []
+        };
+        CaptureNode Owner(string name, int tabIndex, params CaptureNode[] children) => template with
+        {
+            Id = $"root/{name}",
+            FieldName = name,
+            Name = name,
+            Text = name,
+            TabIndex = tabIndex,
+            TabStop = false,
+            Children = children
+        };
+
+        return document with
+        {
+            Surfaces =
+            [
+                surface with
+                {
+                    Root = surface.Root with
+                    {
+                        Children =
+                        [
+                            Owner("firstOwner", 0, First("first", 0, 0), First("second", 1, 1)),
+                            Owner("secondOwner", 1, First("third", 0, 2), First("fourth", 1, 3))
+                        ]
+                    }
                 }
             ]
         };

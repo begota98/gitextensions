@@ -198,6 +198,10 @@ public partial class FileViewer : GitModuleControl
             Buttons = { TaskDialogButton.Yes, TaskDialogButton.No },
             DefaultButton = TaskDialogButton.Yes,
             SizeToContent = true,
+
+            // Yes and No alone do not make the dialog cancelable, so Esc and the title bar's close
+            // button would be ignored. Cancelling is evaluated as declining below.
+            AllowCancel = true,
         };
 
         PictureBox.PaintFailed += (_, ex) => this.InvokeAndForget(() =>
@@ -1192,8 +1196,9 @@ public partial class FileViewer : GitModuleControl
                     && AppSettings.DiffDisplayAppearance.Value != DiffDisplayAppearance.GitWordDiff
                     && File.Exists(_fullPathResolver.Resolve(fileName)))
 
-                // New files, patches only applies for artificial or if the file does not exist
-                || ((item?.Item.IsNew ?? false)
+                // Added files, i.e. new or copied ones: patching only applies for an artificial
+                // revision, or if the file does not exist
+                || (item?.Item.IsAdded is true
                     && ((item.Item.Staged is StagedStatus.WorkTree or StagedStatus.Index)
                         || !File.Exists(_fullPathResolver.Resolve(fileName)))))
 
@@ -1754,7 +1759,8 @@ public partial class FileViewer : GitModuleControl
             return;
         }
 
-        if (TaskDialog.ShowDialog(Handle, _NO_TRANSLATE_resetSelectedLinesConfirmationDialog) == TaskDialogButton.No)
+        // Reset only on an explicit confirmation, so that cancelling declines the destructive action
+        if (TaskDialog.ShowDialog(Handle, _NO_TRANSLATE_resetSelectedLinesConfirmationDialog) != TaskDialogButton.Yes)
         {
             return;
         }

@@ -1,6 +1,7 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using GitCommands;
 using GitCommands.Config;
 using GitCommands.Git;
@@ -10,16 +11,17 @@ using GitExtensions.Extensibility.Git;
 using GitExtUtils;
 using GitUI.Compat;
 using GitUI.HelperDialogs;
+using GitUI.Infrastructure;
 using Microsoft;
 using ResourceManager;
 using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitUI.CommandsDialogs;
 
-// Cloning runs in FormRemoteProcess through OpenSSH, so PuTTY-specific key loading and registry
-// or key-agent recovery do not apply. Remote-branch discovery reports native
-// Git/OpenSSH errors directly. The history combos hold the path strings rather than Repository
-// objects, and the "opened as dialog" check replaces the WinForms ShowInTaskbar test.
+// Remote-branch discovery reports native Git/OpenSSH errors directly. PuTTY key loading remains
+// available on Windows when Plink is selected; other platforms keep their native credential path.
+// The history combos hold path strings rather than Repository objects, and the "opened as dialog"
+// check replaces the WinForms ShowInTaskbar test.
 public sealed partial class FormClone : GitExtensionsDialog
 {
     private readonly TranslationString _infoNewRepositoryLocation = new("The repository will be cloned to a new directory located here:" + Environment.NewLine + "{0}");
@@ -38,6 +40,7 @@ public sealed partial class FormClone : GitExtensionsDialog
     private readonly CancellationTokenSequence _branchLoaderSequence = new();
     private readonly EventHandler<GitModuleEventArgs>? _gitModuleChanged;
     private readonly IReadOnlyList<string> _defaultBranchItems;
+    private string? _puttySshKey;
 
     public FormClone()
     {
@@ -60,11 +63,17 @@ public sealed partial class FormClone : GitExtensionsDialog
         _url = url;
         _defaultBranchItems = new[] { _branchDefaultRemoteHead.Text, _branchNone.Text };
         _NO_TRANSLATE_Branches.ItemsSource = _defaultBranchItems;
+        _NO_TRANSLATE_Branches.SelectedIndex = 0;
+        cbIntializeAllSubmodules.IsChecked = AppSettings.CloneInitializeAllSubmodules;
     }
 
     private void WireControls()
     {
+        // The WinForms Designer supplies the neutral tooltip before translation, even without a language file.
+        ToolTip.SetTip(cbDownloadFullHistory, CbDownloadFullHistoryToolTipText);
+
         Ok.Click += OkClick;
+        LoadSSHKey.Click += LoadSshKeyClick;
         FromBrowse.Click += FromBrowseClick;
         ToBrowse.Click += ToBrowseClick;
         _NO_TRANSLATE_From.SelectionChanged += FromSelectedIndexChanged;
@@ -86,6 +95,14 @@ public sealed partial class FormClone : GitExtensionsDialog
         };
         _NO_TRANSLATE_NewDirectory.TextChanged += NewDirectoryTextChanged;
         _NO_TRANSLATE_Branches.DropDownOpened += Branches_DropDown;
+
+        EventHandler? focusInitialControl = null;
+        focusInitialControl = (_, _) =>
+        {
+            Activated -= focusInitialControl;
+            Ok.Focus();
+        };
+        Activated += focusInitialControl;
     }
 
     protected override void OnRuntimeLoad(EventArgs e)
@@ -195,6 +212,7 @@ public sealed partial class FormClone : GitExtensionsDialog
         }
 
         FromTextUpdate(this, EventArgs.Empty);
+        LoadSSHKey.IsVisible = OperatingSystem.IsWindows() && GitSshHelpers.IsPlink;
     }
 
     protected override void OnClosed(EventArgs e)
@@ -276,6 +294,8 @@ public sealed partial class FormClone : GitExtensionsDialog
             // currently open module which may live on a different subsystem.
             IGitUICommands destUICommands = UICommands.WithWorkingDirectory(dirTo);
 
+            AppSettings.CloneInitializeAllSubmodules = cbIntializeAllSubmodules.IsChecked == true;
+
             ArgumentString cloneCmd = Commands.Clone(from,
                 dirTo,
                 destUICommands.Module.GetPathForGitExecution,
@@ -294,6 +314,12 @@ public sealed partial class FormClone : GitExtensionsDialog
                 await RepositoryHistoryManager.Remotes.AddAsMostRecentAsync(from);
                 await RepositoryHistoryManager.Locals.AddAsMostRecentAsync(dirTo);
             });
+
+            if (!string.IsNullOrEmpty(_puttySshKey))
+            {
+                GitModule clonedGitModule = new(UICommands.GetRequiredService<IGitExecutorProvider>(), dirTo);
+                clonedGitModule.SetSetting(string.Format(SettingKeyString.RemotePuttySshKey, "origin"), _puttySshKey);
+            }
 
             if (_openedFromProtocolHandler && AskIfNewRepositoryShouldBeOpened(dirTo))
             {
@@ -343,6 +369,38 @@ public sealed partial class FormClone : GitExtensionsDialog
         }
 
         ToTextUpdate(sender, e);
+    }
+
+    private void LoadSshKeyClick(object sender, EventArgs e)
+    {
+        this.InvokeAndForget(LoadSshKeyAsync);
+    }
+
+    private async Task LoadSshKeyAsync()
+    {
+        if (!await PortalPickerGuard.IsAvailableAsync())
+        {
+            return;
+        }
+
+        FilePickerOpenOptions options = new()
+        {
+            AllowMultiple = false,
+            Title = "Browse for key",
+            FileTypeFilter =
+            [
+                new FilePickerFileType("PuTTY private key") { Patterns = ["*.ppk"] },
+                FilePickerFileTypes.All,
+            ],
+        };
+        options.SuggestedStartLocation = await StorageProvider.TryGetFolderFromPathAsync(".");
+        IReadOnlyList<IStorageFile> files = await PortalPickerGuard.OpenFilePickerAsync(StorageProvider, options);
+        string? sshKeyFile = files.FirstOrDefault()?.TryGetLocalPath();
+        if (!string.IsNullOrEmpty(sshKeyFile)
+            && PuttyHelpers.StartPageantIfConfigured(() => sshKeyFile))
+        {
+            _puttySshKey = sshKeyFile;
+        }
     }
 
     private void FromSelectedIndexChanged(object sender, EventArgs e)
@@ -500,22 +558,6 @@ public sealed partial class FormClone : GitExtensionsDialog
         }
 
         return !string.IsNullOrEmpty(url);
-    }
-
-    public override void AddTranslationItems(GitExtensions.Extensibility.Translations.ITranslation translation)
-    {
-        base.AddTranslationItems(translation);
-
-        // The WinForms Designer stores this tooltip under the ToolTip component's name.
-        translation.AddTranslationItem(nameof(FormClone), nameof(cbDownloadFullHistory), "ttHints", CbDownloadFullHistoryToolTipText);
-    }
-
-    public override void TranslateItems(GitExtensions.Extensibility.Translations.ITranslation translation)
-    {
-        base.TranslateItems(translation);
-
-        string? toolTip = translation.TranslateItem(nameof(FormClone), nameof(cbDownloadFullHistory), "ttHints", () => CbDownloadFullHistoryToolTipText);
-        ToolTip.SetTip(cbDownloadFullHistory, toolTip);
     }
 
     private static string CbDownloadFullHistoryToolTipText =>

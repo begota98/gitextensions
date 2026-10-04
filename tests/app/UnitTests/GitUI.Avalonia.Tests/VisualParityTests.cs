@@ -1,4 +1,4 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
@@ -12,9 +12,11 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using GitCommands;
 using GitExtensions.Extensibility.Git;
+using GitExtensions.ParityCapture;
 using GitExtUtils.GitUI.Theming;
 using GitUI;
 using GitUI.CommandsDialogs;
+using GitUI.CommandsDialogs.Menus;
 using GitUI.Compat;
 using GitUI.LeftPanel;
 using GitUI.Theming;
@@ -24,6 +26,7 @@ using GitUI.UserControls.RevisionGrid.Graph;
 using GitUIPluginInterfaces;
 using Microsoft.VisualStudio.Threading;
 using NSubstitute;
+using ResourceManager;
 using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitExtensionsTests;
@@ -206,14 +209,62 @@ public sealed class VisualParityTests
     }
 
     [AvaloniaTest]
-    public void List_and_tree_selection_should_use_shared_dense_metrics_in_both_theme_variants()
+    public void Native_selection_should_not_reuse_the_configurable_editor_selection_palette()
     {
-        AssertListAndTreeStyles(ThemeVariant.Light, Color.Parse("#C3C3FF"), Colors.Black);
-        AssertListAndTreeStyles(ThemeVariant.Dark, Color.Parse("#00009B"), Color.Parse("#F0F0F0"));
+        AssertListAndTreeStyles(
+            ThemeVariant.Light,
+            Color.Parse("#0078D7"),
+            Colors.White,
+            Color.Parse("#C3C3FF"),
+            Colors.Black);
+        AssertListAndTreeStyles(
+            ThemeVariant.Dark,
+            Color.Parse("#2864B4"),
+            Colors.Black,
+            Color.Parse("#00009B"),
+            Color.Parse("#F0F0F0"));
     }
 
     [AvaloniaTest]
-    public void FormBrowse_should_keep_all_main_sections_usable_at_its_minimum_size()
+    [Category("P8.6i.126")]
+    public void Checked_toggle_presenter_should_not_inherit_the_platform_accent()
+    {
+        foreach ((ThemeVariant theme, Color expected) in new[]
+        {
+            (ThemeVariant.Light, Color.Parse("#A0A0A0")),
+            (ThemeVariant.Dark, Color.Parse("#4A4A4A")),
+        })
+        {
+            ToggleButton toggle = new()
+            {
+                Content = "Checked",
+                IsChecked = true,
+            };
+            Window window = new()
+            {
+                RequestedThemeVariant = theme,
+                Content = toggle,
+            };
+            window.Show();
+            try
+            {
+                Dispatcher.UIThread.RunJobs();
+                ContentPresenter presenter = toggle.GetVisualDescendants()
+                    .OfType<ContentPresenter>()
+                    .Single(control => control.Name == "PART_ContentPresenter");
+                GetColor(toggle.Background).Should().Be(expected);
+                GetColor(presenter.Background).Should().Be(expected,
+                    "the rendered checked surface must use the deterministic Git Extensions palette");
+            }
+            finally
+            {
+                window.Close();
+            }
+        }
+    }
+
+    [AvaloniaTest]
+    public void FormBrowse_should_keep_all_main_sections_usable_at_its_source_authored_size()
     {
         CommitInfoPosition originalPosition = AppSettings.CommitInfoPosition;
         bool originalShowSplitView = AppSettings.ShowSplitViewLayout;
@@ -223,16 +274,56 @@ public sealed class VisualParityTests
             AppSettings.ShowSplitViewLayout = true;
             FormBrowse form = new()
             {
-                Width = 900,
-                Height = 560,
+                Width = 923,
+                Height = 573,
             };
             form.Show();
             try
             {
                 Dispatcher.UIThread.RunJobs();
 
-                form.MinWidth.Should().Be(900);
-                form.MinHeight.Should().Be(560);
+                form.MinWidth.Should().Be(0);
+                form.MinHeight.Should().Be(0);
+                GitUI.Compat.WinFormsControls.ToolStripContainer toolPanel = form.FindControl<GitUI.Compat.WinFormsControls.ToolStripContainer>("toolPanel")!;
+                NativeToolStrip toolStripMain = form.FindControl<NativeToolStrip>("ToolStripMain")!;
+                FilterToolBar toolStripFilters = form.FindControl<FilterToolBar>("ToolStripFilters")!;
+                toolPanel.Bounds.Should().Be(new Rect(0, 27, 923, 546));
+                // The native strip ends after Settings and gives its remaining row width
+                // to filters. Text/font metrics may differ by platform; 812 was a stale
+                // fixed-width assumption that forced every filter into overflow.
+                form.toolStripMainHost.Bounds.Position.Should().Be(new Point(7, 0));
+                form.toolStripMainHost.Bounds.Height.Should().Be(25);
+                form.toolStripMainHost.Bounds.Width.Should().Be(toolStripMain.PreferredSize.Width);
+                form.toolStripFiltersHost.Bounds.X.Should().Be(form.toolStripMainHost.Bounds.Right);
+                form.toolStripFiltersHost.Bounds.Right.Should().Be(869);
+                form.toolStripFiltersHost.Bounds.Height.Should().Be(27);
+                form.toolStripFiltersOverflow.IsVisible.Should().BeTrue();
+                NativeToolStrip filterItems = toolStripFilters.Strip;
+                Control[] originalFilterItems = filterItems.Items.ToArray();
+                filterItems.OverflowItems.Should().NotBeEmpty();
+                filterItems.Items.Should().OnlyContain(item => item.Opacity == 1 && item.IsHitTestVisible);
+                form.toolStripFiltersOverflow.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+                Dispatcher.UIThread.RunJobs();
+                toolStripFilters.Parent.Should().BeSameAs(form.toolStripFiltersHost);
+                filterItems.Opacity.Should().Be(1);
+                filterItems.IsHitTestVisible.Should().BeTrue();
+                filterItems.IsOverflowOpen.Should().BeTrue();
+                Control[] displayedOverflow = filterItems.OverflowItems.Where(item => !NativeToolStrip.GetItemIsSeparator(item)).ToArray();
+                displayedOverflow.Should().OnlyContain(item => item.GetVisualParent() == filterItems.OverflowContent);
+                IconDropDownButton branchFilter = toolStripFilters.FindControl<IconDropDownButton>("tsddbtnBranchFilter")!;
+                filterItems.GetItemPlacement(branchFilter).Should().Be(NativeToolStripItemPlacement.Overflow);
+                branchFilter.IsEffectivelyVisible.Should().BeTrue();
+                branchFilter.Flyout!.ShowAt(branchFilter);
+                Dispatcher.UIThread.RunJobs();
+                branchFilter.Flyout.IsOpen.Should().BeTrue();
+                branchFilter.Flyout.Hide();
+                filterItems.CloseOverflow();
+                Dispatcher.UIThread.RunJobs();
+                toolStripFilters.Parent.Should().BeSameAs(form.toolStripFiltersHost);
+                filterItems.Items.Should().Equal(originalFilterItems);
+                filterItems.Items.Should().OnlyContain(item => item.Opacity == 1 && item.IsHitTestVisible);
+                Point settingsPosition = form.EditSettings.TranslatePoint(default, toolStripMain)!.Value;
+                settingsPosition.X.Should().BeLessThan(toolStripMain.Bounds.Width);
                 Point repoTreePosition = form.repoObjectsTree.TranslatePoint(new Point(), form)
                     ?? throw new InvalidOperationException("The repository tree position was not available.");
                 repoTreePosition.X.Should().BeApproximately(7, 0.1);
@@ -242,9 +333,9 @@ public sealed class VisualParityTests
                 form.RevisionGrid.Bounds.Height.Should().BeGreaterThan(0);
                 form.CommitInfoTabControl.SelectedItem.Should().BeSameAs(form.CommitInfoTabPage);
                 form.CommitInfoTabControl.Bounds.Height.Should().BeGreaterThan(0);
-                form.CommitInfoTabPage.Bounds.Height.Should().Be(23);
-                form.DiffTabPage.Bounds.Height.Should().Be(23);
-                form.TreeTabPage.Bounds.Height.Should().Be(23);
+                form.CommitInfoTabPage.Bounds.Height.Should().BeGreaterThanOrEqualTo(23);
+                form.DiffTabPage.Bounds.Height.Should().BeGreaterThanOrEqualTo(23);
+                form.TreeTabPage.Bounds.Height.Should().BeGreaterThanOrEqualTo(23);
                 form.commitInfoBelowHost.Bounds.Height.Should().BeGreaterThan(0);
                 Point commitHostPosition = form.commitInfoBelowHost.TranslatePoint(new Point(), form.CommitInfoTabControl)
                     ?? throw new InvalidOperationException("The commit-info host position was not available.");
@@ -276,9 +367,10 @@ public sealed class VisualParityTests
 
                 Menu menu = form.FindControl<Menu>("mainMenuStrip")
                     ?? throw new InvalidOperationException("The main menu was not created.");
-                menu.Bounds.Height.Should().Be(24);
+                menu.Bounds.Height.Should().Be(27);
+                GetColor(menu.Background).Should().Be(GetColor(form.Background));
                 MenuItem[] visibleMenuItems = menu.Items.Cast<MenuItem>().Where(item => item.IsVisible).ToArray();
-                visibleMenuItems.Should().OnlyContain(item => item.Bounds.Height == 20);
+                visibleMenuItems.Should().OnlyContain(item => item.Bounds.Height == 19);
                 Rect[] closedMenuItemBounds = visibleMenuItems.Select(item => item.Bounds).ToArray();
                 form.commandsToolStripMenuItem.IsSubMenuOpen = true;
                 Dispatcher.UIThread.RunJobs();
@@ -310,7 +402,129 @@ public sealed class VisualParityTests
     }
 
     [AvaloniaTest]
-    public void FormBrowse_toolbars_should_stay_compact_and_wrap_only_at_narrow_widths()
+    public void FormBrowse_should_use_the_source_authored_native_96_dpi_client_size()
+    {
+        FormBrowse form = new();
+
+        form.Width.Should().Be(923);
+        form.Height.Should().Be(573);
+        form.MinWidth.Should().Be(0);
+        form.MinHeight.Should().Be(0);
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Browse_tab_strip_should_paint_its_header_and_pages_like_the_native_tabs()
+    {
+        foreach ((ThemeVariant theme, Color header, Color selected, Color unselected) in new[]
+        {
+            (ThemeVariant.Light, Color.Parse("#FFFFFF"), Color.Parse("#F9F9F9"), Color.Parse("#F3F3F3")),
+            (ThemeVariant.Dark, Color.Parse("#323232"), Color.Parse("#323232"), Color.Parse("#202020")),
+        })
+        {
+            FormBrowse form = new()
+            {
+                Width = 923,
+                Height = 573,
+                RequestedThemeVariant = theme,
+            };
+            form.Show();
+            try
+            {
+                Dispatcher.UIThread.RunJobs();
+                ItemsPresenter headerItems = form.CommitInfoTabControl.GetVisualDescendants()
+                    .OfType<ItemsPresenter>()
+                    .Single(presenter => presenter.Name == "PART_ItemsPresenter");
+                GetColor(((Border)headerItems.Parent!).Background).Should().Be(header);
+                ContentPresenter contentHost = form.CommitInfoTabControl.GetVisualDescendants()
+                    .OfType<ContentPresenter>()
+                    .Single(presenter => presenter.Name == "PART_SelectedContentHost");
+                contentHost.TranslatePoint(default, form.CommitInfoTabControl)!.Value.Y.Should().Be(29);
+                Border selectedPage = form.CommitInfoTabPage.GetVisualDescendants()
+                    .OfType<Border>()
+                    .Single(border => border.Name == "PART_LayoutRoot");
+                Border unselectedPage = form.DiffTabPage.GetVisualDescendants()
+                    .OfType<Border>()
+                    .Single(border => border.Name == "PART_LayoutRoot");
+                GetColor(selectedPage.Background).Should().Be(selected);
+                GetColor(unselectedPage.Background).Should().Be(unselected);
+                TabItem[] pages = [form.CommitInfoTabPage, form.DiffTabPage, form.TreeTabPage];
+                Dictionary<TabItem, (Point Origin, Rect Bounds)> allocations = [];
+                Dictionary<TabItem, List<(bool IsSelected, Point HeaderOrigin)>> headerPositions =
+                    pages.ToDictionary(page => page, _ => new List<(bool, Point)>());
+                Point? expectedContentOrigin = null;
+                Rect? expectedContentBounds = null;
+                foreach (TabItem page in pages)
+                {
+                    form.CommitInfoTabControl.SelectedItem = page;
+                    Dispatcher.UIThread.RunJobs();
+
+                    Point contentOrigin = contentHost.TranslatePoint(default, form.CommitInfoTabControl)!.Value;
+                    if (expectedContentOrigin is null)
+                    {
+                        expectedContentOrigin = contentOrigin;
+                        expectedContentBounds = contentHost.Bounds;
+                    }
+                    else
+                    {
+                        contentOrigin.Should().Be(expectedContentOrigin.Value,
+                            "changing the selected header must not resize or move the page content");
+                        contentHost.Bounds.Should().Be(expectedContentBounds!.Value,
+                            "changing the selected header must not resize or move the page content");
+                    }
+
+                    foreach (TabItem sibling in pages)
+                    {
+                        Point itemOrigin = sibling.TranslatePoint(default, form.CommitInfoTabControl)!.Value;
+                        if (!allocations.TryAdd(sibling, (itemOrigin, sibling.Bounds)))
+                        {
+                            itemOrigin.Should().Be(allocations[sibling].Origin,
+                                "selecting another tab must not move surrounding tab allocations");
+                            sibling.Bounds.Should().Be(allocations[sibling].Bounds,
+                                "selecting another tab must not resize surrounding tab allocations");
+                        }
+
+                        Border layoutRoot = sibling.GetVisualDescendants()
+                            .OfType<Border>()
+                            .Single(border => border.Name == "PART_LayoutRoot");
+                        layoutRoot.Margin.Top.Should().Be(
+                            ReferenceEquals(sibling, page) ? 0 : 2,
+                            "raising one native tab must not raise or lower the sibling headers");
+                        ContentPresenter headerContent = sibling.GetVisualDescendants()
+                            .OfType<ContentPresenter>()
+                            .Single(presenter => presenter.Name == "PART_ContentPresenter");
+                        headerPositions[sibling].Add((
+                            ReferenceEquals(sibling, page),
+                            headerContent.TranslatePoint(default, form.CommitInfoTabControl)!.Value));
+                    }
+                }
+
+                foreach (TabItem page in pages)
+                {
+                    Point selectedHeader = headerPositions[page].Single(position => position.IsSelected).HeaderOrigin;
+                    Point[] unselectedHeaders = headerPositions[page]
+                        .Where(position => !position.IsSelected)
+                        .Select(position => position.HeaderOrigin)
+                        .ToArray();
+                    unselectedHeaders.Should().OnlyContain(
+                        position => Math.Abs(position.X - selectedHeader.X) < 0.001,
+                        "selection raises the complete icon/caption without moving it horizontally");
+                    unselectedHeaders.Should().OnlyContain(
+                        position => Math.Abs(position.Y - unselectedHeaders[0].Y) < 0.001,
+                        "surrounding tab contents retain the same vertical baseline");
+                    selectedHeader.Y.Should().BeApproximately(unselectedHeaders[0].Y - 2, 0.001,
+                        "the selected tab's icon and caption rise by the native two DIPs");
+                }
+            }
+            finally
+            {
+                form.Close();
+            }
+        }
+    }
+
+    [AvaloniaTest]
+    public void FormBrowse_toolbars_should_stay_in_the_source_single_overflow_row()
     {
         foreach (ThemeVariant theme in new[] { ThemeVariant.Light, ThemeVariant.Dark })
         {
@@ -324,11 +538,12 @@ public sealed class VisualParityTests
             try
             {
                 Dispatcher.UIThread.RunJobs();
-                WrapPanel toolPanel = form.FindControl<WrapPanel>("toolPanel")!;
-                StackPanel mainToolbar = form.FindControl<StackPanel>("ToolStripMain")!;
+                GitUI.Compat.WinFormsControls.ToolStripContainer toolPanel = form.FindControl<GitUI.Compat.WinFormsControls.ToolStripContainer>("toolPanel")!;
+                NativeToolStrip mainToolbar = form.FindControl<NativeToolStrip>("ToolStripMain")!;
                 mainToolbar.Bounds.Height.Should().Be(25);
-                toolPanel.Bounds.Height.Should().Be(25);
+                toolPanel.Bounds.Height.Should().Be(673);
                 mainToolbar.GetVisualDescendants().OfType<Button>()
+                    .Where(button => !ReferenceEquals(button, mainToolbar.OverflowButton))
                     .Should().OnlyContain(button => button.Bounds.Height <= 23);
 
                 ComboBox[] editableInputs = form.GetVisualDescendants()
@@ -349,7 +564,8 @@ public sealed class VisualParityTests
                         .Single();
 
                     input.Bounds.Height.Should().Be(23);
-                    input.Bounds.Y.Should().Be(1);
+                    input.Bounds.Y.Should().Be(2,
+                        "the running Browse filter owner is27px, centering its fixed23px hosted combo independently of the standalone25px context");
                     textViewport.Bounds.Height.Should().BeGreaterThanOrEqualTo(textPresenter.Bounds.Height);
                     Point presenterPosition = textPresenter.TranslatePoint(default, input)!.Value;
                     double topInset = presenterPosition.Y;
@@ -369,7 +585,9 @@ public sealed class VisualParityTests
                     .Where(button => button.IsVisible
                                      && button.Classes.Contains("gitextensions-toolbar-button"))
                     .ToArray();
-                splitButtons.Should().HaveCount(7);
+                splitButtons.Should().HaveCount(9);
+                splitButtons.Select(button => button.Name).Should().Contain(nameof(form.toolStripButtonLevelUp));
+                splitButtons.Select(button => button.Name).Should().Contain(nameof(form.userShell));
                 foreach (SplitButton splitButton in splitButtons)
                 {
                     Button primaryButton = splitButton.GetVisualDescendants()
@@ -382,10 +600,31 @@ public sealed class VisualParityTests
                         .OfType<PathIcon>()
                         .Single();
 
-                    splitButton.Bounds.Height.Should().Be(23);
-                    primaryButton.Bounds.Height.Should().Be(23);
-                    secondaryButton.Bounds.Width.Should().Be(13);
-                    secondaryButton.Bounds.Height.Should().Be(23);
+                    // The live native filter strip grows to 27px around its editors;
+                    // its split items are 24px, unlike the main strip's 22px items.
+                    int itemHeight = splitButton.FindAncestorOfType<FilterToolBar>() is null ? 22 : 24;
+                    splitButton.Bounds.Height.Should().Be(itemHeight);
+                    primaryButton.Bounds.Height.Should().Be(itemHeight);
+                    if (splitButton is NativeToolStripSplitButton { UseNativeToolStripLayout: true } nativeSplitButton)
+                    {
+                        // The main source ToolStrip reserves eleven pixels for its
+                        // drop-down plus one splitter; the separate filter adapter
+                        // has not opted into that source-specific implementation.
+                        secondaryButton.Bounds.Width.Should().Be(11);
+                        primaryButton.Bounds.Width.Should().Be(splitButton.Bounds.Width - 12);
+                        primaryButton.Bounds.Should().Be(nativeSplitButton.ButtonBounds);
+                        secondaryButton.Bounds.Should().Be(nativeSplitButton.DropDownButtonBounds);
+                        Border splitter = splitButton.GetVisualDescendants()
+                            .OfType<Border>()
+                            .Single(border => border.Name == "SeparatorBorder");
+                        splitter.Bounds.Should().Be(nativeSplitButton.SplitterBounds);
+                    }
+                    else
+                    {
+                        secondaryButton.Bounds.Width.Should().Be(13);
+                    }
+
+                    secondaryButton.Bounds.Height.Should().Be(itemHeight);
                     arrow.Bounds.Size.Should().Be(new Size(7, 5));
                 }
 
@@ -401,12 +640,16 @@ public sealed class VisualParityTests
                 })
                 {
                     iconOnlyButton.GetVisualDescendants().OfType<Image>().Should().ContainSingle();
-                    iconOnlyButton.GetVisualDescendants().OfType<TextBlock>().Should().BeEmpty();
+                    // Native DisplayStyle.Image neither paints a caption nor allocates
+                    // caption space, even when the reusable presenter retains its child.
+                    iconOnlyButton.GetVisualDescendants().OfType<TextBlock>()
+                        .Should().OnlyContain(text => !text.IsVisible
+                            && text.DesiredSize == default(Size) && text.Bounds.Size == default(Size));
                 }
 
                 form.Width = 900;
                 Dispatcher.UIThread.RunJobs();
-                toolPanel.Bounds.Height.Should().BeGreaterThan(25);
+                toolPanel.Bounds.Height.Should().Be(673);
             }
             finally
             {
@@ -438,6 +681,12 @@ public sealed class VisualParityTests
             contextMenu.Open(target);
             Dispatcher.UIThread.RunJobs();
             AssertSingleItemPopupFits(contextItem);
+            AssertDropDownMenuPaintOffsets(contextItem);
+            contextItem.IsEnabled = false;
+            Dispatcher.UIThread.RunJobs();
+            AssertDropDownMenuPaintOffsets(contextItem);
+            contextItem.IsEnabled = true;
+            Dispatcher.UIThread.RunJobs();
             contextItem.FontFamily.Should().Be(GetResource<FontFamily>(Application.Current!, "GitExtensionsUiFontFamily"));
             contextItem.FontSize.Should().Be(GetResource<double>(Application.Current!, "GitExtensionsUiFontSize"));
             contextItem.FontStyle.Should().Be(GetResource<FontStyle>(Application.Current!, "GitExtensionsUiFontStyle"));
@@ -495,6 +744,7 @@ public sealed class VisualParityTests
             flyout.ShowAt(target);
             Dispatcher.UIThread.RunJobs();
             AssertSingleItemPopupFits(flyoutItem);
+            AssertDropDownMenuPaintOffsets(flyoutItem);
             GetMenuLayoutRoot(flyoutItem).Background.Should().Be(
                 GetThemeResource<IBrush>(Application.Current!, "GitExtensionsMenuRenderedBackgroundBrush"));
             TopLevel flyoutRoot = TopLevel.GetTopLevel(flyoutItem)!;
@@ -571,6 +821,179 @@ public sealed class VisualParityTests
             owner.IsSubMenuOpen = false;
             Dispatcher.UIThread.RunJobs();
             window.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Browse_start_menu_should_apply_the_source_menu_item_width_on_open()
+    {
+        StartToolStripMenuItem owner = new();
+        MenuItem firstItem = owner.Items.OfType<MenuItem>().First();
+        Window window = new()
+        {
+            Width = 640,
+            Height = 240,
+            RequestedThemeVariant = ThemeVariant.Light,
+            Content = new Menu { Items = { owner } },
+        };
+        window.Show();
+        try
+        {
+            owner.IsSubMenuOpen = true;
+            Dispatcher.UIThread.RunJobs();
+
+            firstItem.Width.Should().BeGreaterThan(0);
+            firstItem.Width.Should().Be(Math.Ceiling(firstItem.Width));
+            Visual popupHost = firstItem.GetVisualAncestors()
+                .Single(ancestor => ancestor.GetType().Name == "OverlayPopupHost");
+            popupHost.Bounds.Height.Should().Be(148);
+            popupHost.Bounds.Width.Should().BeGreaterThanOrEqualTo(firstItem.Bounds.Width);
+            if (OperatingSystem.IsWindows())
+            {
+                popupHost.Bounds.Width.Should().Be(199);
+            }
+
+            CaptureSurface capturedPopup = new AvaloniaControlTreeReader(window, renderScale: 1)
+                .ReadSurface(
+                    (Control)popupHost,
+                    "popup:0",
+                    new PixelRect(5, 23, (int)popupHost.Bounds.Width, (int)popupHost.Bounds.Height));
+            capturedPopup.Root.BoundsDip.Width.Should().Be((decimal)popupHost.Bounds.Width);
+            capturedPopup.Root.BoundsDip.Height.Should().Be((decimal)popupHost.Bounds.Height);
+            capturedPopup.Root.ClientSizeDip.Width.Should().Be((decimal)popupHost.Bounds.Width);
+            capturedPopup.Root.ClientSizeDip.Height.Should().Be((decimal)popupHost.Bounds.Height);
+
+            ScrollViewer popupScroller = popupHost.GetVisualDescendants().OfType<ScrollViewer>().Single();
+            popupScroller.Margin.Should().Be(new Thickness(0, 1));
+            ((Border)popupScroller.Parent!).Bounds.Height.Should().Be(148);
+            owner.Items.OfType<Separator>().Should().OnlyContain(separator => separator.Bounds.Height == 6);
+        }
+        finally
+        {
+            owner.IsSubMenuOpen = false;
+            Dispatcher.UIThread.RunJobs();
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Browse_full_window_start_menu_should_keep_the_source_popup_extent()
+    {
+        using FormBrowse form = new() { RequestedThemeVariant = ThemeVariant.Light };
+        form.Show();
+        try
+        {
+            form.fileToolStripMenuItem.IsSubMenuOpen = true;
+            Dispatcher.UIThread.RunJobs();
+
+            MenuItem firstItem = form.fileToolStripMenuItem.Items.OfType<MenuItem>().First();
+            Visual popupHost = firstItem.GetVisualAncestors()
+                .Single(ancestor => ancestor.GetType().Name == "OverlayPopupHost");
+            popupHost.Bounds.Height.Should().Be(148);
+            popupHost.Bounds.Width.Should().BeGreaterThanOrEqualTo(firstItem.Bounds.Width);
+            if (OperatingSystem.IsWindows())
+            {
+                popupHost.Bounds.Width.Should().Be(199);
+            }
+
+            ContentPresenter topLevelHeader = form.fileToolStripMenuItem
+                .GetVisualDescendants()
+                .OfType<ContentPresenter>()
+                .Single(presenter => presenter.Name == "PART_HeaderPresenter");
+            TranslateTransform topLevelTextOffset = topLevelHeader.RenderTransform
+                .Should().BeOfType<TranslateTransform>().Subject;
+            topLevelTextOffset.X.Should().Be(1);
+            topLevelTextOffset.Y.Should().Be(-1);
+        }
+        finally
+        {
+            form.fileToolStripMenuItem.IsSubMenuOpen = false;
+            Dispatcher.UIThread.RunJobs();
+            form.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Browse_menu_strip_should_round_auto_widths_and_remeasure_translations()
+    {
+        GitUI.Compat.WinFormsControls.ToolStripMenuItem automatic = new() { Header = "_Start" };
+        GitUI.Compat.WinFormsControls.ToolStripMenuItem explicitWidth = new() { Header = "_Tools", Width = 47 };
+        GitUI.Compat.WinFormsControls.MenuStripEx menu = new() { Items = { automatic, explicitWidth } };
+        Window window = new() { Width = 320, Height = 160, Content = menu };
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            double originalWidth = automatic.Width;
+            originalWidth.Should().BeGreaterThan(0);
+            originalWidth.Should().Be(Math.Ceiling(originalWidth));
+            explicitWidth.Width.Should().Be(47);
+
+            automatic.Header = "_A translated command with longer text";
+            Dispatcher.UIThread.RunJobs();
+            automatic.Width.Should().BeGreaterThan(originalWidth);
+            automatic.Width.Should().Be(Math.Ceiling(automatic.Width));
+            explicitWidth.Width.Should().Be(47);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Browse_auto_size_menu_items_should_remeasure_for_font_and_translation_changes()
+    {
+        using FormBrowse form = new();
+        form.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            Menu menu = form.FindControl<Menu>("mainMenuStrip")!;
+            foreach (string name in new[] { "commandsToolStripMenuItem", "pluginsToolStripMenuItem", "toolsToolStripMenuItem", "helpToolStripMenuItem" })
+            {
+                MenuItem item = menu.Items.OfType<MenuItem>().Single(control => control.Name == name);
+                item.IsVisible = true;
+                Dispatcher.UIThread.RunJobs();
+                item.Bounds.Width.Should().Be(MeasurePreferredWidth(item));
+                double initialWidth = item.Bounds.Width;
+                item.Header = "_A considerably longer translated command";
+                Dispatcher.UIThread.RunJobs();
+                item.Bounds.Width.Should().BeGreaterThan(initialWidth);
+                item.Bounds.Width.Should().Be(MeasurePreferredWidth(item));
+                item.Width.Should().Be(Math.Ceiling(item.Width));
+
+                double translatedWidth = item.Bounds.Width;
+                item.FontSize += 4;
+                Dispatcher.UIThread.RunJobs();
+                item.Bounds.Width.Should().BeGreaterThan(translatedWidth);
+                item.Bounds.Width.Should().Be(MeasurePreferredWidth(item));
+            }
+        }
+        finally
+        {
+            form.Close();
+        }
+
+        return;
+
+        static double MeasurePreferredWidth(MenuItem item)
+        {
+            const int nativeItemBorderWidth = 2;
+            string text = AvaloniaTranslationUtils.RemoveAvaloniaMnemonics(item.Header as string ?? string.Empty);
+            if (OperatingSystem.IsWindows())
+            {
+                text = text.Replace("&", "&&", StringComparison.Ordinal);
+            }
+
+            Thickness padding = GitUI.Compat.WinFormsControls.MenuStripEx.GetNativeItemPadding(item);
+            return Math.Ceiling(Math.Max(item.MinWidth,
+                WinFormsTextMeasurer.MeasureTextRenderer(item, text).Width
+                + (nativeItemBorderWidth * 2) + padding.Left + padding.Right));
         }
     }
 
@@ -721,6 +1144,7 @@ public sealed class VisualParityTests
     }
 
     [AvaloniaTest]
+    [Category("P8.6i.126")]
     public void RepoObjectsTree_should_render_parent_child_connectors()
     {
         RepoObjectsTree control = new();
@@ -728,7 +1152,7 @@ public sealed class VisualParityTests
         [
             CreateRef("first", isHead: true),
             CreateRef("second", isHead: true),
-        ]);
+        ], []);
 
         Window window = new()
         {
@@ -755,7 +1179,7 @@ public sealed class VisualParityTests
                 .ToArray();
 
             children.Should().HaveCount(2);
-            connectors.Should().HaveCount(7);
+            connectors.Should().HaveCount(8);
             TreeConnectorControl[] childConnectors = connectors
                 .Where(connector => children.Contains(connector.Item))
                 .ToArray();
@@ -780,10 +1204,18 @@ public sealed class VisualParityTests
             TextBlock parentText = parentHeader.GetVisualDescendants().OfType<TextBlock>().Single();
             Image childIcon = childHeader.GetVisualDescendants().OfType<Image>().Single();
             TextBlock childText = childHeader.GetVisualDescendants().OfType<TextBlock>().Single();
+            TreeViewItem stashes = tree.Items.Cast<TreeViewItem>()
+                .Single(item => item.GetVisualDescendants().OfType<TextBlock>().Any(text => text.Text == "Stashes"));
+            ContentPresenter stashesHeader = stashes.GetVisualDescendants()
+                .OfType<ContentPresenter>()
+                .Single(presenter => presenter.Name == "PART_HeaderPresenter"
+                    && presenter.FindAncestorOfType<TreeViewItem>() == stashes);
+            Image stashesIcon = stashesHeader.GetVisualDescendants().OfType<Image>().Single();
             double parentIconX = parentIcon.TranslatePoint(default, branches)!.Value.X;
             double parentTextX = parentText.TranslatePoint(default, branches)!.Value.X;
             double childIconX = childIcon.TranslatePoint(default, children[0])!.Value.X;
             double childTextX = childText.TranslatePoint(default, children[0])!.Value.X;
+            double stashesIconX = stashesIcon.TranslatePoint(default, stashes)!.Value.X;
 
             ToggleButton parentChevron = branches.GetVisualDescendants()
                 .OfType<ToggleButton>()
@@ -792,10 +1224,18 @@ public sealed class VisualParityTests
             Point parentChevronPosition = parentChevron.TranslatePoint(default, branches)!.Value;
             parentChevronPosition.X.Should().Be(4);
             parentChevron.Bounds.Size.Should().Be(new Size(12, 12));
-            parentIconX.Should().BeApproximately(20, 0.1);
-            (parentIconX - parentChevronPosition.X - parentChevron.Bounds.Width).Should().Be(4);
-            childIconX.Should().Be(parentTextX);
-            childTextX.Should().Be(parentTextX + 18);
+            parentIconX.Should().BeApproximately(22, 0.1);
+            (parentIconX - parentChevronPosition.X - parentChevron.Bounds.Width).Should().Be(6);
+            childIconX.Should().Be(parentIconX + 19,
+                "the child icon follows the native TreeView's 19-DIP default indent");
+            childTextX.Should().Be(parentTextX + 19,
+                "the repository tree inherits the native TreeView's 19-DIP default indent");
+            stashesIconX.Should().Be(parentIconX,
+                "native leaf roots reserve the same expander/connector slot as expandable roots");
+            Panel stashesChevronHost = stashes.GetVisualDescendants()
+                .OfType<Panel>()
+                .Single(panel => panel.Name == "PART_ExpandCollapseChevronContainer");
+            stashesChevronHost.Bounds.Width.Should().Be(12);
             window.CaptureRenderedFrame().Should().NotBeNull();
         }
         finally
@@ -1125,6 +1565,7 @@ public sealed class VisualParityTests
     }
 
     [AvaloniaTest]
+    [Category("P8.6i.126")]
     public void Application_theme_should_follow_built_in_Git_Extensions_settings()
     {
         Application application = Application.Current
@@ -1211,8 +1652,10 @@ public sealed class VisualParityTests
 
     private static void AssertListAndTreeStyles(
         ThemeVariant themeVariant,
-        Color selectionColor,
-        Color selectionForegroundColor)
+        Color nativeSelectionColor,
+        Color nativeSelectionForegroundColor,
+        Color editorSelectionColor,
+        Color editorSelectionForegroundColor)
     {
         ListBox list = new()
         {
@@ -1231,23 +1674,31 @@ public sealed class VisualParityTests
             SelectionLength = 8,
             Classes = { "gitextensions-diff-editor" },
         };
+        TextBox textBox = new()
+        {
+            Text = "selected text",
+            SelectionStart = 0,
+            SelectionEnd = 8,
+        };
         Grid content = new()
         {
-            RowDefinitions = new RowDefinitions("*,*,*"),
+            RowDefinitions = new RowDefinitions("*,*,*,*"),
             Children =
             {
                 list,
                 treeItem,
                 editor,
+                textBox,
             },
         };
         Grid.SetRow(treeItem, 1);
         Grid.SetRow(editor, 2);
+        Grid.SetRow(textBox, 3);
 
         Window window = new()
         {
             Width = 400,
-            Height = 240,
+            Height = 320,
             RequestedThemeVariant = themeVariant,
             Content = content,
         };
@@ -1270,11 +1721,14 @@ public sealed class VisualParityTests
 
             listItem.MinHeight.Should().Be(24);
             listItem.Padding.Should().Be(new Thickness(6, 2));
-            GetColor(listPresenter.Background).Should().Be(selectionColor);
+            GetColor(listPresenter.Background).Should().Be(nativeSelectionColor);
             treeItem.MinHeight.Should().Be(24);
-            GetColor(treeLayoutRoot.Background).Should().Be(selectionColor);
-            GetColor(editor.TextArea.SelectionBrush).Should().Be(selectionColor);
-            GetColor(editor.TextArea.SelectionForeground).Should().Be(selectionForegroundColor);
+            GetColor(treeLayoutRoot.Background).Should().Be(nativeSelectionColor);
+            editor.FontSize.Should().Be(GetResource<double>(Application.Current!, "GitExtensionsFixedWidthFontSize"));
+            GetColor(editor.TextArea.SelectionBrush).Should().Be(editorSelectionColor);
+            GetColor(editor.TextArea.SelectionForeground).Should().Be(editorSelectionForegroundColor);
+            GetColor(textBox.SelectionBrush).Should().Be(nativeSelectionColor);
+            GetColor(textBox.SelectionForegroundBrush).Should().Be(nativeSelectionForegroundColor);
 
             treeItem.Focus();
             Dispatcher.UIThread.RunJobs();
@@ -1284,6 +1738,28 @@ public sealed class VisualParityTests
                 GetResourceBrushColor(application, "GitExtensionsInactiveSelectionBackgroundBrush", themeVariant));
             GetColor(listPresenter.Foreground).Should().Be(
                 GetResourceBrushColor(application, "GitExtensionsInactiveSelectionForegroundBrush", themeVariant));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Filter_dropdown_buttons_should_keep_native_image_item_widths_without_a_Browse_parent_style()
+    {
+        FilterToolBar filter = new();
+        Window window = new() { Width = 800, Height = 120, Content = filter };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            foreach (string name in new[] { "tsddbtnBranchFilter", "tsddbtnRevisionFilter" })
+            {
+                filter.FindControl<Control>(name)!.Bounds.Width.Should().Be(29, name);
+            }
         }
         finally
         {
@@ -1317,6 +1793,86 @@ public sealed class VisualParityTests
             .OfType<Border>()
             .Single(border => border.Name == "PART_LayoutRoot");
 
+    private static void AssertDropDownMenuPaintOffsets(MenuItem item)
+    {
+        Control iconPresenter = item.GetVisualDescendants().OfType<Control>()
+            .Single(control => control.Name == "PART_IconPresenter");
+        ContentPresenter headerPresenter = item.GetVisualDescendants().OfType<ContentPresenter>()
+            .Single(control => control.Name == "PART_HeaderPresenter");
+        TextBlock inputGestureText = item.GetVisualDescendants().OfType<TextBlock>()
+            .Single(control => control.Name == "PART_InputGestureText");
+        Control chevron = item.GetVisualDescendants().OfType<Control>()
+            .Single(control => control.Name == "PART_ChevronPath");
+
+        TranslateTransform iconOffset = iconPresenter.RenderTransform
+            .Should().BeOfType<TranslateTransform>().Subject;
+        iconOffset.X.Should().Be(5);
+        iconOffset.Y.Should().Be(0);
+        TranslateTransform headerOffset = headerPresenter.RenderTransform
+            .Should().BeOfType<TranslateTransform>().Subject;
+        headerOffset.X.Should().Be(9);
+        headerOffset.Y.Should().Be(-1);
+        TranslateTransform gestureOffset = inputGestureText.RenderTransform
+            .Should().BeOfType<TranslateTransform>().Subject;
+        gestureOffset.X.Should().Be(-10);
+        gestureOffset.Y.Should().Be(-1);
+        TranslateTransform chevronOffset = chevron.RenderTransform
+            .Should().BeOfType<TranslateTransform>().Subject;
+        chevronOffset.X.Should().Be(-7);
+        chevronOffset.Y.Should().Be(0);
+        Avalonia.Controls.Shapes.Path arrow = chevron.Should().BeOfType<Avalonia.Controls.Shapes.Path>().Subject;
+        arrow.Width.Should().Be(4);
+        arrow.Height.Should().Be(8);
+        arrow.StrokeThickness.Should().Be(0);
+        arrow.Fill.Should().Be(item.Foreground);
+        arrow.Data!.Bounds.Should().Be(new Rect(0, 0, 4, 8));
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Browse_tools_menu_should_match_the_native_popup_width_with_configured_shortcuts()
+    {
+        ToolsToolStripMenuItem owner = new();
+        MenuItem firstItem = owner.Items.OfType<MenuItem>().First();
+        owner.RefreshShortcutKeys(
+        [
+            new HotkeyCommand((int)FormBrowse.Command.GitBash, nameof(FormBrowse.Command.GitBash))
+            {
+                KeyData = WinFormsShims.Keys.Control | WinFormsShims.Keys.G,
+            },
+            new HotkeyCommand((int)FormBrowse.Command.OpenSettings, nameof(FormBrowse.Command.OpenSettings))
+            {
+                KeyData = WinFormsShims.Keys.Control | WinFormsShims.Keys.Oemcomma,
+            },
+        ]);
+        Window window = new()
+        {
+            Width = 640,
+            Height = 240,
+            RequestedThemeVariant = ThemeVariant.Light,
+            Content = new Menu { Items = { owner } },
+        };
+        window.Show();
+        try
+        {
+            owner.IsSubMenuOpen = true;
+            Dispatcher.UIThread.RunJobs();
+
+            Visual popupHost = firstItem.GetVisualAncestors()
+                .Single(ancestor => ancestor.GetType().Name == "OverlayPopupHost");
+            if (OperatingSystem.IsWindows())
+            {
+                popupHost.Bounds.Width.Should().Be(193);
+            }
+        }
+        finally
+        {
+            owner.IsSubMenuOpen = false;
+            Dispatcher.UIThread.RunJobs();
+            window.Close();
+        }
+    }
+
     private static void AssertRenderedSeparatorPalette(Separator separator)
     {
         Border[] borders = [.. separator.GetVisualDescendants().OfType<Border>()];
@@ -1325,6 +1881,7 @@ public sealed class VisualParityTests
             GetThemeResource<IBrush>(Application.Current!, "GitExtensionsMenuRenderedBackgroundBrush"));
         borders[1].Background.Should().Be(
             GetThemeResource<IBrush>(Application.Current!, "GitExtensionsMenuRenderedBorderBrush"));
+        borders[1].Margin.Should().Be(new Thickness(28, 0, 1, 0));
     }
 
     private static void AssertRefLabelRendering(
@@ -1368,7 +1925,7 @@ public sealed class VisualParityTests
                 GitExtUtils.GitUI.Theming.ColorHelper.Lerp(head, System.Drawing.Color.Black, 0.25F)));
             GetColor(label.OutlineBrush).Should().Be(ToMediaColor(
                 GitExtUtils.GitUI.Theming.ColorHelper.Lerp(head, windowBackground, 0.5F)));
-            label.Bounds.Height.Should().Be(24);
+            label.Bounds.Height.Should().Be(RevisionGridControl.GetRowHeight(label));
             label.FontSize.Should().BeGreaterThan(11);
             label.Shape.Should().Be(gitRef.IsTag ? RefLabelShape.PointLeft : RefLabelShape.Rect);
             window.CaptureRenderedFrame().Should().NotBeNull();
@@ -1398,10 +1955,18 @@ public sealed class VisualParityTests
         gitRef.IsTag.Returns(isTag);
         gitRef.IsSelected.Returns(isSelected);
         gitRef.IsSelectedHeadMergeSource.Returns(isSelectedHeadMergeSource);
+        gitRef.ObjectId.Returns(ObjectId.Random());
         gitRef.LocalName.Returns(localName ?? name);
         gitRef.MergeWith.Returns(mergeWith);
         gitRef.Remote.Returns(remote);
         gitRef.TrackingRemote.Returns(trackingRemote);
+        gitRef.IsTrackingRemote(Arg.Any<IGitRef>()).Returns(callInfo =>
+        {
+            IGitRef candidate = callInfo.Arg<IGitRef>();
+            return isHead && candidate.IsRemote
+                && mergeWith == candidate.LocalName
+                && trackingRemote == candidate.Remote;
+        });
         return gitRef;
     }
 
@@ -1488,6 +2053,30 @@ public sealed class VisualParityTests
 
         GetResourceBrushColor(application, "GitExtensionsRevisionAlternatingRowBrush", themeVariant)
             .Should().Be(ToMediaColor(panel.MakeDarkerBy(isDark ? -0.018 : 0.025)));
+        GetResourceBrushColor(application, "GitExtensionsDataGridViewSelectionBackgroundBrush", themeVariant)
+            .Should().Be(ToMediaColor(AvaloniaThemeResources.ResolveSystemColor(
+                settings,
+                System.Drawing.KnownColor.Highlight)));
+        GetResourceBrushColor(application, "GitExtensionsNativeSelectionBackgroundBrush", themeVariant)
+            .Should().Be(ToMediaColor(AvaloniaThemeResources.ResolveSystemColor(
+                settings,
+                System.Drawing.KnownColor.Highlight)));
+        GetResourceBrushColor(application, "GitExtensionsNativeSelectionForegroundBrush", themeVariant)
+            .Should().Be(ToMediaColor(AvaloniaThemeResources.ResolveSystemColor(
+                settings,
+                System.Drawing.KnownColor.HighlightText)));
+        GetResourceBrushColor(application, "GitExtensionsToolStripCheckedBackgroundBrush", themeVariant)
+            .Should().Be(Color.Parse(isDark ? "#28445B" : "#CCE8FF"));
+        GetResourceBrushColor(application, "GitExtensionsNativeTabBorderBrush", themeVariant)
+            .Should().Be(Color.Parse(isDark ? "#3B3B3B" : "#E5E5E5"));
+        GetResourceBrushColor(application, "GitExtensionsBrowseTabUnselectedBackgroundBrush", themeVariant)
+            .Should().Be(Color.Parse(isDark ? "#202020" : "#F3F3F3"));
+        GetResourceBrushColor(application, "GitExtensionsNativeScrollBarBackgroundBrush", themeVariant)
+            .Should().Be(Color.Parse(isDark ? "#171717" : "#F0F0F0"));
+        GetResourceBrushColor(application, "GitExtensionsNativeScrollBarThumbBrush", themeVariant)
+            .Should().Be(Color.Parse(isDark ? "#959595" : "#858585"));
+        GetResourceBrushColor(application, "GitExtensionsTreeConnectorBrush", themeVariant)
+            .Should().Be(Color.Parse("#6D6D6D"));
         GetResourceBrushColor(application, "GitExtensionsRevisionAuthoredBrush", themeVariant)
             .Should().Be(ToMediaColor(AvaloniaThemeResources.ResolveAppColor(settings, AppColor.AuthoredHighlight)));
         GetResourceBrushColor(application, "GitExtensionsRevisionSelectedSubjectBrush", themeVariant)
@@ -1523,6 +2112,9 @@ public sealed class VisualParityTests
                 isDark
                     ? editor.MakeDarkerBy(-0.06)
                     : AvaloniaThemeResources.ResolveSystemColor(settings, System.Drawing.KnownColor.ControlLight)));
+        Color expectedInteractiveAction = Color.Parse("#87CEFA");
+        GetResourceBrushColor(application, "GitExtensionsInteractiveActionBackgroundBrush", themeVariant)
+            .Should().Be(expectedInteractiveAction);
 
         System.Drawing.Color[] blameAges =
         [

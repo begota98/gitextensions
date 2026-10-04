@@ -1,4 +1,4 @@
-﻿using System.Text.RegularExpressions;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -244,6 +244,7 @@ internal static class SourceInventoryReader
             ExtractHotkeys(declaration, part);
             ExtractSettings(declaration, part);
             ExtractTranslationStrings(declaration, className, part);
+            ExtractExplicitTranslationKeys(declaration, className, part);
             ExtractDesignerTranslationKeys(declaration, className, part);
             ExtractComments(declaration, tree, part);
             parts.Add(part);
@@ -458,6 +459,21 @@ internal static class SourceInventoryReader
 
     private static void ExtractEventWiring(TypeDeclarationSyntax declaration, MutablePart part)
     {
+        HashSet<string> methodNames = declaration.Members
+            .OfType<MethodDeclarationSyntax>()
+            .Select(method => method.Identifier.ValueText)
+            .ToHashSet(StringComparer.Ordinal);
+        HashSet<string> delegateNames = declaration.DescendantNodes()
+            .OfType<VariableDeclarationSyntax>()
+            .Where(variable => IsDelegateLikeType(variable.Type))
+            .SelectMany(variable => variable.Variables)
+            .Select(variable => variable.Identifier.ValueText)
+            .Concat(declaration.DescendantNodes()
+                .OfType<ParameterSyntax>()
+                .Where(parameter => IsDelegateLikeType(parameter.Type))
+                .Select(parameter => parameter.Identifier.ValueText))
+            .ToHashSet(StringComparer.Ordinal);
+
         foreach (AssignmentExpressionSyntax assignment in declaration.DescendantNodes()
                      .OfType<AssignmentExpressionSyntax>()
                      .Where(item => item.IsKind(SyntaxKind.AddAssignmentExpression)))
@@ -467,18 +483,38 @@ internal static class SourceInventoryReader
                 continue;
             }
 
-            string handler = assignment.Right switch
+            string eventName = member.Name.Identifier.ValueText;
+            string? handler = GetEventHandler(assignment.Right, eventName, methodNames, delegateNames);
+            if (handler is null)
             {
-                IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
-                MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
-                AnonymousFunctionExpressionSyntax => "<lambda>",
-                _ => Normalize(assignment.Right)
-            };
+                continue;
+            }
+
             part.EventWiring.Add(new EventWireEntry
             {
                 Part = part.Path,
                 Target = Normalize(member.Expression),
-                Event = member.Name.Identifier.ValueText,
+                Event = eventName,
+                Handler = handler
+            });
+            if (handler != "<lambda>")
+            {
+                part.EventHandlers.Add(handler);
+            }
+        }
+
+        foreach (InvocationExpressionSyntax invocation in declaration.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            if (!TryGetRoutedEventWire(invocation, methodNames, delegateNames, out string? target, out string? eventName, out string? handler))
+            {
+                continue;
+            }
+
+            part.EventWiring.Add(new EventWireEntry
+            {
+                Part = part.Path,
+                Target = target,
+                Event = eventName,
                 Handler = handler
             });
             if (handler != "<lambda>")
@@ -497,22 +533,106 @@ internal static class SourceInventoryReader
         }
     }
 
+    private static string? GetEventHandler(
+        ExpressionSyntax expression,
+        string eventName,
+        IReadOnlySet<string> methodNames,
+        IReadOnlySet<string> delegateNames) =>
+        expression switch
+        {
+            AnonymousFunctionExpressionSyntax => "<lambda>",
+            IdentifierNameSyntax identifier when methodNames.Contains(identifier.Identifier.ValueText)
+                || delegateNames.Contains(identifier.Identifier.ValueText)
+                || LooksLikeEventHandlerName(identifier.Identifier.ValueText)
+                || (IsPotentialEventName(eventName) && char.IsUpper(identifier.Identifier.ValueText[0]))
+                => identifier.Identifier.ValueText,
+            MemberAccessExpressionSyntax access when methodNames.Contains(access.Name.Identifier.ValueText)
+                || delegateNames.Contains(access.Name.Identifier.ValueText)
+                || LooksLikeEventHandlerName(access.Name.Identifier.ValueText)
+                || (IsPotentialEventName(eventName) && char.IsUpper(access.Name.Identifier.ValueText[0]))
+                => access.Name.Identifier.ValueText,
+            ObjectCreationExpressionSyntax creation when IsDelegateLikeType(creation.Type)
+                && creation.ArgumentList?.Arguments.FirstOrDefault()?.Expression is ExpressionSyntax handler
+                => GetEventHandler(handler, eventName, methodNames, delegateNames),
+            CastExpressionSyntax cast when IsDelegateLikeType(cast.Type)
+                => GetEventHandler(cast.Expression, eventName, methodNames, delegateNames),
+            ParenthesizedExpressionSyntax parenthesized
+                => GetEventHandler(parenthesized.Expression, eventName, methodNames, delegateNames),
+            _ => null
+        };
+
+    private static bool LooksLikeEventHandlerName(string name) =>
+        name.Length > 0
+        && (name.Contains('_', StringComparison.Ordinal)
+            || name.EndsWith("Handler", StringComparison.Ordinal)
+            || name.EndsWith("Changed", StringComparison.Ordinal)
+            || name.EndsWith("Click", StringComparison.Ordinal)
+            || name.EndsWith("Load", StringComparison.Ordinal)
+            || name.EndsWith("Closed", StringComparison.Ordinal)
+            || name.EndsWith("Selected", StringComparison.Ordinal));
+
+    private static bool IsPotentialEventName(string name) =>
+        name.EndsWith("Changed", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Changing", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Click", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Down", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Up", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Enter", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Leave", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Load", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Closed", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Closing", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Opened", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Opening", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Tick", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Validated", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Validating", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("DropDown", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Resize", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Paint", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Scroll", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Applied", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Requested", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Pressed", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Released", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Tapped", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Moved", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Cleared", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Update", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Updated", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Focus", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Activated", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("Deactivated", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsDelegateLikeType(TypeSyntax? type)
+    {
+        string typeName = type?.ToString() ?? string.Empty;
+        return typeName.Contains("EventHandler", StringComparison.Ordinal)
+            || typeName.Contains("Action", StringComparison.Ordinal)
+            || typeName.Contains("Func", StringComparison.Ordinal)
+            || typeName.EndsWith("Delegate", StringComparison.Ordinal);
+    }
+
     private static void ExtractMenus(TypeDeclarationSyntax declaration, MutablePart part)
     {
-        HashSet<string> menuNames = declaration.DescendantNodes().OfType<FieldDeclarationSyntax>()
-            .Where(field =>
+        Dictionary<string, string> fieldTypes = declaration.Members.OfType<FieldDeclarationSyntax>()
+            .SelectMany(field => field.Declaration.Variables.Select(variable => new
             {
-                string type = field.Declaration.Type.ToString();
-                return type.EndsWith("ToolStripMenuItem", StringComparison.Ordinal)
-                    || type.EndsWith("ContextMenuStrip", StringComparison.Ordinal)
-                    || type.EndsWith("MenuItem", StringComparison.Ordinal)
-                    || type.EndsWith("ContextMenu", StringComparison.Ordinal);
-            })
-            .SelectMany(field => field.Declaration.Variables)
-            .Select(variable => variable.Identifier.ValueText)
+                Name = variable.Identifier.ValueText,
+                Type = field.Declaration.Type.ToString(),
+            }))
+            .ToDictionary(field => field.Name, field => field.Type, StringComparer.Ordinal);
+        HashSet<string> menuNames = fieldTypes
+            .Where(field => field.Value.EndsWith("ToolStripMenuItem", StringComparison.Ordinal)
+                || field.Value.EndsWith("ContextMenuStrip", StringComparison.Ordinal)
+                || field.Value.EndsWith("MenuItem", StringComparison.Ordinal)
+                || field.Value.EndsWith("ContextMenu", StringComparison.Ordinal))
+            .Select(field => field.Key)
             .ToHashSet(StringComparer.Ordinal);
 
-        foreach (InvocationExpressionSyntax invocation in declaration.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        foreach (InvocationExpressionSyntax invocation in declaration
+                     .DescendantNodes(node => node == declaration || node is not TypeDeclarationSyntax)
+                     .OfType<InvocationExpressionSyntax>())
         {
             if (invocation.Expression is not MemberAccessExpressionSyntax call
                 || call.Expression is not MemberAccessExpressionSyntax collection
@@ -538,7 +658,11 @@ internal static class SourceInventoryReader
                     Parent = parent,
                     Order = index,
                     Name = child,
-                    Kind = child.Contains("separator", StringComparison.OrdinalIgnoreCase) ? "separator" : "item"
+                    Kind = fieldTypes.TryGetValue(child, out string? childType)
+                        && (childType.EndsWith("ToolStripSeparator", StringComparison.Ordinal)
+                            || childType.EndsWith("Separator", StringComparison.Ordinal))
+                            ? "separator"
+                            : "item"
                 });
             }
         }
@@ -713,6 +837,126 @@ internal static class SourceInventoryReader
         }
     }
 
+    private static bool TryGetRoutedEventWire(
+        InvocationExpressionSyntax invocation,
+        IReadOnlySet<string> methodNames,
+        IReadOnlySet<string> delegateNames,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(returnValue: true)] out string? target,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(returnValue: true)] out string? eventName,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(returnValue: true)] out string? handler)
+    {
+        target = null;
+        eventName = null;
+        handler = null;
+        if (invocation.Expression is not MemberAccessExpressionSyntax access)
+        {
+            return false;
+        }
+
+        SeparatedSyntaxList<ArgumentSyntax> arguments = invocation.ArgumentList.Arguments;
+        string methodName = access.Name.Identifier.ValueText;
+        ExpressionSyntax? handlerExpression;
+        if (methodName == "AddHandler" && arguments.Count >= 2)
+        {
+            target = Normalize(access.Expression);
+            eventName = Normalize(arguments[0].Expression);
+            if (eventName.EndsWith("Event", StringComparison.Ordinal))
+            {
+                eventName = eventName[..^"Event".Length];
+            }
+
+            handlerExpression = arguments[1].Expression;
+        }
+        else if (methodName.StartsWith("Add", StringComparison.Ordinal)
+                 && methodName.EndsWith("Handler", StringComparison.Ordinal)
+                 && arguments.Count >= 2)
+        {
+            target = Normalize(arguments[0].Expression);
+            eventName = methodName["Add".Length..^"Handler".Length];
+            handlerExpression = arguments[1].Expression;
+        }
+        else
+        {
+            return false;
+        }
+
+        handler = GetEventHandler(handlerExpression, eventName, methodNames, delegateNames);
+        return handler is not null;
+    }
+
+    private static void ExtractExplicitTranslationKeys(
+        TypeDeclarationSyntax declaration,
+        string className,
+        MutablePart part)
+    {
+        foreach (InvocationExpressionSyntax invocation in declaration.DescendantNodes()
+                     .OfType<InvocationExpressionSyntax>())
+        {
+            string invokedName = invocation.Expression switch
+            {
+                MemberAccessExpressionSyntax memberAccess => memberAccess.Name.Identifier.ValueText,
+                IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+                _ => string.Empty
+            };
+            SeparatedSyntaxList<ArgumentSyntax> arguments = invocation.ArgumentList.Arguments;
+            if (invokedName != "AddTranslationItem"
+                || arguments.Count < 4
+                || !IsExplicitEmptyTranslationSource(arguments[3].Expression))
+            {
+                continue;
+            }
+
+            string? itemName = GetStaticTranslationName(arguments[1].Expression);
+            string? propertyName = GetStaticTranslationName(arguments[2].Expression);
+            if (string.IsNullOrWhiteSpace(itemName)
+                || propertyName is not ("Text" or "HeaderText"))
+            {
+                continue;
+            }
+
+            part.TranslationKeys.Add(NewTranslationKey(
+                $"{itemName}.Text",
+                $"{part.Path}:{className}.{itemName}"));
+        }
+    }
+
+    private static string? GetStaticTranslationName(ExpressionSyntax expression)
+    {
+        if (expression is LiteralExpressionSyntax literal
+            && literal.IsKind(SyntaxKind.StringLiteralExpression))
+        {
+            return literal.Token.ValueText;
+        }
+
+        if (expression is InvocationExpressionSyntax nameOf
+            && nameOf.Expression is IdentifierNameSyntax { Identifier.ValueText: "nameof" }
+            && nameOf.ArgumentList.Arguments.Count == 1)
+        {
+            return nameOf.ArgumentList.Arguments[0].Expression switch
+            {
+                IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+                MemberAccessExpressionSyntax member => member.Name.Identifier.ValueText,
+                _ => null
+            };
+        }
+
+        return null;
+    }
+
+    private static bool IsExplicitEmptyTranslationSource(ExpressionSyntax expression)
+    {
+        if (expression is LiteralExpressionSyntax literal
+            && literal.IsKind(SyntaxKind.StringLiteralExpression)
+            && literal.Token.ValueText.Length == 0)
+        {
+            return true;
+        }
+
+        return expression is MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Empty" } member
+            && (member.Expression is PredefinedTypeSyntax { Keyword.ValueText: "string" }
+                || member.Expression is IdentifierNameSyntax { Identifier.ValueText: "String" });
+    }
+
     private static void ExtractDesignerTranslationKeys(
         TypeDeclarationSyntax declaration,
         string className,
@@ -788,13 +1032,19 @@ internal static class SourceInventoryReader
             // AXAML x:Name generates the field that the WinForms Designer declares explicitly.
             part.Members.Add(NewMember(part.Path, part.Members.Count, "field", name, accessibility, $"{kind} {name}"));
             XElement[] contentChildren = element.Elements().Take(2).ToArray();
-            bool hasNestedTextContent = contentChildren.Length == 1
+            bool hasNestedTextContent = kind != "Panel"
+                && contentChildren.Length == 1
                 && contentChildren[0].Name.LocalName == "TextBlock"
                 && contentChildren[0].Attribute("Text") is not null;
-            string? translatedProperty = element.Attribute("Header") is not null
-                || element.Attribute("Content") is not null
-                || element.Attribute("Text") is not null
-                || hasNestedTextContent
+            bool translateText = !element.Attributes().Any(attribute =>
+                (attribute.Name.LocalName == "TranslateText"
+                    || attribute.Name.LocalName.EndsWith(".TranslateText", StringComparison.Ordinal))
+                && string.Equals(attribute.Value, "False", StringComparison.OrdinalIgnoreCase));
+            string? translatedProperty = translateText
+                && (element.Attribute("Header") is not null
+                    || element.Attribute("Content") is not null
+                    || element.Attribute("Text") is not null
+                    || hasNestedTextContent)
                     ? "Text"
                     : element.Attribute("Watermark") is not null ? "Watermark" : null;
             if (translatedProperty is not null)
@@ -845,7 +1095,7 @@ internal static class SourceInventoryReader
         localName is "ContextMenu" or "ContextMenuStrip" || IsMenuItemElement(localName);
 
     private static bool IsMenuItemElement(string localName) =>
-        localName is "MenuItem" or "ToolStripMenuItem";
+        localName is "MenuItem" or "ToolStripMenuItem" or "CopyContextMenuItem";
 
     private static bool IsMenuSeparatorElement(string localName) =>
         localName is "Separator" or "ToolStripSeparator";

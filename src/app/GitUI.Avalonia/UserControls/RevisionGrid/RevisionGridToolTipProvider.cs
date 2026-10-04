@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.VisualTree;
+using GitExtensions.Extensibility.Git;
 using GitUI.UserControls.RevisionGrid.Columns;
 using GitUIPluginInterfaces;
 
@@ -34,8 +35,18 @@ internal sealed class RevisionGridToolTipProvider
         if (_toolTip is not null)
         {
             ToolTip.SetIsOpen(_toolTip, false);
-            _toolTip = null;
         }
+
+        foreach (Control cell in _cellStates.Keys)
+        {
+            if (ToolTip.GetIsOpen(cell))
+            {
+                wasActive = true;
+                ToolTip.SetIsOpen(cell, false);
+            }
+        }
+
+        _toolTip = null;
 
         return wasActive;
     }
@@ -48,7 +59,31 @@ internal sealed class RevisionGridToolTipProvider
             return;
         }
 
-        object? highlight = (e.Source as Control) is { } source && !ReferenceEquals(source, cell)
+        ColumnProvider provider = _gridView.ColumnProviders[state.ColumnIndex];
+        if (provider is MessageColumnProvider messageProvider)
+        {
+            if (_gridView.GetRevisionIndex(state.Revision) != state.RowIndex)
+            {
+                return;
+            }
+
+            IGitRef? gitRef = messageProvider.HitTest(state.RowIndex, e.GetPosition(_gridView))?.GitRef;
+            if (gitRef is not null)
+            {
+                if (gitRef.Equals(_previousHighlight))
+                {
+                    return;
+                }
+
+                _previousHighlight = gitRef;
+                _previousRowIndex = -1;
+                UpdateToolTip(highlightRef: gitRef);
+                return;
+            }
+        }
+
+        object? highlight = provider is not MessageColumnProvider
+            && (e.Source as Control) is { } source && !ReferenceEquals(source, cell)
             ? ToolTip.GetTip(source)
             : null;
         if (highlight is not null)
@@ -85,9 +120,9 @@ internal sealed class RevisionGridToolTipProvider
 
         return;
 
-        void UpdateToolTip(object? highlightToolTip = null)
+        void UpdateToolTip(object? highlightToolTip = null, IGitRef? highlightRef = null)
         {
-            string newText = GetToolTipText(highlightToolTip);
+            string newText = GetToolTipText(highlightToolTip, highlightRef);
             object? tip = string.IsNullOrEmpty(newText) ? null : newText;
             if (!Equals(ToolTip.GetTip(cell), tip))
             {
@@ -97,7 +132,7 @@ internal sealed class RevisionGridToolTipProvider
             _toolTip = tip is null ? null : cell;
         }
 
-        string GetToolTipText(object? highlightToolTip)
+        string GetToolTipText(object? highlightToolTip, IGitRef? highlightRef)
         {
             try
             {
@@ -106,8 +141,11 @@ internal sealed class RevisionGridToolTipProvider
                     return highlightText;
                 }
 
-                ColumnProvider provider = _gridView.ColumnProviders[state.ColumnIndex];
-                if (provider.TryGetToolTip(state.Revision, out string? toolTip)
+                string? toolTip;
+                bool hasToolTip = provider is MessageColumnProvider
+                    ? provider.TryGetToolTip(state.Revision, highlightRef, out toolTip)
+                    : provider.TryGetToolTip(state.Revision, out toolTip);
+                if (hasToolTip
                     && !string.IsNullOrWhiteSpace(toolTip))
                 {
                     return toolTip;
@@ -132,8 +170,20 @@ internal sealed class RevisionGridToolTipProvider
 
     public void Clear()
     {
+        Hide();
+
+        // Retained controls must not outlive their recycled rows after a repository reload.
+        foreach (Control cell in _cellStates.Keys)
+        {
+            cell.PointerMoved -= OnCellPointerMoved;
+            ToolTip.SetTip(cell, null);
+        }
+
+        _cellStates.Clear();
         _isTruncatedByCellPos.Clear();
-        _toolTip = null;
+        _previousRowIndex = -1;
+        _previousColumnIndex = -1;
+        _previousHighlight = null;
     }
 
     public void SetTruncation(int columnIndex, int rowIndex, bool truncated)
@@ -148,11 +198,26 @@ internal sealed class RevisionGridToolTipProvider
             cell.PointerMoved += OnCellPointerMoved;
         }
 
+        if (_cellStates.TryGetValue(cell, out CellState? previous)
+            && (previous.ColumnIndex != columnIndex || previous.RowIndex != rowIndex || !ReferenceEquals(previous.Revision, revision)))
+        {
+            // Virtualization can replace a commit while retaining both control and position.
+            // Its next hover must not reuse the previous commit's cached tooltip/highlight.
+            ToolTip.SetIsOpen(cell, false);
+            ToolTip.SetTip(cell, null);
+            _previousRowIndex = -1;
+            _previousColumnIndex = -1;
+            _previousHighlight = null;
+        }
+
         _cellStates[cell] = new CellState(columnIndex, rowIndex, revision);
         TextBlock? textBlock = cell as TextBlock ?? cell.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault();
         SetTruncation(columnIndex, rowIndex, IsTruncated(textBlock));
+    }
 
-        void OnCellPointerMoved(object? sender, PointerEventArgs e)
+    private void OnCellPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (sender is Control cell)
         {
             OnCellMouseMove(cell, e);
         }

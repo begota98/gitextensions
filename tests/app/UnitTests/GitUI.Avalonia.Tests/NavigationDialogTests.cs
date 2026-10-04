@@ -13,6 +13,7 @@ using GitCommands;
 using GitCommands.Git;
 using GitExtensions.Extensibility;
 using GitExtensions.Extensibility.Git;
+using GitExtensions.ParityCapture;
 using GitUI;
 using GitUI.CommandsDialogs;
 using GitUI.CommandsDialogs.BrowseDialog;
@@ -26,6 +27,118 @@ namespace GitExtensionsTests;
 [TestFixture]
 public sealed class NavigationDialogTests
 {
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void CommitPickerSmallControl_should_auto_size_empty_and_populated_commit_count_labels()
+    {
+        GitUI.UserControls.CommitPickerSmallControl picker = new();
+        Window window = new() { Width = 321, Height = 26, Content = picker };
+        try
+        {
+            window.Show();
+            window.UpdateLayout();
+            TextBlock count = picker.FindControl<TextBlock>("lbCommits")!;
+            TextBox hash = picker.FindControl<TextBox>("textBoxCommitHash")!;
+            count.Bounds.Width.Should().Be(1);
+            double emptyHashWidth = hash.Bounds.Width;
+            count.Text = "(+12-3)";
+            window.UpdateLayout();
+            count.Bounds.Width.Should().BeGreaterThan(1);
+            hash.Bounds.Width.Should().BeLessThan(emptyHashWidth);
+            count.Text = string.Empty;
+            window.UpdateLayout();
+            count.Bounds.Width.Should().Be(1);
+            hash.Bounds.Width.Should().Be(emptyHashWidth);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void SearchControl_should_paint_one_owned_border_without_a_nested_platform_focus_border()
+    {
+        SearchControl<string> control = new(_ => [], _ => { })
+        {
+            SearchBoxBorderStyle = WinFormsShims.BorderStyle.FixedSingle,
+        };
+        Window window = new() { Width = 300, Height = 23, Content = control };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            TextBox input = control.FindControl<TextBox>("txtSearchBox")!;
+            input.Bounds.Height.Should().Be(23);
+            input.BorderThickness.Should().Be(default(Thickness));
+            control.Margin.Should().Be(default(Thickness));
+            ((Avalonia.Media.ISolidColorBrush)control.Background!).Color.Should().Be(Avalonia.Media.Colors.Transparent);
+            control.SearchBoxBorderStyle = WinFormsShims.BorderStyle.None;
+            ((Border)input.Parent!).BorderThickness.Should().Be(default(Thickness));
+            control.SearchBoxBorderStyle = WinFormsShims.BorderStyle.FixedSingle;
+            ((Border)input.Parent!).BorderThickness.Should().Be(new Thickness(1));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void SearchControl_should_preserve_native_default_and_border_mode_transitions()
+    {
+        SearchControl<string> search = new(_ => [], _ => { });
+        Window window = new() { Width = 300, Height = 23, Content = search };
+        try
+        {
+            window.Show();
+            window.UpdateLayout();
+            TextBox input = search.FindControl<TextBox>("txtSearchBox")!;
+            search.SearchBoxBorderStyle.Should().Be(WinFormsShims.BorderStyle.Fixed3D);
+            search.SearchBoxBorderFocusedColor.Should().Be(System.Drawing.SystemColors.HotTrack);
+            foreach (WinFormsShims.BorderStyle style in new[]
+            {
+                WinFormsShims.BorderStyle.None,
+                WinFormsShims.BorderStyle.FixedSingle,
+                WinFormsShims.BorderStyle.Fixed3D,
+            })
+            {
+                search.SearchBoxBorderStyle = style;
+                window.UpdateLayout();
+                search.SearchBoxBorderStyle.Should().Be(style);
+                input.BorderThickness.Should().Be(style == WinFormsShims.BorderStyle.Fixed3D ? new Thickness(2) : default);
+                input.Bounds.Height.Should().Be(23);
+                CaptureNode node = Descendants(new AvaloniaControlTreeReader(search, 1)
+                    .ReadPrimary(search, PixelSize.FromSize(search.Bounds.Size, 1)).Root)
+                    .Single(node => node.FieldName == "txtSearchBox");
+                node.BorderStyle.Should().Be(style.ToString());
+                node.ClientSizeDip.Width.Should().Be(node.BoundsDip.Width - (style == WinFormsShims.BorderStyle.Fixed3D ? 4 : 0));
+                node.ClientSizeDip.Height.Should().Be(style == WinFormsShims.BorderStyle.Fixed3D ? 19 : 23);
+            }
+        }
+        finally
+        {
+            window.Close();
+        }
+
+        return;
+
+        static IEnumerable<GitExtensions.ParityCapture.CaptureNode> Descendants(GitExtensions.ParityCapture.CaptureNode node)
+        {
+            yield return node;
+            foreach (GitExtensions.ParityCapture.CaptureNode child in node.Children)
+            {
+                foreach (GitExtensions.ParityCapture.CaptureNode descendant in Descendants(child))
+                {
+                    yield return descendant;
+                }
+            }
+        }
+    }
+
     private RecordingOsShell _shell = null!;
     private RecordingMessageBoxHost _messageBoxes = null!;
     private StubClipboard _clipboard = null!;
@@ -280,8 +393,8 @@ public sealed class NavigationDialogTests
             Invoke(search, "SearchForCandidates", (object)new[] { "src/App.cs" });
             Dispatcher.UIThread.RunJobs();
 
-            window.Bounds.Width.Should().BeApproximately(300, 1);
-            window.Bounds.Height.Should().BeApproximately(79, 1);
+            window.Bounds.Width.Should().BeApproximately(303, 1);
+            window.Bounds.Height.Should().BeApproximately(82, 1);
             AssertBounds(window.FindControl<Label>("lblEnterFileName")!, 0, 0, 300, 24);
             AssertBounds(search.FindControl<ListBox>("listBoxSearchResult")!, 0, 47, 300, 32);
         }
@@ -315,8 +428,8 @@ public sealed class NavigationDialogTests
             Avalonia.Media.FontManager.Current.TryGetGlyphTypeface(typeface, out Avalonia.Media.GlyphTypeface? glyphTypeface).Should().BeTrue();
             Avalonia.Media.FontMetrics metrics = glyphTypeface!.Metrics;
             double lineHeight = metrics.LineSpacing * searchBox.FontSize / metrics.DesignEmHeight;
-            double itemHeight = Math.Max(16, Math.Ceiling(lineHeight * 1.25) / 1.25);
-            reportedSize.Height.Should().BeApproximately((itemHeight * 2) + Math.Max(22, searchBox.Bounds.Height), 0.01);
+            double itemHeight = Math.Max(15 * 1.25, Math.Floor(lineHeight * 1.25)) / 1.25;
+            reportedSize.Height.Should().BeApproximately((itemHeight * 2) + (2 / 1.25) + Math.Max(22, searchBox.Bounds.Height), 0.01);
             search.FindControl<ListBox>("listBoxSearchResult")!.Classes.Should().Contain("search-results");
         }
         finally

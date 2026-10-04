@@ -46,8 +46,8 @@ public sealed partial class FormVerify : GitModuleForm
         }
     }
 
-    private const string _commitColumns = "28,80,100,*,150,92,92";
-    private const string _objectColumns = "28,80,*,0,0,150,0";
+    private const string _commitColumns = "21,112,164,*,150,60,60";
+    private const string _objectColumns = "21,112,*,0,0,150,0";
     private const string _restoredObjectsTagPrefix = "LOST_FOUND_";
 
     private readonly TranslationString _removeDanglingObjectsCaption = new("Remove");
@@ -56,6 +56,7 @@ public sealed partial class FormVerify : GitModuleForm
     private readonly TranslationString _selectLostObjectsToRestoreMessage = new("Select objects to restore.");
     private readonly TranslationString _selectLostObjectsToRestoreCaption = new("Restore lost objects");
     private readonly TranslationString _seemingly = new("seemingly");
+    private readonly TranslationString _lostObjectUnreadable = new("Object could not be read. It may be corrupted or no longer available.");
 
     private readonly List<LostObject> _lostObjects = [];
     private readonly HashSet<ObjectId> _selectedObjectIds = [];
@@ -222,10 +223,10 @@ public sealed partial class FormVerify : GitModuleForm
         row.Children.Add(selected);
         row.Children.Add(CreateCell(lostObject.Date?.ToString("g") ?? string.Empty, 1));
         row.Children.Add(CreateCell(lostObject.RawType, 2));
-        row.Children.Add(CreateCell(lostObject.Subject ?? string.Empty, 3));
+        row.Children.Add(CreateCell(lostObject.Subject ?? string.Empty, 3, wrap: true));
         row.Children.Add(CreateCell(lostObject.Author ?? string.Empty, 4));
-        row.Children.Add(CreateCell(lostObject.ObjectId.ToString(), 5, monospace: true, wrap: true));
-        row.Children.Add(CreateCell(lostObject.Parent.IsZero ? string.Empty : lostObject.Parent.ToString(), 6, monospace: true, wrap: true));
+        row.Children.Add(CreateCell(lostObject.ObjectId.ToString(), 5, monospace: true));
+        row.Children.Add(CreateCell(lostObject.Parent.IsZero ? string.Empty : lostObject.Parent.ToString(), 6, monospace: true));
         return row;
 
         static TextBlock CreateCell(string text, int column, bool monospace = false, bool wrap = false)
@@ -588,7 +589,17 @@ public sealed partial class FormVerify : GitModuleForm
             || (ShowOtherObjects.IsChecked == true && lostObject.ObjectType is not LostObjectType.Commit and not LostObjectType.Tag);
 
     private string GetLostObjectContent(LostObject item)
-        => Module.ShowObject(item.ObjectId, returnRaw: item.ObjectType == LostObjectType.Blob) ?? string.Empty;
+    {
+        try
+        {
+            return Module.ShowObject(item.ObjectId, returnRaw: item.ObjectType == LostObjectType.Blob) ?? string.Empty;
+        }
+        catch (ExternalOperationException ex)
+        {
+            // The object could not be read (e.g. corrupted or pruned from the repository).
+            return $"{_lostObjectUnreadable.Text}\n\n{ex.Message}";
+        }
+    }
 
     private string GetOptions()
     {

@@ -1,4 +1,4 @@
-﻿using System.Xml;
+using System.Xml;
 using System.Xml.Serialization;
 using Avalonia.Controls;
 using Avalonia.Headless;
@@ -43,6 +43,16 @@ public sealed class HotkeyTests
         KeysMapper.ToKeys(key, modifiers).Should().Be(expected);
     }
 
+    [Test]
+    [Category("P8.6i.126")]
+    public void Browse_navigate_shortcut_should_keep_the_WinForms_OemBackslash_label()
+    {
+        WinFormsShims.Keys shortcut = WinFormsShims.Keys.Control | WinFormsShims.Keys.OemBackslash;
+
+        new WinFormsShims.KeysConverter().ConvertToString(null, null, shortcut)
+            .Should().Be("Ctrl+OemBackslash");
+    }
+
     [TestCase(WinFormsShims.Keys.F5, Key.F5, KeyModifiers.None)]
     [TestCase(WinFormsShims.Keys.B | WinFormsShims.Keys.Control | WinFormsShims.Keys.Shift, Key.B, KeyModifiers.Control | KeyModifiers.Shift)]
     [TestCase(WinFormsShims.Keys.Oemcomma | WinFormsShims.Keys.Alt, Key.OemComma, KeyModifiers.Alt)]
@@ -68,9 +78,8 @@ public sealed class HotkeyTests
 
             IReadOnlyList<HotkeyCommand> hotkeys = loader.LoadHotkeys(FormBrowse.HotkeySettingsName);
 
-            hotkeys.Should().ContainSingle(command =>
-                command.CommandCode == (int)FormBrowse.Command.Refresh
-                && command.KeyData == WinFormsShims.Keys.F5);
+            hotkeys.Should().HaveCount(49);
+            hotkeys.Should().NotContain(command => command.CommandCode == (int)FormBrowse.Command.Refresh);
             hotkeys.Should().ContainSingle(command =>
                 command.CommandCode == (int)FormBrowse.Command.Commit
                 && command.KeyData == (WinFormsShims.Keys.Control | WinFormsShims.Keys.Space));
@@ -116,6 +125,15 @@ public sealed class HotkeyTests
             hotkeys.Should().ContainSingle(command =>
                 command.CommandCode == (int)FormBrowse.Command.QuickFetch
                 && command.KeyData == (WinFormsShims.Keys.Control | WinFormsShims.Keys.Shift | WinFormsShims.Keys.Down));
+            hotkeys.Should().ContainSingle(command =>
+                command.CommandCode == (int)FormBrowse.Command.QuickPullOrFetch
+                && command.KeyData == WinFormsShims.Keys.F8);
+            hotkeys.Should().ContainSingle(command =>
+                command.CommandCode == (int)FormBrowse.Command.OpenWithDifftoolFirstToLocal
+                && command.KeyData == (WinFormsShims.Keys.Alt | WinFormsShims.Keys.F3));
+            hotkeys.Should().ContainSingle(command =>
+                command.CommandCode == (int)FormBrowse.Command.StashStaged
+                && command.KeyData == (WinFormsShims.Keys.Control | WinFormsShims.Keys.Shift | WinFormsShims.Keys.Alt | WinFormsShims.Keys.Up));
         }
         finally
         {
@@ -315,7 +333,7 @@ public sealed class HotkeyTests
             [
                 new HotkeySettings(
                     FormBrowse.HotkeySettingsName,
-                    new HotkeyCommand((int)FormBrowse.Command.Refresh, nameof(FormBrowse.Command.Refresh))
+                    new HotkeyCommand((int)FormBrowse.Command.QuickPullOrFetch, nameof(FormBrowse.Command.QuickPullOrFetch))
                     {
                         KeyData = WinFormsShims.Keys.F6,
                     }),
@@ -334,7 +352,7 @@ public sealed class HotkeyTests
             IReadOnlyList<HotkeyCommand> hotkeys = loader.LoadHotkeys(FormBrowse.HotkeySettingsName);
 
             hotkeys.Should().ContainSingle(command =>
-                command.CommandCode == (int)FormBrowse.Command.Refresh
+                command.CommandCode == (int)FormBrowse.Command.QuickPullOrFetch
                 && command.KeyData == WinFormsShims.Keys.F6);
         }
         finally
@@ -344,7 +362,7 @@ public sealed class HotkeyTests
     }
 
     [Test]
-    public void HotkeySettingsManager_should_save_the_edited_reduced_settings()
+    public void HotkeySettingsManager_should_save_the_edited_settings()
     {
         string? serializedHotkeys = AppSettings.SerializedHotkeys;
         AppSettings.SerializedHotkeys = string.Empty;
@@ -352,20 +370,20 @@ public sealed class HotkeyTests
         {
             IHotkeySettingsManager manager = new HotkeySettingsManager();
             IReadOnlyList<HotkeySettings> settings = manager.LoadSettings();
-            HotkeyCommand refresh = settings
+            HotkeyCommand quickPullOrFetch = settings
                 .Single(setting => setting.Name == FormBrowse.HotkeySettingsName)
                 .Commands!
-                .Single(command => command.CommandCode == (int)FormBrowse.Command.Refresh);
-            refresh.KeyData = WinFormsShims.Keys.F6;
+                .Single(command => command.CommandCode == (int)FormBrowse.Command.QuickPullOrFetch);
+            quickPullOrFetch.KeyData = WinFormsShims.Keys.F6;
 
             manager.SaveSettings(settings);
 
-            AppSettings.SerializedHotkeys.Should().Contain(nameof(FormBrowse.Command.Refresh));
+            AppSettings.SerializedHotkeys.Should().Contain(nameof(FormBrowse.Command.QuickPullOrFetch));
             manager.IsUniqueKey(WinFormsShims.Keys.F6).Should().BeTrue();
             manager.LoadHotkeys(FormBrowse.HotkeySettingsName)
                 .Should()
                 .ContainSingle(command =>
-                    command.CommandCode == (int)FormBrowse.Command.Refresh
+                    command.CommandCode == (int)FormBrowse.Command.QuickPullOrFetch
                     && command.KeyData == WinFormsShims.Keys.F6);
         }
         finally
@@ -437,6 +455,84 @@ public sealed class HotkeyTests
         ToolTip.GetTip(quickFetch).Should().Be("Fetch\u00A0(Ctrl+Shift+Down)");
     }
 
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Browse_diff_and_blame_editors_should_load_runtime_settings_with_their_tab()
+    {
+        (FormBrowse form, _, _) = CreateBrowseForm(
+            browseHotkeys: [],
+            revisionHotkeys: [],
+            fileViewerHotkeys:
+            [
+                new HotkeyCommand((int)FileViewer.Command.NextChange, nameof(FileViewer.Command.NextChange))
+                {
+                    KeyData = WinFormsShims.Keys.Alt | WinFormsShims.Keys.Down,
+                },
+            ]);
+        form.Show();
+        try
+        {
+            form.CommitInfoTabControl.SelectedItem.Should().BeSameAs(form.CommitInfoTabPage);
+            foreach (FileViewer viewer in new[]
+            {
+                form.revisionDiff.FileViewer,
+                form.revisionDiff.BlameControl.BlameAuthor,
+                form.revisionDiff.BlameControl.BlameFile,
+            })
+            {
+                IconButton nextChangeButton = viewer.FindControl<IconButton>("nextChangeButton")!;
+                GetTooltipText(nextChangeButton).Should().Be("Next change");
+                viewer.Font.Name.Should().Be("Courier New");
+            }
+
+            form.CommitInfoTabControl.SelectedItem = form.TreeTabPage;
+            form.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            foreach (FileViewer viewer in new[]
+            {
+                form.fileTree.BlameControl.BlameAuthor,
+                form.fileTree.BlameControl.BlameFile,
+            })
+            {
+                IconButton nextChangeButton = viewer.FindControl<IconButton>("nextChangeButton")!;
+                GetTooltipText(nextChangeButton).Should().Be("Next change\u00A0(Alt+Down)");
+                viewer.Font.Name.Should().Be(AppSettings.FixedWidthFont.Name);
+            }
+
+            form.CommitInfoTabControl.SelectedItem = form.DiffTabPage;
+            form.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            IconButton activeNextChangeButton = form.revisionDiff.FileViewer.FindControl<IconButton>("nextChangeButton")!;
+            GetTooltipText(activeNextChangeButton).Should().Be("Next change\u00A0(Alt+Down)");
+            form.revisionDiff.FileViewer.Font.Name.Should().Be(AppSettings.FixedWidthFont.Name);
+
+            foreach (FileViewer viewer in new[]
+            {
+                form.revisionDiff.BlameControl.BlameAuthor,
+                form.revisionDiff.BlameControl.BlameFile,
+            })
+            {
+                IconButton nextChangeButton = viewer.FindControl<IconButton>("nextChangeButton")!;
+                GetTooltipText(nextChangeButton).Should().Be("Next change");
+                viewer.Font.Name.Should().Be("Courier New");
+            }
+        }
+        finally
+        {
+            form.Close();
+        }
+
+        static string? GetTooltipText(Control control)
+            => ToolTip.GetTip(control) switch
+            {
+                string text => text,
+                TextBlock textBlock => textBlock.Text,
+                _ => null,
+            };
+    }
+
     [Test]
     [Category("P4.3")]
     public void HotkeySettingsManager_should_load_the_original_left_panel_hotkeys()
@@ -468,6 +564,19 @@ public sealed class HotkeyTests
     [Category("P4.3")]
     public void FormBrowse_should_route_left_panel_hotkeys_when_the_repository_tree_has_focus()
     {
+        bool showAheadBehindData = AppSettings.ShowAheadBehindData;
+        WinFormsShims.IMessageBoxHost? messageBoxHost;
+        try
+        {
+            messageBoxHost = WinFormsShims.ShimHost.MessageBoxHost;
+        }
+        catch (InvalidOperationException)
+        {
+            messageBoxHost = null;
+        }
+
+        AppSettings.ShowAheadBehindData = false;
+        WinFormsShims.ShimHost.MessageBoxHost = Substitute.For<WinFormsShims.IMessageBoxHost>();
         (FormBrowse form, IGitUICommands commands, _) = CreateBrowseForm(
             browseHotkeys: [],
             revisionHotkeys: [],
@@ -501,6 +610,8 @@ public sealed class HotkeyTests
         finally
         {
             form.Close();
+            AppSettings.ShowAheadBehindData = showAheadBehindData;
+            WinFormsShims.ShimHost.MessageBoxHost = messageBoxHost!;
         }
     }
 
@@ -862,6 +973,88 @@ public sealed class HotkeyTests
         }
     }
 
+    [AvaloniaTest]
+    public void FormBrowse_quick_commands_should_dispatch_the_original_actions()
+    {
+        IScriptsManager scripts = Substitute.For<IScriptsManager>();
+        scripts.GetScripts().Returns(new System.ComponentModel.BindingList<ScriptInfo>());
+        (FormBrowse form, IGitUICommands commands, _) = CreateBrowseForm([], [], scriptsManager: scripts);
+        using (form)
+        {
+            form.ExecuteCommand(FormBrowse.Command.QuickPull).Should().BeTrue();
+            commands.Received(1).StartPullDialogAndPullImmediately(form, pullAction: GitPullAction.Merge);
+
+            form.ExecuteCommand(FormBrowse.Command.QuickPush).Should().BeTrue();
+            commands.Received(1).StartPushDialog(form, pushOnShow: true);
+
+            form.ExecuteCommand(FormBrowse.Command.Stash).Should().BeTrue();
+            commands.Received(1).StashSave(form, AppSettings.IncludeUntrackedFilesInManualStash);
+
+            form.ExecuteCommand(FormBrowse.Command.StashStaged).Should().BeTrue();
+            commands.Received(1).StashStaged(form);
+
+            form.ExecuteCommand(FormBrowse.Command.StashPop).Should().BeTrue();
+            commands.Received(1).StashPop(form);
+
+            scripts.DidNotReceive().GetScript(Arg.Any<int>());
+        }
+    }
+
+    [AvaloniaTest]
+    public void FormBrowse_default_quick_pull_should_use_the_persisted_action()
+    {
+        GitPullAction previous = AppSettings.DefaultPullAction;
+        try
+        {
+            AppSettings.DefaultPullAction = GitPullAction.Rebase;
+            (FormBrowse form, IGitUICommands commands, _) = CreateBrowseForm();
+            using (form)
+            {
+                form.ExecuteCommand(FormBrowse.Command.QuickPullOrFetch).Should().BeTrue();
+                commands.Received(1).StartPullDialogAndPullImmediately(form, pullAction: GitPullAction.Rebase);
+            }
+        }
+        finally
+        {
+            AppSettings.DefaultPullAction = previous;
+        }
+    }
+
+    [AvaloniaTest]
+    public void FormBrowse_should_route_visible_file_pane_hotkeys_when_the_grid_has_focus()
+    {
+        (FormBrowse form, _, _) = CreateBrowseForm(
+            [], [], fileStatusHotkeys:
+            [
+                new HotkeyCommand((int)RevisionDiffControl.Command.StageSelectedFile, "Stage")
+                {
+                    KeyData = WinFormsShims.Keys.F6,
+                },
+            ]);
+        using (form)
+        {
+            form.Show();
+            form.CommitInfoTabControl.SelectedItem = form.TreeTabPage;
+            int stageInvocations = 0;
+            form.fileTree.FileStatusList.GetTestAccessor().StageMenuItem.Click += (_, _) => stageInvocations++;
+
+            form.ProcessHotkey(WinFormsShims.Keys.F6).Should().BeTrue();
+
+            stageInvocations.Should().Be(1);
+            form.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    public void FormBrowse_should_register_and_release_its_browse_command_owner()
+    {
+        (FormBrowse form, IGitUICommands commands, _) = CreateBrowseForm();
+        commands.BrowseRepo.Should().BeSameAs(form);
+        form.Show();
+        form.Close();
+        commands.BrowseRepo.Should().BeNull();
+    }
+
     private static (FormBrowse Form, IGitUICommands Commands, ILockableNotifier Notifier) CreateBrowseForm(params HotkeyCommand[] hotkeys)
         => CreateBrowseForm(hotkeys, revisionHotkeys: []);
 
@@ -876,7 +1069,8 @@ public sealed class HotkeyTests
         IScriptsRunner? scriptsRunner = null,
         IReadOnlyList<HotkeyCommand>? scriptHotkeys = null,
         IReadOnlyList<HotkeyCommand>? leftPanelHotkeys = null,
-        IReadOnlyList<HotkeyCommand>? fileStatusHotkeys = null)
+        IReadOnlyList<HotkeyCommand>? fileStatusHotkeys = null,
+        IReadOnlyList<HotkeyCommand>? fileViewerHotkeys = null)
     {
         IGitModule module = Substitute.For<IGitModule>();
         module.WorkingDir.Returns(Path.GetTempPath());
@@ -893,6 +1087,7 @@ public sealed class HotkeyTests
         loader.LoadHotkeys(FormSettings.HotkeySettingsName).Returns(scriptHotkeys ?? []);
         loader.LoadHotkeys(RepoObjectsTree.HotkeySettingsName).Returns(leftPanelHotkeys ?? []);
         loader.LoadHotkeys(RevisionDiffControl.HotkeySettingsName).Returns(fileStatusHotkeys ?? []);
+        loader.LoadHotkeys(FileViewer.HotkeySettingsName).Returns(fileViewerHotkeys ?? []);
 
         IGitUICommands commands = Substitute.For<IGitUICommands>();
         commands.Module.Returns(module);
@@ -901,6 +1096,7 @@ public sealed class HotkeyTests
         commands.GetService(typeof(IHotkeySettingsLoader)).Returns(loader);
         commands.GetService(typeof(IRepositoryHistoryUIService)).Returns(repositoryHistory);
         commands.GetService(typeof(IUserRepositoriesListController)).Returns(repositoriesController);
+        commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
         commands.GetService(typeof(IScriptsManager)).Returns(scriptsManager);
         commands.GetService(typeof(IScriptsRunner)).Returns(scriptsRunner);
 

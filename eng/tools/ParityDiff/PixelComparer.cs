@@ -75,6 +75,7 @@ internal static class PixelComparer
             ReferenceHeight = reference.Height,
             CandidateWidth = candidate.Width,
             CandidateHeight = candidate.Height,
+            ComparedPixelCount = pixelCount,
             Ssim = Math.Round(ssim, 6),
             DifferentPixelFraction = Math.Round((double)differentPixels / pixelCount, 6),
             MaximumChannelDelta = maximumChannelDelta,

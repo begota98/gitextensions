@@ -29,8 +29,7 @@ partial class FormBrowse
 
         RevisionGrid.FilterChanged += (sender, e) =>
         {
-            IAppTitleGenerator appTitleGenerator = UICommands.GetRequiredService<IAppTitleGenerator>();
-            Title = appTitleGenerator.Generate(Module.WorkingDir, Module.IsValidGitWorkingDir(), RevisionGrid.GetCurrentBranch(), TranslatedStrings.NoBranch, e.PathFilter);
+            Title = _appTitleGenerator!.Generate(Module.WorkingDir, Module.IsValidGitWorkingDir(), RevisionGrid.CurrentBranch.Value, TranslatedStrings.NoBranch, e.PathFilter);
 
             // PathFilter is a free text field and may contain wildcards, quoting is optional.
             // This is will adjust the string at least for paths added from context menus.
@@ -79,7 +78,7 @@ partial class FormBrowse
                 return;
             }
 
-            // The Avalonia tree receives the completed ref set atomically from RefreshLeftPanel.
+            repoObjectsTree.RefreshRevisionsLoaded();
         };
 
         RevisionGrid.SelectionChanged += (sender, e) =>

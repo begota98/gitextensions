@@ -8,6 +8,42 @@ namespace WinFormsParityCapture.Tests;
 [Category("P0_1")]
 public sealed class ControlStateDriverTests
 {
+    [TestCase(false)]
+    [TestCase(true)]
+    [Apartment(ApartmentState.STA)]
+    public void Apply_should_resolve_a_nested_controls_private_menu_and_honor_cancellation(bool cancel)
+    {
+        using ContextMenuStrip menu = new();
+        menu.Items.Add("Action");
+        int openingCount = 0;
+        menu.Opening += (_, e) =>
+        {
+            openingCount++;
+            e.Cancel = cancel;
+        };
+        using Form form = new() { ClientSize = new Size(300, 200) };
+        using Panel panel = new() { Dock = DockStyle.Fill };
+        using MenuOwner owner = new(menu) { Dock = DockStyle.Fill };
+        panel.Controls.Add(owner);
+        form.Controls.Add(panel);
+        form.Show();
+        CaptureStatePlan state = new() { Id = "nested-menu.open", Kind = CaptureStateKind.MenuOpen, TargetField = "_menu" };
+        if (cancel)
+        {
+            Action capture = () => ControlStateDriver.Apply(form, state);
+            capture.Should().Throw<CaptureStateUnsupportedException>().WithMessage("*declined to open*");
+            menu.Visible.Should().BeFalse();
+        }
+        else
+        {
+            using ControlStateDriver driver = ControlStateDriver.Apply(form, state);
+            driver.Popups.Should().ContainSingle().Which.Should().BeSameAs(menu);
+            menu.Visible.Should().BeTrue();
+        }
+
+        openingCount.Should().Be(1);
+    }
+
     [Test]
     public void Apply_should_resize_and_restore_the_client_surface()
     {
@@ -27,6 +63,35 @@ public sealed class ControlStateDriverTests
         }
 
         form.ClientSize.Should().Be(new Size(240, 140));
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    [Category("P8_6i")]
+    public void Apply_should_activate_a_tab_page_when_the_page_is_the_focus_target()
+    {
+        using Form form = new() { ClientSize = new Size(240, 140) };
+        using TabControl tabs = new() { Dock = DockStyle.Fill };
+        TabPage first = new() { Name = "FirstTab", Text = "First" };
+        TabPage second = new() { Name = "SecondTab", Text = "Second" };
+        tabs.TabPages.AddRange([first, second]);
+        form.Controls.Add(tabs);
+        form.Show();
+        tabs.SelectedTab.Should().BeSameAs(first);
+
+        using (ControlStateDriver.Apply(
+                   form,
+                   new CaptureStatePlan
+                   {
+                       Id = "second.focused",
+                       Kind = CaptureStateKind.Focus,
+                       TargetField = second.Name
+                   }))
+        {
+            tabs.SelectedTab.Should().BeSameAs(second);
+        }
+
+        tabs.SelectedTab.Should().BeSameAs(first);
     }
 
     [Test]
@@ -53,5 +118,43 @@ public sealed class ControlStateDriverTests
             });
 
         childMoved.Should().BeTrue();
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    [Category("P8_6i")]
+    public void Apply_should_drive_toolbar_item_hover_through_its_owner_window()
+    {
+        using Form form = new() { ClientSize = new Size(240, 140) };
+        using ToolStrip toolbar = new() { Dock = DockStyle.Top };
+        ToolStripButton button = new() { Name = "button", Text = "Commit" };
+        bool pointerReachedItem = false;
+        button.MouseEnter += (_, _) => pointerReachedItem = true;
+        toolbar.Items.Add(button);
+        form.Controls.Add(toolbar);
+        form.Show();
+
+        using ControlStateDriver driver = ControlStateDriver.Apply(
+            form,
+            new CaptureStatePlan
+            {
+                Id = "toolbar.hover",
+                Kind = CaptureStateKind.Hover,
+                TargetField = button.Name
+            });
+
+        pointerReachedItem.Should().BeTrue();
+        button.Selected.Should().BeTrue();
+    }
+
+    private sealed class MenuOwner : UserControl
+    {
+        private readonly ContextMenuStrip _menu;
+
+        public MenuOwner(ContextMenuStrip menu)
+        {
+            _menu = menu;
+            ContextMenuStrip = _menu;
+        }
     }
 }

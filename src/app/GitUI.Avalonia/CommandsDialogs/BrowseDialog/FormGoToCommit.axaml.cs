@@ -137,6 +137,8 @@ public sealed partial class FormGoToCommit : GitModuleForm
                 // Avalonia's editable ComboBox requires display strings; keep the IGitRef
                 // objects beside it so selection retains the original identity semantics.
                 comboBoxBranches.ItemsSource = list.Select(item => item.LocalName).ToList();
+                comboBoxBranches.SelectedIndex = list.Count > 0 ? 0 : -1;
+                _selectedBranch = list.FirstOrDefault();
                 _branchesLoaded = true;
                 SetSelectedRevisionByFocusedControl();
             });
@@ -149,32 +151,46 @@ public sealed partial class FormGoToCommit : GitModuleForm
 
     private void comboBoxTags_Enter(object? sender, RoutedEventArgs e)
     {
-        SetSelectedRevisionByFocusedControl();
+        SetSelectedRevisionByFocusedControl(comboBoxTags);
     }
 
     private void comboBoxBranches_Enter(object? sender, RoutedEventArgs e)
     {
-        SetSelectedRevisionByFocusedControl();
+        SetSelectedRevisionByFocusedControl(comboBoxBranches);
     }
 
-    private void SetSelectedRevisionByFocusedControl()
+    /// <summary>
+    ///  Updates <see cref="_selectedRevision"/> from the control which supplies the revision to go to.
+    /// </summary>
+    /// <param name="enteredControl">
+    ///  The control raising the focus event. Editable Avalonia combo boxes can route the event from
+    ///  a child, so recognise the revision-supplying control explicitly rather than moving focus
+    ///  away from it below. Pass <see langword="null"/> outside of that event.
+    /// </param>
+    private void SetSelectedRevisionByFocusedControl(Avalonia.Controls.Control? enteredControl = null)
     {
-        if (textboxCommitExpression.IsKeyboardFocusWithin)
+        if (IsSupplyingRevision(textboxCommitExpression))
         {
             _selectedRevision = (textboxCommitExpression.Text ?? string.Empty).Trim();
         }
-        else if (comboBoxTags.IsKeyboardFocusWithin)
+        else if (IsSupplyingRevision(comboBoxTags))
         {
             _selectedRevision = _selectedTag is not null ? _selectedTag.Guid : "";
         }
-        else if (comboBoxBranches.IsKeyboardFocusWithin)
+        else if (IsSupplyingRevision(comboBoxBranches))
         {
             _selectedRevision = _selectedBranch is not null ? _selectedBranch.Guid : "";
         }
         else
         {
+            // No control supplies a revision, e.g. when the refs have just been loaded into the
+            // combo boxes: offer the commit expression for input.
             textboxCommitExpression.Focus();
         }
+
+        return;
+
+        bool IsSupplyingRevision(Avalonia.Controls.Control control) => control.IsKeyboardFocusWithin || ReferenceEquals(control, enteredControl);
     }
 
     private void comboBoxTags_TextChanged(object? sender, EventArgs e)

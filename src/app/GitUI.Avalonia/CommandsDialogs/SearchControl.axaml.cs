@@ -8,6 +8,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using GitCommands;
 using GitUI.Compat;
+using GitUI.Theming;
 using DrawingColor = System.Drawing.Color;
 using WinFormsBorderStyle = GitExtensions.Shims.WinForms.BorderStyle;
 using AvaloniaSize = Avalonia.Size;
@@ -38,7 +39,7 @@ public partial class SearchControl<T> : SearchControl, IDisposable where T : cla
     private bool _isUpdatingTextFromCode;
     private DrawingColor _searchBoxBorderDefaultColor = System.Drawing.SystemColors.WindowFrame;
     private DrawingColor _searchBoxBorderHoveredColor = System.Drawing.SystemColors.Highlight;
-    private DrawingColor _searchBoxBorderFocusedColor = System.Drawing.SystemColors.Highlight;
+    private DrawingColor _searchBoxBorderFocusedColor = System.Drawing.SystemColors.HotTrack;
 
     public event Action? OnTextEntered;
 
@@ -87,7 +88,15 @@ public partial class SearchControl<T> : SearchControl, IDisposable where T : cla
 
         // Avalonia cannot focus an unattached control; preserve the original Select() at the attachment boundary.
         Dispatcher.UIThread.Post(
-            () => SearchTextBox.Focus(),
+            () =>
+            {
+                // WinForms Select() runs during construction and does not override a later
+                // explicit owner selection. Preserve that ordering when attachment is deferred.
+                if (TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement() is null)
+                {
+                    SearchTextBox.Focus();
+                }
+            },
             DispatcherPriority.Input);
     }
 
@@ -98,8 +107,23 @@ public partial class SearchControl<T> : SearchControl, IDisposable where T : cla
 
     public WinFormsBorderStyle SearchBoxBorderStyle
     {
-        get => SearchTextBoxBorder.BorderThickness == default ? WinFormsBorderStyle.None : WinFormsBorderStyle.FixedSingle;
-        set => SearchTextBoxBorder.BorderThickness = value == WinFormsBorderStyle.None ? default : new Thickness(1);
+        get => SearchTextBox.BorderThickness == new Thickness(2)
+            ? WinFormsBorderStyle.Fixed3D
+            : SearchTextBoxBorder.BorderThickness == default ? WinFormsBorderStyle.None : WinFormsBorderStyle.FixedSingle;
+        set
+        {
+            if (!Enum.IsDefined(value))
+            {
+                throw new ArgumentOutOfRangeException(nameof(value));
+            }
+
+            // Native TextBoxEx paints a custom border only in FixedSingle mode. Fixed3D
+            // retains TextBox chrome and its two-pixel non-client inset; None has neither.
+            SearchTextBox.BorderThickness = value == WinFormsBorderStyle.Fixed3D ? new Thickness(2) : default;
+            SearchTextBoxBorder.BorderThickness = value == WinFormsBorderStyle.FixedSingle ? new Thickness(1) : default;
+            SearchTextBox.Margin = value == WinFormsBorderStyle.FixedSingle ? new Thickness(-1) : default;
+            ApplySearchBoxBorderColor();
+        }
     }
 
     public DrawingColor SearchBoxBorderDefaultColor
@@ -187,8 +211,9 @@ public partial class SearchControl<T> : SearchControl, IDisposable where T : cla
         }
 
         // Avalonia may substitute a shorter platform font; preserve the WinForms 96-DPI default row height while allowing configured fonts to grow.
-        double itemHeight = Math.Max(16, Math.Ceiling(lineHeight * renderScale) / renderScale);
-        double listHeight = Math.Min(800 / renderScale, itemHeight * (SearchResultListBox.ItemCount + 1));
+        double itemHeight = Math.Max(15 * renderScale, Math.Floor(lineHeight * renderScale)) / renderScale;
+        double listHeight = Math.Min(800 / renderScale, itemHeight * (SearchResultListBox.ItemCount + 1))
+            + (2 / renderScale);
         SearchResultListBox.Width = width;
         SearchResultListBox.Height = listHeight;
 
@@ -285,7 +310,9 @@ public partial class SearchControl<T> : SearchControl, IDisposable where T : cla
 
     private void WireEvents()
     {
-        SearchTextBox.TextChanged += txtSearchBox_TextChange;
+        // WinForms TextChanged runs synchronously after Text is assigned. Avalonia's
+        // TextChanged is deferred until rendering; TextChanging preserves the source order.
+        SearchTextBox.TextChanging += txtSearchBox_TextChange;
         SearchTextBox.KeyDown += txtSearchBox_KeyDown;
         SearchTextBox.KeyUp += txtSearchBox_KeyUp;
         SearchTextBox.GotFocus += (_, _) => ApplySearchBoxBorderColor();
@@ -297,11 +324,22 @@ public partial class SearchControl<T> : SearchControl, IDisposable where T : cla
 
     private void ApplySearchBoxBorderColor()
     {
+        if (SearchBoxBorderStyle != WinFormsBorderStyle.FixedSingle)
+        {
+            return;
+        }
+
         DrawingColor color = SearchTextBox.IsKeyboardFocusWithin
             ? _searchBoxBorderFocusedColor
             : SearchTextBoxBorder.IsPointerOver
                 ? _searchBoxBorderHoveredColor
                 : _searchBoxBorderDefaultColor;
-        SearchTextBoxBorder.BorderBrush = new SolidColorBrush(AvaloniaThemeResources.ToMediaColor(color));
+
+        // System.Drawing.Color preserves the native system-role identity. Resolve it at
+        // the presentation boundary so Linux and macOS do not paint ambient Windows defaults.
+        SearchTextBoxBorder.BorderBrush = new SolidColorBrush(AvaloniaThemeResources.ToMediaColor(
+            color.IsSystemColor
+                ? AvaloniaThemeResources.ResolveSystemColor(ThemeModule.Settings, color.ToKnownColor())
+                : color));
     }
 }

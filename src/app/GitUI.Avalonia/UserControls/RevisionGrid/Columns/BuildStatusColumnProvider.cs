@@ -7,6 +7,7 @@ using Avalonia.VisualTree;
 using GitCommands;
 using GitCommands.Settings;
 using GitExtensions.Extensibility.BuildServerIntegration;
+using GitExtensions.Extensibility.Git;
 using GitExtUtils.GitUI.Theming;
 using GitUI.Compat;
 using GitUI.Theming;
@@ -21,20 +22,25 @@ internal sealed class BuildStatusColumnProvider : ColumnProvider
     private const int IconColumnWidth = 16;
     private const int TextColumnWidth = 150;
     private readonly Action<GitRevision> _openBuildReport;
+    private readonly Func<IGitModule?> _module;
 
-    public BuildStatusColumnProvider(Action<GitRevision> openBuildReport)
+    public BuildStatusColumnProvider(Action<GitRevision> openBuildReport, Func<IGitModule?> module)
         : base("Build Status", new GridLength(150), minimumWidth: 16, resizable: true)
     {
         _openBuildReport = openBuildReport;
-        Column.IsAvailable = false;
+        _module = module;
     }
 
     public override void ApplySettings()
     {
         bool showIcon = AppSettings.ShowBuildStatusIconColumn;
         bool showText = AppSettings.ShowBuildStatusTextColumn;
-        Column.IsVisible = showIcon || showText;
-        if (!Column.IsAvailable || !Column.IsVisible)
+        bool columnVisible = _module()?.GetEffectiveSettings() is { } effectiveSettings
+                             && BuildServerSettings.IntegrationEnabled.ValueOrDefault(effectiveSettings)
+                             && (showIcon || showText);
+
+        Column.IsVisible = columnVisible;
+        if (!columnVisible)
         {
             return;
         }
@@ -58,6 +64,7 @@ internal sealed class BuildStatusColumnProvider : ColumnProvider
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
+        textBlock.Classes.Add("gitextensions-commit-header");
         textBlock.Classes.Add("revision-build-status-cell");
         textBlock.Tapped += (_, _) =>
         {
@@ -69,17 +76,26 @@ internal sealed class BuildStatusColumnProvider : ColumnProvider
         return textBlock;
     }
 
-    public override void UpdateCell(Control control, GitRevision revision)
+    public override void OnCellPainting(Control control, GitRevision revision)
     {
         BuildStatusTextBlock textBlock = (BuildStatusTextBlock)control;
         BuildInfo? buildStatus = revision.BuildStatus;
+        string description = textBlock.Text ?? string.Empty;
         textBlock.Text = buildStatus is null
             ? string.Empty
             : (AppSettings.ShowBuildStatusIconColumn ? buildStatus.StatusSymbol : string.Empty)
-                + (AppSettings.ShowBuildStatusTextColumn ? buildStatus.Description : string.Empty);
-        textBlock.Cursor = string.IsNullOrWhiteSpace(buildStatus?.Url) ? Cursor.Default : new Cursor(StandardCursorType.Hand);
+                + (AppSettings.ShowBuildStatusTextColumn ? description : string.Empty);
         textBlock.Status = buildStatus?.Status;
-        UpdateToolTip(control, revision);
+    }
+
+    public override void OnCellFormatting(Control control, GitRevision revision)
+    {
+        BuildStatusTextBlock textBlock = (BuildStatusTextBlock)control;
+        BuildInfo? buildStatus = revision.BuildStatus;
+        textBlock.Text = !string.IsNullOrEmpty(buildStatus?.Description)
+            ? buildStatus.Description
+            : string.Empty;
+        textBlock.Cursor = string.IsNullOrWhiteSpace(buildStatus?.Url) ? Cursor.Default : new Cursor(StandardCursorType.Hand);
     }
 
     public override bool TryGetToolTip(GitRevision revision, [NotNullWhen(returnValue: true)] out string? toolTip)

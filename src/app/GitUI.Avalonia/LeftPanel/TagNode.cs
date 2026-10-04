@@ -11,6 +11,17 @@ internal sealed class TagNode : BaseRevisionNode, IGitRefActions, ICanDelete
     {
     }
 
+    internal override void OnSelected()
+    {
+        if (Tree.IgnoreSelectionChangedEvent)
+        {
+            return;
+        }
+
+        base.OnSelected();
+        SelectRevision();
+    }
+
     internal override void OnDoubleClick()
         => CreateBranch();
 
@@ -25,6 +36,11 @@ internal sealed class TagNode : BaseRevisionNode, IGitRefActions, ICanDelete
 
     public bool Merge()
         => UICommands.StartMergeBranchDialog(Owner, FullPath);
+
+    public override void ApplyStyle()
+    {
+        base.ApplyStyle();
+    }
 
     public bool Checkout()
         => UICommands.StartCheckoutRevisionDialog(Owner, FullPath);

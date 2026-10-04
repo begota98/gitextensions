@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
 using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Styling;
@@ -118,6 +119,24 @@ public sealed class FileViewerContentTests
 
         viewer.GetTestAccessor().ViewMode.Should().Be(ViewMode.Diff);
         viewer.TextEditor.Text.Should().Contain("+after");
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public async Task ViewChangesAsync_should_render_status_only_failures_without_running_a_diff()
+    {
+        GitItemStatus status = new("parse-error")
+        {
+            IsStatusOnly = true,
+            ErrorMessage = "Unable to parse the diff output.",
+        };
+        FileStatusItem item = new(null, new GitRevision(ObjectId.WorkTreeId), status);
+        FileViewer viewer = CreateViewer();
+
+        await viewer.ViewChangesAsync(item, CancellationToken.None);
+
+        viewer.GetTestAccessor().ViewMode.Should().Be(ViewMode.Text);
+        viewer.TextEditor.Text.Should().Be("Unable to parse the diff output.");
     }
 
     [AvaloniaTest]
@@ -329,6 +348,99 @@ public sealed class FileViewerContentTests
     }
 
     [AvaloniaTest]
+    public async Task Added_file_line_patching_should_include_copied_files_and_respect_revision_and_path_state(
+        [Values] bool copied,
+        [Values(StagedStatus.WorkTree, StagedStatus.Index, StagedStatus.Unknown)] StagedStatus staged,
+        [Values] bool exists)
+    {
+        const string fileName = "added-file.txt";
+        if (exists)
+        {
+            File.WriteAllText(Path.Combine(_workingDirectory, fileName), "added file contents\n");
+        }
+
+        GitItemStatus status = new(fileName)
+        {
+            IsNew = !copied,
+            IsCopied = copied,
+            IsTracked = true,
+            Staged = staged,
+        };
+        FileStatusItem item = new(firstRev: null, secondRev: new GitRevision(ObjectId.Random()), status);
+        FileViewer viewer = CreateViewer();
+
+        await viewer.ViewTextAsync(fileName, "added file contents\n", item);
+
+        viewer.SupportLinePatching.Should().Be(staged is StagedStatus.WorkTree or StagedStatus.Index || !exists);
+    }
+
+    [AvaloniaTest]
+    [NonParallelizable]
+    public async Task Reset_selected_lines_should_decline_Escape_and_window_close_without_changing_the_file([Values] bool byEscape)
+    {
+        DiffDisplayAppearance originalAppearance = AppSettings.DiffDisplayAppearance.Value;
+        Window owner = new();
+        try
+        {
+            AppSettings.DiffDisplayAppearance.Value = DiffDisplayAppearance.Patch;
+            const string fileName = "reset-selected-lines.txt";
+            string path = Path.Combine(_workingDirectory, fileName);
+            File.WriteAllText(path, "one\ntwo\nthree\n");
+            _module.GitExecutable.RunCommand(new GitArgumentBuilder("add") { "--", fileName }).Should().BeTrue();
+            _module.GitExecutable.RunCommand(new GitArgumentBuilder("commit") { "--quiet", "-m", "reset selected lines".Quote() }).Should().BeTrue();
+            ObjectId head = _module.GetCurrentCheckout();
+            const string changed = "ONE\ntwo\nthree\n";
+            File.WriteAllText(path, changed);
+            FileStatusItem item = new(
+                new GitRevision(ObjectId.IndexId) { ParentIds = [head] },
+                new GitRevision(ObjectId.WorkTreeId) { ParentIds = [ObjectId.IndexId] },
+                new GitItemStatus(fileName) { IsTracked = true, IsChanged = true, Staged = StagedStatus.WorkTree });
+            FileViewer viewer = CreateViewer();
+            owner.Content = viewer;
+            owner.Show();
+            await viewer.ViewChangesAsync(item, CancellationToken.None);
+            viewer.SupportLinePatching.Should().BeTrue();
+            int selectedLine = viewer.GetText().IndexOf("+ONE", StringComparison.Ordinal);
+            selectedLine.Should().BeGreaterThanOrEqualTo(0);
+            viewer.TextEditor.Select(selectedLine, "+ONE".Length);
+            int applied = 0;
+            bool cancelButtonWasAbsent = false;
+            viewer.PatchApplied += (_, _) => applied++;
+            using UpstreamTaskDialogObserver opened = new(dialog =>
+            {
+                cancelButtonWasAbsent = !dialog.GetLogicalDescendants().OfType<Button>().Any(button => button.IsCancel);
+                if (byEscape)
+                {
+                    dialog.RaiseEvent(new Avalonia.Input.KeyEventArgs
+                    {
+                        RoutedEvent = Avalonia.Input.InputElement.KeyDownEvent,
+                        Key = Avalonia.Input.Key.Escape,
+                        KeyModifiers = Avalonia.Input.KeyModifiers.None,
+                    });
+                }
+                else
+                {
+                    dialog.Close();
+                }
+            });
+
+            viewer.ResetNoncommittedSelectedLines();
+
+            opened.Count.Should().Be(1);
+            opened.Failure.Should().BeNull();
+            cancelButtonWasAbsent.Should().BeTrue("AllowCancel makes Escape cancel rather than selecting No");
+            applied.Should().Be(0);
+            File.ReadAllText(path).Should().Be(changed);
+            _module.GitExecutable.GetOutput(new GitArgumentBuilder("diff") { "--cached" }).Should().BeEmpty();
+        }
+        finally
+        {
+            owner.Close();
+            AppSettings.DiffDisplayAppearance.Value = originalAppearance;
+        }
+    }
+
+    [AvaloniaTest]
     [NonParallelizable]
     public async Task Selected_lines_should_stage_and_unstage_through_the_shared_patch_manager()
     {
@@ -404,6 +516,31 @@ public sealed class FileViewerContentTests
         internalViewer.GoToPreviousChange(contextLines: 3);
         viewer.TextEditor.TextArea.Caret.Line.Should().Be(5);
         contract.TotalNumberOfLines.Should().BeGreaterThan(9);
+    }
+
+    [AvaloniaTest]
+    public void FileViewer_should_scroll_to_a_first_change_below_the_measured_viewport()
+    {
+        FileViewer viewer = new();
+        Window owner = new() { Width = 337, Height = 260, Content = viewer };
+        try
+        {
+            owner.Show();
+            Dispatcher.UIThread.RunJobs();
+            string context = string.Concat(Enumerable.Range(1, 35).Select(line => $" context {line}\n"));
+            viewer.ViewPatch("diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1,36 +1,36 @@\n"
+                + context + "-before\n+after\n");
+            Dispatcher.UIThread.RunJobs();
+
+            viewer.TextEditor.TextArea.TextView.ScrollOffset.Y.Should().BeGreaterThan(0,
+                "a first change below the viewport must still be brought into view");
+            viewer.TextEditor.Options.AllowScrollBelowDocument.Should().BeTrue(
+                "long files retain the source editor's below-document scroll travel");
+        }
+        finally
+        {
+            owner.Close();
+        }
     }
 
     [AvaloniaTest]

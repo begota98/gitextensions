@@ -3,6 +3,7 @@ using System.Text;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Platform;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -19,6 +20,12 @@ internal readonly record struct InputControlMetadata(
     bool? IsTabStop,
     string? AccessibleName);
 
+// parity-scaffolding: Identifies the original Designer control kind without introducing a
+// System.Windows.Forms dependency into the portable capture and accessibility assembly.
+internal readonly record struct SourceControlMetadata(string FieldName, string SourceType);
+
+internal readonly record struct DesignerDpiMetadata(decimal Horizontal, decimal Vertical);
+
 // parity-scaffolding: Preserves Designer layout semantics in cross-framework capture trees;
 // rendered bounds and colors remain measured from the native Avalonia controls.
 internal readonly record struct DesignerLayoutMetadata(
@@ -30,7 +37,9 @@ internal readonly record struct DesignerLayoutMetadata(
     Thickness? Padding,
     string? Alignment,
     string? BorderStyle,
-    string? FlatStyle);
+    string? FlatStyle,
+    bool HasExplicitForeground,
+    bool HasExplicitBackground);
 
 internal static class InputAccessibility
 {
@@ -86,7 +95,7 @@ internal static class InputAccessibility
                     KeyboardNavigation.SetTabIndex(control, tabIndex);
                 }
 
-                if (item.IsTabStop is bool isTabStop)
+                if (item.IsTabStop is bool isTabStop && control is not RadioButton)
                 {
                     KeyboardNavigation.SetIsTabStop(control, isTabStop);
                 }
@@ -98,13 +107,23 @@ internal static class InputAccessibility
             }
         }
 
+        foreach (RadioButton radioButton in fields.Values.OfType<RadioButton>().Distinct())
+        {
+            ApplyRadioButtonTabStop(radioButton);
+            radioButton.IsCheckedChanged += (_, _) => ApplyRadioButtonTabStop(radioButton);
+        }
+
         foreach (Control control in EnumerateControls(host, fields))
         {
             ApplyAutomationProperties(control);
         }
 
-        host.AddHandler(InputElement.KeyDownEvent, HandleContextMenuKey, RoutingStrategies.Bubble);
+        // Opening on KeyDown lets ContextMenu treat the matching KeyUp as a request to close.
+        host.AddHandler(InputElement.KeyUpEvent, HandleContextMenuKey, RoutingStrategies.Bubble);
     }
+
+    private static void ApplyRadioButtonTabStop(RadioButton radioButton)
+        => KeyboardNavigation.SetIsTabStop(radioButton, radioButton.IsChecked == true);
 
     internal static bool IsActionable(Control control)
         => control is Button
@@ -176,15 +195,24 @@ internal static class InputAccessibility
             return;
         }
 
+        // The native key route already raised Opening, even when the handler cancelled it.
+        // Supply only missing platform gestures; retrying a native one ignores cancellation.
+        if (host.GetPlatformSettings()?.HotkeyConfiguration.OpenContextMenu
+            .Any(gesture => gesture.Matches(e)) is true)
+        {
+            return;
+        }
+
         Control? focused = TopLevel.GetTopLevel(host)?.FocusManager?.GetFocusedElement() as Control;
         for (Control? control = focused; control is not null; control = control.GetLogicalParent() as Control)
         {
-            if (control.ContextMenu is not ContextMenu contextMenu)
+            if (control.ContextMenu is null)
             {
                 continue;
             }
 
-            contextMenu.Open(control);
+            // Direct Open bypasses Opening, including dynamic contents and cancellation.
+            control.RaiseEvent(new ContextRequestedEventArgs());
             e.Handled = true;
             return;
         }

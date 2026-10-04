@@ -10,6 +10,48 @@ namespace WinFormsParityCapture.Tests;
 public sealed class ControlTreeReaderTests
 {
     [Test]
+    [Category("P8_6i")]
+    public void ReadPrimary_should_normalize_control_and_tooltip_line_endings()
+    {
+        using ToolTipForm form = new();
+        form.CreateControl();
+        form.Message.CreateControl();
+
+        CaptureNode capturedLabel = new ControlTreeReader(form, dpi: 96)
+            .ReadPrimary(form, form.Bounds)
+            .Root.Children.Single();
+
+        capturedLabel.Text.Should().Be("First\nSecond\nThird");
+        capturedLabel.ToolTip.Should().Be("Tip one\nTip two");
+    }
+
+    [Test]
+    public void ReadPrimary_should_capture_tooltips_from_a_local_component_container()
+    {
+        using ContainerToolTipForm form = new();
+        form.CreateControl();
+
+        CaptureSurface surface = new ControlTreeReader(form, dpi: 96)
+            .ReadPrimary(form, form.Bounds);
+
+        FindNode(surface.Root, "_message").ToolTip.Should().Be("Contained tip");
+    }
+
+    [Test]
+    public void ReadPrimary_should_capture_the_custom_IsReadOnly_contract()
+    {
+        using Form form = new();
+        ReadOnlyControl editor = new() { Name = "editor", IsReadOnly = false };
+        form.Controls.Add(editor);
+        form.CreateControl();
+
+        CaptureSurface surface = new ControlTreeReader(form, dpi: 96)
+            .ReadPrimary(form, form.Bounds);
+
+        FindNode(surface.Root, "editor").ReadOnly.Should().BeFalse();
+    }
+
+    [Test]
     public void ReadPrimary_should_record_TabPage_owned_tooltip_text()
     {
         using Form form = new();
@@ -44,6 +86,24 @@ public sealed class ControlTreeReaderTests
         button.Colors.Foreground.Should().MatchRegex("^#[0-9A-F]{8}$");
         button.Colors.Background.Should().MatchRegex("^#[0-9A-F]{8}$");
         button.Expanded.Should().BeNull("expanded state applies only to expandable controls");
+    }
+
+    [Test]
+    [Category("P8_6i")]
+    public void ReadPrimary_should_not_emit_private_framework_fields_as_product_fields()
+    {
+        using Form form = new();
+        using TableLayoutPanel layout = new() { Dock = DockStyle.Fill };
+        using Panel panel = new();
+        layout.Controls.Add(panel);
+        form.Controls.Add(layout);
+        form.CreateControl();
+
+        CaptureNode root = new ControlTreeReader(form, dpi: 96)
+            .ReadPrimary(form, new Rectangle(0, 0, 300, 200))
+            .Root;
+
+        Flatten(root).Should().NotContain(node => node.FieldName == "_parent");
     }
 
     [Test]
@@ -168,6 +228,38 @@ public sealed class ControlTreeReaderTests
     }
 
     [Test]
+    [Category("P8_6i")]
+    public void ReadPrimary_should_record_a_hosted_control_as_a_zero_origin_client_surface()
+    {
+        using Form form = new()
+        {
+            StartPosition = FormStartPosition.Manual,
+            Location = new Point(40, 50),
+            ClientSize = new Size(300, 200)
+        };
+        using UserControl control = new()
+        {
+            Location = new Point(20, 15),
+            ClientSize = new Size(120, 60)
+        };
+        form.Controls.Add(control);
+        form.Show();
+        Application.DoEvents();
+        Rectangle controlBounds = control.RectangleToScreen(control.ClientRectangle);
+        ControlTreeReader reader = new(control, dpi: 96);
+
+        CaptureSurface surface = reader.ReadPrimary(control, controlBounds);
+
+        surface.Root.BoundsPx.Should().Be(new CaptureRectangle
+        {
+            X = 0,
+            Y = 0,
+            Width = 120,
+            Height = 60
+        });
+    }
+
+    [Test]
     public void ReadPrimary_should_record_resolved_data_grid_item_height()
     {
         using Form form = new();
@@ -229,14 +321,20 @@ public sealed class ControlTreeReaderTests
     [Category("P8_6i")]
     public void ReadPrimary_should_flatten_framework_splitter_panels()
     {
-        using Form form = new();
-        using SplitContainer split = new() { Name = "splitContainer" };
+        using Form form = new() { ClientSize = new Size(300, 200) };
+        using SplitContainer split = new()
+        {
+            Name = "splitContainer",
+            Dock = DockStyle.Fill,
+            SplitterDistance = 100,
+        };
         using Label first = new() { Name = "first", Text = "First" };
         using Label second = new() { Name = "second", Text = "Second" };
         split.Panel1.Controls.Add(first);
         split.Panel2.Controls.Add(second);
         form.Controls.Add(split);
         form.CreateControl();
+        form.PerformLayout();
         ControlTreeReader reader = new(form, dpi: 96);
 
         CaptureNode splitNode = reader.ReadPrimary(form, new Rectangle(0, 0, 300, 200)).Root.Children.Single();
@@ -244,6 +342,8 @@ public sealed class ControlTreeReaderTests
         splitNode.ControlKind.Should().Be("split");
         splitNode.Children.Select(node => node.Name).Should().Equal("first", "second");
         splitNode.Children.Should().NotContain(node => node.Type.Contains("SplitterPanel", StringComparison.Ordinal));
+        splitNode.Children.Single(node => node.Name == "first").BoundsDip.X.Should().Be(split.Panel1.Left + first.Left);
+        splitNode.Children.Single(node => node.Name == "second").BoundsDip.X.Should().Be(split.Panel2.Left + second.Left);
     }
 
     [Test]
@@ -427,6 +527,18 @@ public sealed class ControlTreeReaderTests
         return root.Children.Select(child => FindNodeOrDefault(child, fieldName)).FirstOrDefault(match => match is not null);
     }
 
+    private static IEnumerable<CaptureNode> Flatten(CaptureNode root)
+    {
+        yield return root;
+        foreach (CaptureNode child in root.Children)
+        {
+            foreach (CaptureNode descendant in Flatten(child))
+            {
+                yield return descendant;
+            }
+        }
+    }
+
     private sealed class TestForm : Form
     {
         private readonly Button _btnAction = new()
@@ -444,5 +556,48 @@ public sealed class ControlTreeReaderTests
         }
 
         public Button TestButton => _btnAction;
+    }
+
+    private sealed class ToolTipForm : Form
+    {
+        private readonly Label _message = new() { Name = "message", Text = "First\r\nSecond\rThird" };
+        private readonly ToolTip _toolTip = new();
+
+        public ToolTipForm()
+        {
+            _toolTip.SetToolTip(_message, "Tip one\r\nTip two");
+            Controls.Add(_message);
+        }
+
+        public Label Message => _message;
+    }
+
+    private sealed class ContainerToolTipForm : Form
+    {
+        private readonly IDisposable _disposable1;
+        private readonly Label _message = new() { Name = "_message" };
+
+        public ContainerToolTipForm()
+        {
+            System.ComponentModel.Container container = new();
+            _disposable1 = container;
+            ToolTip toolTip = new(container);
+            toolTip.SetToolTip(_message, "Contained tip");
+            Controls.Add(_message);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (disposing)
+            {
+                _disposable1.Dispose();
+            }
+        }
+    }
+
+    private sealed class ReadOnlyControl : Control
+    {
+        public bool IsReadOnly { get; set; }
     }
 }

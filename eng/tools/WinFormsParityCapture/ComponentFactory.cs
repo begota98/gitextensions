@@ -1,5 +1,6 @@
 ﻿using GitCommands;
 using GitCommands.Git;
+using GitCommands.Git.Gpg;
 using GitCommands.Logging;
 using GitCommands.UserRepositoryHistory;
 using GitExtensions.Extensibility;
@@ -17,6 +18,7 @@ using GitUI.CommandsDialogs.CommitDialog;
 using GitUI.CommandsDialogs.RepoHosting;
 using GitUI.CommandsDialogs.SettingsDialog;
 using GitUI.CommandsDialogs.SettingsDialog.Pages;
+using GitUI.CommandsDialogs.WorktreeDialog;
 using GitUI.CommitInfo;
 using GitUI.HelperDialogs;
 using GitUI.LeftPanel;
@@ -32,6 +34,29 @@ internal static class ComponentFactory
 {
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, RepositoryHostCaptureFixture> RepositoryHostFixtures = new();
 
+    // parity-scaffolding: Identical pure-patch input to the candidate capture helper.
+    internal static string StandalonePatch =>
+        """
+        diff --git a/src/App.cs b/src/App.cs
+        index 8c1d2ab..b437e55 100644
+        --- a/src/App.cs
+        +++ b/src/App.cs
+        @@ -1,3 +1,4 @@
+         using Avalonia;
+        +using GitUI;
+         namespace GitExtensions;
+        -// Windows-only application shell
+        +// Cross-platform application shell
+
+        """.ReplaceLineEndings("\n");
+
+    // parity-scaffolding: This is display input, not a claim that the fixture was GPG-signed.
+    internal static GpgInfo StandaloneGpgInfo => new(
+        CommitStatus.GoodSignature,
+        "Good signature from Visual Parity <visual@example.com>\nPrimary key fingerprint: 0123 4567 89AB CDEF",
+        TagStatus.OneGood,
+        "Good signature on tag v1.0.0\nTagger: Visual Parity <visual@example.com>");
+
     public static Control Create(CaptureComponentPlan component, GitUICommands commands, CaptureStatePlan state)
     {
         // parity-scaffolding: The real application initialises this before constructing About/EnvironmentInfo.
@@ -39,10 +64,14 @@ internal static class ComponentFactory
         Control control = component.TypeName switch
         {
             "GitUI.CommandsDialogs.FormBrowse" => new FormBrowse(commands, new BrowseArguments()),
-            "GitUI.CommandsDialogs.FormCommit" => new FormCommit(commands),
+            "GitUI.CommandsDialogs.FormCommit" => CreateFormCommit(commands),
             "GitUI.CommandsDialogs.FormFileHistory" => new FormFileHistory(commands, "src/App.cs", CreateRevision(commands)),
             "GitUI.CommandsDialogs.FormStash" => new FormStash(commands),
-            "GitUI.CommandsDialogs.FormVerify" => new FormVerify(commands),
+            "GitUI.CommandsDialogs.FormVerify" => CreateFormVerify(commands),
+            "GitUI.CommandsDialogs.WorktreeDialog.FormCreateWorktree" =>
+                new FormCreateWorktree(commands, Path.TrimEndingDirectorySeparator(commands.Module.WorkingDir)),
+            "GitUI.CommandsDialogs.FormResolveConflicts" => new FormResolveConflicts(commands),
+            "GitUI.UserControls.RevisionGrid.FormRevisionFilter" => new FormRevisionFilter(commands, new FilterInfo()),
             "GitUI.CommandsDialogs.FormPull" => new FormPull(commands, "main", "origin", GitPullAction.Merge),
             "GitUI.CommandsDialogs.FormPush" => new FormPush(commands, "main"),
             "GitUI.CommandsDialogs.FormRemotes" => new FormRemotes(commands) { PreselectRemoteOnLoad = "origin" },
@@ -50,6 +79,15 @@ internal static class ComponentFactory
             "GitUI.CommandsDialogs.FormDiff" => CreateFormDiff(commands),
             "GitUI.CommandsDialogs.FormCompareToBranch" => new FormCompareToBranch(commands, commands.Module.RevParse("HEAD")),
             "GitUI.CommandsDialogs.FormFormatPatch" => new FormFormatPatch(commands),
+            "GitUI.CommandsDialogs.FormAddFiles" => new FormAddFiles(commands),
+            "GitUI.CommandsDialogs.FormApplyPatch" => new FormApplyPatch(commands),
+            "GitUI.CommandsDialogs.FormArchive" => CreateFormArchive(commands),
+            "GitUI.CommandsDialogs.FormCherryPick" => new FormCherryPick(commands, CreateRevision(commands)),
+            "GitUI.CommandsDialogs.FormClone" =>
+                new FormClone(commands, "https://github.com/gitextensions/gitextensions.git", false, null),
+            "GitUI.CommandsDialogs.FormInit" => new FormInit(commands, commands.Module.WorkingDir, null),
+            "GitUI.CommandsDialogs.FormMergeBranch" => new FormMergeBranch(commands, "feature/visual-parity"),
+            "GitUI.CommandsDialogs.FormRebase" => new FormRebase(commands, "feature/visual-parity"),
             "GitUI.CommandsDialogs.FormBlame" => CreateFormBlame(commands),
             "GitUI.CommandsDialogs.FormLog" => new FormLog(commands),
             "GitUI.CommandsDialogs.FormAddToGitIgnore" => new FormAddToGitIgnore(commands, localExclude: false, "src/*.cs"),
@@ -59,6 +97,12 @@ internal static class ComponentFactory
             "GitUI.CommandsDialogs.FormCleanupRepository" => new FormCleanupRepository(commands),
             "GitUI.CommandsDialogs.BrowseDialog.FormBisect" => CreateFormBisect(commands),
             "GitUI.CommandsDialogs.FormSparseWorkingCopy" => new FormSparseWorkingCopy(commands),
+            "GitUI.CommandsDialogs.FormCreateBranch" =>
+                new FormCreateBranch(commands, CreateRevision(commands).ObjectId, "feature/"),
+            "GitUI.CommandsDialogs.FormCheckoutBranch" =>
+                new FormCheckoutBranch(commands, "feature/visual-parity", remote: false),
+            "GitUI.CommandsDialogs.FormDeleteBranch" => new FormDeleteBranch(commands, ["feature/visual-parity"]),
+            "GitUI.CommandsDialogs.FormRenameBranch" => new FormRenameBranch(commands, "feature/visual-parity"),
             "GitUI.CommandsDialogs.FormDeleteRemoteBranch" => new FormDeleteRemoteBranch(commands, "origin/feature/delete-me"),
             "GitUI.HelperDialogs.FormResetAnotherBranch" => FormResetAnotherBranch.Create(commands, CreateRevision(commands)),
             "GitUI.CommandsDialogs.CommitDialog.FormCommitTemplateSettings" => new FormCommitTemplateSettings(commands),
@@ -111,6 +155,179 @@ internal static class ComponentFactory
         return control;
     }
 
+    // parity-scaffolding: FormCommit persists its draft when each isolated capture closes.
+    // The shared throwaway repository is deterministic input, so every state starts without
+    // a draft or amend flag just like the Avalonia capture host.
+    private static FormCommit CreateFormCommit(GitUICommands commands)
+    {
+        string gitDirectory = commands.Module.WorkingDirGitDir;
+        DeleteCaptureStateFile(Path.Combine(gitDirectory, "COMMITMESSAGE"));
+        DeleteCaptureStateFile(Path.Combine(gitDirectory, "GitExtensions.amend"));
+        return new FormCommit(commands);
+    }
+
+    // parity-scaffolding: Seeds both revision selectors through the original public archive API.
+    private static FormArchive CreateFormArchive(GitUICommands commands)
+    {
+        GitRevision revision = CreateRevision(commands);
+        FormArchive form = new(commands) { SelectedRevision = revision };
+        form.SetDiffSelectedRevision(revision);
+        return form;
+    }
+
+    // parity-scaffolding: FormVerify normally starts a modal fsck process from Shown. The
+    // isolated worker instead hosts the same representative lost-object model as the Avalonia
+    // capture side, avoiding a second UI process while leaving the original form untouched.
+    private static FormVerify CreateFormVerify(GitUICommands commands)
+    {
+        FormVerify form = new(commands);
+        System.Reflection.MethodInfo shownMethod = typeof(FormVerify).GetMethod(
+            "FormVerifyShown",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("FormVerify did not expose its Shown handler.");
+        form.Shown -= (EventHandler)shownMethod.CreateDelegate(typeof(EventHandler), form);
+
+        Type lostObjectType = typeof(FormVerify).GetNestedType(
+            "LostObject",
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("FormVerify did not expose its lost-object model.");
+        Type lostObjectKind = typeof(FormVerify).GetNestedType(
+            "LostObjectType",
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("FormVerify did not expose its lost-object kind.");
+        System.Collections.IList lostObjects = (System.Collections.IList?)FindFieldValue(form, "_lostObjects")
+            ?? throw new InvalidOperationException("FormVerify did not create its lost-object collection.");
+        lostObjects.Add(CreateLostObject(
+            lostObjectType,
+            lostObjectKind,
+            "Commit",
+            "dangling commit",
+            "1111111111111111111111111111111111111111",
+            new DateTime(2026, 7, 21, 10, 30, 0),
+            "Recover the lost feature work",
+            "Ada Developer",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        lostObjects.Add(CreateLostObject(
+            lostObjectType,
+            lostObjectKind,
+            "Commit",
+            "unreachable commit",
+            "2222222222222222222222222222222222222222",
+            new DateTime(2026, 7, 19, 9, 15, 0),
+            "Temporary experiment",
+            "Grace Contributor"));
+        lostObjects.Add(CreateLostObject(
+            lostObjectType,
+            lostObjectKind,
+            "Blob",
+            "dangling blob (seemingly: cs)",
+            "3333333333333333333333333333333333333333",
+            new DateTime(2026, 7, 18, 8, 0, 0),
+            subject: null,
+            author: null));
+
+        DataGridView warnings = (DataGridView?)FindFieldValue(form, "Warnings")
+            ?? throw new InvalidOperationException("FormVerify did not create Warnings.");
+        System.Reflection.MethodInfo selectionChangedMethod = typeof(FormVerify).GetMethod(
+            "Warnings_SelectionChanged",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("FormVerify did not expose its selection handler.");
+        warnings.SelectionChanged -= (EventHandler)selectionChangedMethod.CreateDelegate(typeof(EventHandler), form);
+
+        // Option changes normally rerun fsck through a modal FormProcess. Isolated state captures
+        // retain the real checkbox state but must not start another UI process.
+        DetachCheckedChanged(form, "Unreachable", "UnreachableCheckedChanged");
+        DetachCheckedChanged(form, "FullCheck", "FullCheckCheckedChanged");
+        DetachCheckedChanged(form, "NoReflogs", "NoReflogsCheckedChanged");
+
+        // The fixture already supplies the display type for its blob. Mark type detection complete so
+        // UpdateFilteredLostObjects does not invoke Git against the intentionally synthetic object IDs.
+        SetNonPublicField(form, "_typeDetected", true);
+        CheckBox showOther = (CheckBox?)FindFieldValue(form, "ShowOtherObjects")
+            ?? throw new InvalidOperationException("FormVerify did not create ShowOtherObjects.");
+        showOther.Checked = true;
+        InvokeNonPublic(form, "UpdateFilteredLostObjects");
+        object filteredLostObjects = FindFieldValue(form, "_filteredLostObjects")
+            ?? throw new InvalidOperationException("FormVerify did not create its filtered lost-object collection.");
+        warnings.DataSource = filteredLostObjects;
+        DataGridViewColumn dateColumn = (DataGridViewColumn?)FindFieldValue(form, "columnDate")
+            ?? throw new InvalidOperationException("FormVerify did not create columnDate.");
+        warnings.Sort(dateColumn, System.ComponentModel.ListSortDirection.Descending);
+
+        GitUI.Editor.FileViewer fileViewer = (GitUI.Editor.FileViewer?)FindFieldValue(form, "fileViewer")
+            ?? throw new InvalidOperationException("FormVerify did not create fileViewer.");
+        fileViewer.ViewFixedPatch(
+            "commit.patch",
+            "commit 1111111111111111111111111111111111111111\nAuthor: Ada Developer\n\n"
+            + "    Recover the lost feature work\n\ndiff --git a/recovered.cs b/recovered.cs\n"
+            + "--- a/recovered.cs\n+++ b/recovered.cs\n@@ -1 +1 @@\n-old content\n+recovered content\n");
+        return form;
+
+        static void DetachCheckedChanged(FormVerify form, string fieldName, string methodName)
+        {
+            CheckBox checkBox = (CheckBox?)FindFieldValue(form, fieldName)
+                ?? throw new InvalidOperationException($"FormVerify did not create {fieldName}.");
+            System.Reflection.MethodInfo method = typeof(FormVerify).GetMethod(
+                methodName,
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?? throw new InvalidOperationException($"FormVerify did not expose {methodName}.");
+            checkBox.CheckedChanged -= (EventHandler)method.CreateDelegate(typeof(EventHandler), form);
+        }
+
+        static object CreateLostObject(
+            Type lostObjectType,
+            Type lostObjectKind,
+            string kind,
+            string rawType,
+            string objectId,
+            DateTime date,
+            string? subject,
+            string? author,
+            string? parent = null)
+        {
+            object instance = Activator.CreateInstance(
+                lostObjectType,
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
+                binder: null,
+                args: [Enum.Parse(lostObjectKind, kind), rawType, ObjectId.Parse(objectId)],
+                culture: null)
+                ?? throw new InvalidOperationException("FormVerify lost-object model could not be constructed.");
+            SetProperty("Date", date);
+            SetProperty("Subject", subject);
+            SetProperty("Author", author);
+            if (parent is not null)
+            {
+                SetProperty("Parent", ObjectId.Parse(parent));
+            }
+
+            return instance;
+
+            void SetProperty(string name, object? value)
+            {
+                System.Reflection.PropertyInfo property = lostObjectType.GetProperty(name)
+                    ?? throw new InvalidOperationException($"FormVerify lost-object model did not expose {name}.");
+                property.SetValue(instance, value);
+            }
+        }
+    }
+
+    private static void DeleteCaptureStateFile(string path)
+    {
+        const int RetryCount = 20;
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Delete(path);
+                return;
+            }
+            catch (IOException) when (attempt < RetryCount)
+            {
+                Thread.Sleep(50);
+            }
+        }
+    }
+
     private static CreatePullRequestForm CreateCreatePullRequestForm(
         string componentType,
         string stateId,
@@ -138,11 +355,27 @@ internal static class ComponentFactory
         string stateId,
         GitUICommands commands)
     {
+        string currentRemote = commands.Module.GetCurrentRemote();
+        string[] remoteNames = ThreadHelper.JoinableTaskFactory.Run(commands.Module.GetRemotesAsync)
+            .Select(remote => remote.Name)
+            .ToArray();
+        if (!HasRemoteForCurrentSelection(currentRemote, remoteNames))
+        {
+            // The unchanged WinForms form uses First(...) during asynchronous Load and would
+            // otherwise show a modal error popup outside the capture worker's result channel.
+            throw new CaptureStateUnsupportedException(
+                "ViewPullRequestsForm requires a Git remote matching the current remote.");
+        }
+
         RepositoryHostCaptureFixture fixture = RepositoryHostCaptureFixture.Create(commands, componentType, stateId);
         ViewPullRequestsForm form = new(commands, fixture.Host);
         RepositoryHostFixtures.Add(form, fixture);
         return form;
     }
+
+    internal static bool HasRemoteForCurrentSelection(string? currentRemote, IEnumerable<string> remoteNames)
+        => remoteNames.Any(name => string.IsNullOrEmpty(currentRemote)
+                                   || string.Equals(name, currentRemote, StringComparison.Ordinal));
 
     // parity-scaffolding: Standalone settings pages are normally loaded by FormSettings.
     private static T CreateSettingsPage<T>(T page) where T : SettingsPageBase
@@ -237,8 +470,42 @@ internal static class ComponentFactory
     public static void PrepareAfterHandle(Control control, IGitUICommands commands, CaptureComponentPlan component)
     {
         CaptureCommandsSource source = new(commands);
+        foreach (GitUI.Editor.FileViewer fileViewer in EnumerateSelfAndDescendants(control).OfType<GitUI.Editor.FileViewer>())
+        {
+            // A hosted FileViewer can receive its command source after its runtime-load
+            // callback. Settle the original's public hotkey projection after both are ready,
+            // matching the Avalonia host's command-source callback deterministically.
+            if (FindFieldValue(fileViewer, "_uiCommandsSource") is null)
+            {
+                fileViewer.UICommandsSource = source;
+            }
+
+            fileViewer.ReloadHotkeys();
+        }
+
         switch (control)
         {
+            case RevisionGpgInfoControl revisionGpgInfo:
+                revisionGpgInfo.DisplayGpgInfo(StandaloneGpgInfo);
+                break;
+            case GitUI.Editor.FileViewer standaloneFileViewer:
+                // parity-scaffolding: The candidate's pure-patch overload supplies no item,
+                // filename, or Git ANSI coloring. Drive the same original rendering path
+                // with those exact inputs, not its settings-dependent public overload.
+                System.Reflection.MethodInfo viewPatch = typeof(GitUI.Editor.FileViewer).GetMethod(
+                    "ViewPrivateAsync",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                    ?? throw new MissingMethodException(typeof(GitUI.Editor.FileViewer).FullName, "ViewPrivateAsync");
+                ThreadHelper.JoinableTaskFactory.Run(() =>
+                    (Task?)viewPatch.Invoke(standaloneFileViewer,
+                        [null, null, StandalonePatch, null, null, GitUI.Editor.ViewMode.Diff, false, CancellationToken.None])
+                    ?? throw new InvalidOperationException("The original patch renderer did not return its readiness task."));
+                if (!standaloneFileViewer.GetText().ReplaceLineEndings("\n").Equals(StandalonePatch, StringComparison.Ordinal))
+                {
+                    throw new CaptureStateNotReadyException("The original standalone patch renderer did not retain the paired fixture text.");
+                }
+
+                break;
             case FormAbout formAbout:
                 ((System.Windows.Forms.Timer?)FindFieldValue(formAbout, "thanksTimer"))?.Stop();
                 break;
@@ -248,6 +515,12 @@ internal static class ComponentFactory
                 // deterministically, so drive that same original callback before any focus
                 // state can enter a remote URL control.
                 InvokeNonPublic(formRemotes, "application_Idle", null!, EventArgs.Empty);
+                break;
+            case FormVerify formVerify:
+                DataGridView warnings = (DataGridView?)FindFieldValue(formVerify, "Warnings")
+                    ?? throw new InvalidOperationException("FormVerify did not create Warnings.");
+                warnings.ClearSelection();
+                warnings.CurrentCell = null;
                 break;
             case CommitInfo commitInfo:
                 commitInfo.UICommandsSource = source;
@@ -299,13 +572,19 @@ internal static class ComponentFactory
                 SeedFileStatusList(fileStatusList, commands);
                 break;
 
-            // parity-scaffolding: Seeds the isolated Dashboard history before paired capture.
-            case Dashboard dashboard:
-                dashboard.UICommandsSource = source;
+            // parity-scaffolding: Each host owns the same explicit history seed, independently
+            // of any settings persisted by an earlier Dashboard/theme worker.
+            case FormBrowse:
+            case Dashboard:
                 Repository repository = new(commands.Module.WorkingDir);
                 ThreadHelper.JoinableTaskFactory.Run(() => RepositoryHistoryManager.Locals.AddAsMostRecentAsync(repository.Path));
                 ThreadHelper.JoinableTaskFactory.Run(() => RepositoryHistoryManager.Locals.AssignCategoryAsync(repository, "Development"));
-                dashboard.RefreshContent();
+                if (control is Dashboard dashboard)
+                {
+                    dashboard.UICommandsSource = source;
+                    dashboard.RefreshContent();
+                }
+
                 break;
         }
 
@@ -378,8 +657,31 @@ internal static class ComponentFactory
             WaitForEditorContent(editor, ".git/info/sparse-checkout");
         }
 
+        if (control is FormCreateWorktree)
+        {
+            ComboBox branches = (ComboBox?)FindFieldValue(control, "cbxBranches")
+                ?? throw new InvalidOperationException("FormCreateWorktree did not create its branch selector.");
+            string selectedBranch = commands.Module.GetSelectedBranch();
+            int expectedCount = commands.Module.GetRefs(RefsFilter.Heads).Count(branch => branch.Name != selectedBranch);
+            string loadingData = (string?)typeof(FormBrowse).Assembly.GetType("GitUI.TranslatedStrings", throwOnError: true)!
+                .GetProperty("LoadingData", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public)?
+                .GetValue(null) ?? throw new MissingMemberException("GitUI.TranslatedStrings", "LoadingData");
+            DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+            while ((branches.Items.Count != expectedCount || branches.Text == loadingData)
+                   && DateTime.UtcNow < deadline)
+            {
+                Application.DoEvents();
+                Thread.Sleep(25);
+            }
+
+            if (branches.Items.Count != expectedCount || branches.Text == loadingData)
+            {
+                throw new CaptureStateNotReadyException("The original worktree branch loader did not complete before capture.");
+            }
+        }
+
         RevisionGridControl? revisionGrid = control as RevisionGridControl;
-        if (revisionGrid is null && control is FormLog)
+        if (revisionGrid is null && control is FormLog or FormBrowse)
         {
             revisionGrid = (RevisionGridControl?)FindFieldValue(control, "RevisionGrid");
         }
@@ -689,6 +991,27 @@ internal static class ComponentFactory
     // replaced HEAD after preparation or if the real opening handlers did not finish.
     public static void VerifyCaptureState(Control control, IGitUICommands commands, CaptureStatePlan state)
     {
+        if (control is FormBrowse
+            && state.Id is "file-tree.focused" or "diff-files.focused" or "diff-text.focused")
+        {
+            string paneField = state.Id == "file-tree.focused" ? "fileTree" : "revisionDiff";
+            RevisionDiffControl pane = (RevisionDiffControl?)FindFieldValue(control, paneField)
+                ?? throw new CaptureStateUnsupportedException($"The original Browse form did not expose '{paneField}'.");
+            GitUI.Editor.FileViewer viewer = (GitUI.Editor.FileViewer?)FindFieldValue(pane, "DiffText")
+                ?? throw new CaptureStateUnsupportedException($"The original Browse {paneField} pane did not expose its file viewer.");
+            DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+            while (string.IsNullOrEmpty(viewer.GetText()) && DateTime.UtcNow < deadline)
+            {
+                Application.DoEvents();
+                Thread.Sleep(25);
+            }
+
+            if (string.IsNullOrEmpty(viewer.GetText()))
+            {
+                throw new CaptureStateNotReadyException($"The original Browse {paneField} pane did not publish selected-file content before capture.");
+            }
+        }
+
         if (control is ViewPullRequestsForm && state.Id == "discussion.focused")
         {
             WebBrowser discussion = (WebBrowser?)FindFieldValue(control, "_discussionWB")

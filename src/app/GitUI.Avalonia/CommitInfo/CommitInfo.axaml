@@ -3,6 +3,7 @@
              xmlns:compat="using:GitUI.Compat"
              xmlns:local="using:GitUI.CommitInfo"
              x:Class="GitUI.CommitInfo.CommitInfo"
+             Background="{DynamicResource GitExtensionsWindowBackgroundBrush}"
              ContextMenu="{StaticResource CommitInfoContextMenu}">
   <UserControl.Resources>
     <ContextMenu x:Key="CommitInfoContextMenu" x:Name="commitInfoContextMenuStrip">
@@ -35,12 +36,17 @@
     </ContextMenu>
   </UserControl.Resources>
   <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                VerticalScrollBarVisibility="Auto">
+                VerticalScrollBarVisibility="Auto"
+                AllowAutoHide="False">
     <Grid x:Name="tableLayout"
+          ColumnDefinitions="*"
           RowDefinitions="Auto,Auto,Auto"
+          HorizontalAlignment="Left"
+          VerticalAlignment="Top"
           Background="{DynamicResource GitExtensionsWindowBackgroundBrush}"
           IsVisible="False">
       <local:CommitInfoHeader x:Name="commitInfoHeader"
+                              HorizontalAlignment="Left"
                               Margin="8,8,16,8" />
       <Border x:Name="pnlCommitMessage"
               Grid.Row="1"
@@ -53,9 +59,9 @@
                                FontSize="{DynamicResource GitExtensionsCommitFontSize}"
                                FontStyle="{DynamicResource GitExtensionsCommitFontStyle}"
                                FontWeight="{DynamicResource GitExtensionsCommitFontWeight}"
+                               Text=""
                                TextWrapping="Wrap"
                                LinkClicked="LinkClicked"
-                               KeyDown="RichTextBox_KeyDown"
                                PointerPressed="_RevisionHeader_MouseDown" />
       </Border>
       <compat:XhtmlTextBlock x:Name="RevisionInfo"
@@ -67,9 +73,9 @@
                              FontSize="{DynamicResource GitExtensionsUiFontSize}"
                              FontStyle="{DynamicResource GitExtensionsUiFontStyle}"
                              FontWeight="{DynamicResource GitExtensionsUiFontWeight}"
+                             Text=""
                              TextWrapping="Wrap"
                              LinkClicked="LinkClicked"
-                             KeyDown="RichTextBox_KeyDown"
                              PointerPressed="_RevisionHeader_MouseDown" />
     </Grid>
   </ScrollViewer>

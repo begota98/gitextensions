@@ -1,5 +1,8 @@
 using GitCommands.UserRepositoryHistory;
+using GitExtensions.Extensibility.Git;
 using GitUI;
+using GitUI.CommandsDialogs.BrowseDialog.DashboardControl;
+using NSubstitute;
 
 namespace GitExtensionsTests;
 
@@ -8,9 +11,29 @@ internal static class RepositoryHistoryTestHelper
     public static IRepositoryHistoryUIService CreateEmptyService()
         => new EmptyRepositoryHistoryService();
 
+    public static IUserRepositoriesListController CreateEmptyController()
+    {
+        IUserRepositoriesListController controller = Substitute.For<IUserRepositoriesListController>();
+        controller.PreRenderRepositories(Arg.Any<string>()).Returns((
+            Array.Empty<RecentRepoInfo>(), Array.Empty<RecentRepoInfo>()));
+        return controller;
+    }
+
     private sealed class EmptyRepositoryHistoryService : IRepositoryHistoryUIService
     {
+        public event EventHandler<GitModuleEventArgs>? GitModuleChanged
+        {
+            add { }
+            remove { }
+        }
+
         public event EventHandler? HistoryChanged;
+
+        public void PopulateFavouriteRepositoriesMenu(GitUI.Compat.WinFormsControls.ToolStripDropDownItem container)
+            => container.Items.Clear();
+
+        public void PopulateRecentRepositoriesMenu(GitUI.Compat.WinFormsControls.ToolStripDropDownItem container)
+            => container.Items.Clear();
 
         public RepositoryHistorySnapshot LoadSnapshot() => new([], []);
 

@@ -1,6 +1,5 @@
 ﻿using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Threading;
 using GitCommands.Git.Gpg;
 using GitCommands.Utils;
 using GitUI.Properties;
@@ -19,7 +18,7 @@ public partial class RevisionGpgInfoControl : GitModuleControl
         InitializeComponent();
         InitializeComplete();
 
-        DisplayGpgInfo(null);
+        DisplayVerificationPending();
     }
 
     public void DisplayGpgInfo(GpgInfo? info)
@@ -50,17 +49,6 @@ public partial class RevisionGpgInfoControl : GitModuleControl
         ApplyLayout();
     }
 
-    /// <summary>
-    ///  Focuses the commit verification text, matching the focusable WinForms control.
-    /// </summary>
-    public void FocusInfo()
-    {
-        if (!txtCommitGpgInfo.Focus())
-        {
-            Dispatcher.UIThread.Post(() => txtCommitGpgInfo.Focus());
-        }
-    }
-
     private void DisplayCommitSignatureStatus(CommitStatus commitStatus)
     {
         commitSignPicture.Source = commitStatus switch
@@ -85,6 +73,22 @@ public partial class RevisionGpgInfoControl : GitModuleControl
         };
         tagSignPicture.IsVisible = tagSignPicture.Source is not null;
         txtTagGpgInfo.IsVisible = tagStatus != TagStatus.NoTag;
+    }
+
+    /// <summary>
+    ///  Indicates that the signature is still being verified, so that neither the result for the
+    ///  previously displayed revision nor the default "not signed" is presented as verified.
+    /// </summary>
+    public void DisplayVerificationPending()
+    {
+        commitSignPicture.IsVisible = false;
+        txtCommitGpgInfo.Text = TranslatedStrings.LoadingData;
+        tagSignPicture.IsVisible = false;
+
+        /* This hides the Tag row in ApplyLayout */
+        txtTagGpgInfo.IsVisible = false;
+
+        ApplyLayout();
     }
 
     private void ApplyLayout()

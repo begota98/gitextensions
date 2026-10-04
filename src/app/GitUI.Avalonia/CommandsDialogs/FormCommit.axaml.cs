@@ -27,6 +27,7 @@ using GitUI.UserControls;
 using GitUIPluginInterfaces;
 using Microsoft;
 using ResourceManager;
+using ContextMenuStrip = GitUI.Compat.WinFormsControls.ContextMenuStrip;
 using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitUI.CommandsDialogs;
@@ -178,6 +179,16 @@ public sealed partial class FormCommit : GitModuleForm
     public FormCommit()
     {
         InitializeComponent();
+
+        // Framework constraint: WinForms ToolStripStatusLabel.AutoSize includes the
+        // TextRenderer overhang that Avalonia text measurement omits.
+        WinFormsAutoSizeTextBlock.Attach(branchNameLabel);
+        WinFormsAutoSizeContentControl.Attach(remoteNameLabel, 7, 17);
+        WinFormsAutoSizeTextBlock.Attach(commitStagedCountLabel);
+        WinFormsAutoSizeTextBlock.Attach(commitCursorLineLabel);
+        WinFormsAutoSizeTextBlock.Attach(commitCursorColumnLabel);
+        WinFormsAutoSizeContentControl.Attach(Amend, 26, 19);
+        WinFormsAutoSizeContentControl.Attach(ResetAuthor, 26, 19);
         toolStripStatusBranchIcon.Source = Properties.Images.Branch.AdaptLightness();
         InitializeComplete();
     }
@@ -193,6 +204,13 @@ public sealed partial class FormCommit : GitModuleForm
         _editedCommit = editedCommit;
 
         InitializeComponent();
+        WinFormsAutoSizeTextBlock.Attach(branchNameLabel);
+        WinFormsAutoSizeContentControl.Attach(remoteNameLabel, 7, 17);
+        WinFormsAutoSizeTextBlock.Attach(commitStagedCountLabel);
+        WinFormsAutoSizeTextBlock.Attach(commitCursorLineLabel);
+        WinFormsAutoSizeTextBlock.Attach(commitCursorColumnLabel);
+        WinFormsAutoSizeContentControl.Attach(Amend, 26, 19);
+        WinFormsAutoSizeContentControl.Attach(ResetAuthor, 26, 19);
         RestoreSplitters();
         toolStripStatusBranchIcon.Source = Properties.Images.Branch.AdaptLightness();
 
@@ -294,12 +312,10 @@ public sealed partial class FormCommit : GitModuleForm
         bool closeAfterCommit = AppSettings.CloseCommitDialogAfterCommit;
         bool closeAfterLastCommit = AppSettings.CloseCommitDialogAfterLastCommit;
         bool refreshOnFocus = AppSettings.RefreshArtificialCommitOnApplicationActivated;
-        bool selectStagedOnEnter = AppSettings.CommitDialogSelectStagedOnEnterMessage.Value;
         _skipUpdate = true;
         closeDialogAfterEachCommitToolStripMenuItem.IsChecked = closeAfterCommit;
         closeDialogAfterAllFilesCommittedToolStripMenuItem.IsChecked = closeAfterLastCommit;
         refreshDialogOnFormFocusToolStripMenuItem.IsChecked = refreshOnFocus;
-        tsmiSelectStagedOnEnterMessage.IsChecked = selectStagedOnEnter;
         _skipUpdate = false;
         ShowOnlyMyMessagesToolStripMenuItem.IsChecked = AppSettings.CommitDialogShowOnlyMyMessages;
         toolbarSelectionFilter.IsVisible = AppSettings.CommitDialogSelectionFilter;
@@ -325,6 +341,9 @@ public sealed partial class FormCommit : GitModuleForm
     protected override void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
+
+        // Keep the progress bar within the height of the other status items.
+        toolStripProgressBar1.Height = commitStagedCount.Height - toolStripProgressBar1.Margin.Top - toolStripProgressBar1.Margin.Bottom;
     }
 
     private void RestoreSplitters()
@@ -413,7 +432,7 @@ public sealed partial class FormCommit : GitModuleForm
                 break;
         }
 
-        if (_useFormCommitMessage && string.IsNullOrEmpty(message))
+        if (!_useFormCommitMessage || string.IsNullOrEmpty(message))
         {
             try
             {
@@ -647,7 +666,18 @@ public sealed partial class FormCommit : GitModuleForm
             }
             else
             {
+                _currentFilesList = Unstaged;
                 Amend.Focus();
+
+                // Avalonia assigns initial focus after the first layout pass. Restore the
+                // source dialog's empty-repository focus once that framework pass completes.
+                Dispatcher.UIThread.Post(
+                    () =>
+                    {
+                        _currentFilesList = Unstaged;
+                        Amend.Focus();
+                    },
+                    DispatcherPriority.Background);
             }
 
             _loadUnstagedOutputFirstTime = false;
@@ -1102,10 +1132,10 @@ public sealed partial class FormCommit : GitModuleForm
     private void UpdateStageButtons()
     {
         bool actionsEnabled = !_indexOperationInProgress && !_commitInProgress;
-        toolStageItem.IsEnabled = actionsEnabled && Unstaged.SelectedGitItems.Any(CanStage);
-        toolStageAllItem.IsEnabled = actionsEnabled && Unstaged.GitItemFilteredStatuses.Any(CanStage);
-        toolUnstageItem.IsEnabled = actionsEnabled && Staged.SelectedGitItems.Count > 0;
-        toolUnstageAllItem.IsEnabled = actionsEnabled && Staged.GitItemFilteredStatuses.Count > 0;
+        toolStageItem.IsEnabled = actionsEnabled;
+        toolStageAllItem.IsEnabled = actionsEnabled;
+        toolUnstageItem.IsEnabled = actionsEnabled;
+        toolUnstageAllItem.IsEnabled = actionsEnabled;
         btnResetUnstagedChanges.IsEnabled = actionsEnabled && Unstaged.GitItemStatuses.Count > 0;
         btnResetAllChanges.IsEnabled = actionsEnabled && (Unstaged.GitItemStatuses.Count > 0 || Staged.GitItemStatuses.Count > 0);
 
@@ -1135,17 +1165,23 @@ public sealed partial class FormCommit : GitModuleForm
         _changingSelection = false;
         if (!Unstaged.HasSelection)
         {
-            if (Unstaged.FocusedItem is null)
+            // The click which is giving the focus back selects an item by itself. Selecting one
+            // here scrolls the list to it beforehand, so that the click misses what it aimed at.
+            if (!e.ByMouse)
             {
-                Unstaged.SelectFirstVisibleItem();
-                if (!Unstaged.HasSelection)
+                if (Unstaged.FocusedItem is null)
                 {
-                    UnstagedSelectionChanged(Unstaged, EventArgs.Empty);
+                    Unstaged.SelectFirstVisibleItem();
+                }
+                else
+                {
+                    Unstaged.SelectedItems = [Unstaged.FocusedItem];
                 }
             }
-            else
+
+            if (!Unstaged.HasSelection)
             {
-                Unstaged.SelectedItems = [Unstaged.FocusedItem];
+                UnstagedSelectionChanged(Unstaged, EventArgs.Empty);
             }
         }
         else
@@ -1252,26 +1288,31 @@ public sealed partial class FormCommit : GitModuleForm
 
     private void Staged_Enter(object? sender, EnterEventArgs e)
     {
-        SelectStaged();
+        SelectStaged(e.ByMouse);
     }
 
-    private void SelectStaged()
+    private void SelectStaged(bool byMouse = false)
     {
         _currentFilesList = Staged;
         _changingSelection = false;
         if (!Staged.HasSelection)
         {
-            if (Staged.FocusedItem is null)
+            // See Unstaged_Enter
+            if (!byMouse)
             {
-                Staged.SelectFirstVisibleItem();
-                if (!Staged.HasSelection)
+                if (Staged.FocusedItem is null)
                 {
-                    StagedSelectionChanged(Staged, EventArgs.Empty);
+                    Staged.SelectFirstVisibleItem();
+                }
+                else
+                {
+                    Staged.SelectedItems = [Staged.FocusedItem];
                 }
             }
-            else
+
+            if (!Staged.HasSelection)
             {
-                Staged.SelectedItems = [Staged.FocusedItem];
+                StagedSelectionChanged(Staged, EventArgs.Empty);
             }
         }
         else
@@ -1307,6 +1348,13 @@ public sealed partial class FormCommit : GitModuleForm
     private void UpdateCursorPosition()
     {
         string text = Message.Text ?? string.Empty;
+        if (text.Length == 0)
+        {
+            commitCursorLine.Text = "0";
+            commitCursorColumn.Text = "0";
+            return;
+        }
+
         int caret = Math.Clamp(Message.CaretIndex, 0, text.Length);
         int line = 1;
         int column = 1;
@@ -1507,7 +1555,7 @@ public sealed partial class FormCommit : GitModuleForm
         }
     }
 
-    private void Message_ContextMenuPopulating(object? sender, ContextMenu menu)
+    private void Message_ContextMenuPopulating(object? sender, ContextMenuStrip menu)
     {
         if (menu.ItemsSource is not IList<object> items)
         {
@@ -2316,6 +2364,11 @@ public sealed partial class FormCommit : GitModuleForm
 
         ResetSoft.IsEnabled = amend && !Module.RevParse(_resetSoftRevision).IsZero;
         UpdateStageButtons();
+
+        if (AppSettings.CommitDialogSelectStagedOnEnterMessage.Value)
+        {
+            SelectStaged();
+        }
     }
 
     private void StageInSuperproject_CheckedChanged(object? sender, EventArgs e)
@@ -2494,8 +2547,6 @@ public sealed partial class FormCommit : GitModuleForm
         ToolTip.SetTip(toolStageAllItem, _stageAll.Text);
         ToolTip.SetTip(toolUnstageAllItem, _unstageAll.Text);
         ToolTip.SetTip(modifyCommitMessageButton, _modifyCommitMessageButtonToolTip.Text);
-        ToolTip.SetTip(commitAuthorStatus, _commitCommitterToolTip.Text);
-        ToolTip.SetTip(selectionFilter, _selectionFilterToolTip.Text);
         UpdateStageButtons();
     }
 
@@ -2528,11 +2579,17 @@ public sealed partial class FormCommit : GitModuleForm
     internal readonly struct TestAccessor(FormCommit form)
     {
         internal SpellChecker.EditNetSpell Message => form.Message;
+        internal CheckBox Amend => form.Amend;
+        internal FileStatusList CurrentFilesList => form._currentFilesList;
+        internal FileStatusList Unstaged => form.Unstaged;
         internal MenuFlyout CommitMessageFlyout => (MenuFlyout)form.commitMessageToolStripMenuItem.Flyout!;
         internal MenuFlyout CommitTemplatesFlyout => (MenuFlyout)form.commitTemplatesToolStripMenuItem.Flyout!;
         internal Task ClosePersistenceTask => form._closePersistenceTask;
         internal ComboBox SelectionFilter => form.selectionFilter;
         internal bool SelectionFilterVisible => form.toolbarSelectionFilter.IsVisible;
+
+        internal void RaiseUnstagedEnter(bool byMouse) => form.Unstaged_Enter(form.Unstaged, new EnterEventArgs(byMouse));
+        internal void RaiseStagedEnter(bool byMouse) => form.Staged_Enter(form.Staged, new EnterEventArgs(byMouse));
 
         internal ArgumentString CreateCommitArguments(bool amend, bool allowEmpty)
             => form.CreateCommitArguments(amend, allowEmpty);

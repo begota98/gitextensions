@@ -1,5 +1,11 @@
+using System.Diagnostics.CodeAnalysis;
+using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
+using Avalonia.Input;
+using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -9,6 +15,8 @@ using GitExtensions.Extensibility.Git;
 using GitExtensions.ParityCapture;
 using GitUI;
 using GitUI.Avatars;
+using GitUI.Compat;
+using GitUI.Properties;
 using GitUI.UserControls;
 using GitUI.UserControls.RevisionGrid;
 using GitUI.UserControls.RevisionGrid.Columns;
@@ -16,6 +24,7 @@ using GitUIPluginInterfaces;
 using Microsoft.VisualStudio.Threading;
 using NSubstitute;
 using ResourceManager;
+using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitExtensionsTests;
 
@@ -52,8 +61,6 @@ public sealed class RevisionGridColumnProviderTests
             "Commit ID",
             "Build Status");
         control.ColumnProviders.Select(provider => provider.Index).Should().Equal(Enumerable.Range(0, 8));
-        control.ColumnProviders[3].Column.IsAvailable.Should().BeTrue();
-        control.ColumnProviders[7].Column.IsAvailable.Should().BeFalse();
         control.ColumnProviders[3].Column.Width.Should().Be(new GridLength(32));
         control.ColumnProviders[6].Column.Resizable.Should().BeFalse();
         control.ColumnProviders[7].Column.Width.Should().Be(new GridLength(150));
@@ -193,7 +200,7 @@ public sealed class RevisionGridColumnProviderTests
         }
     }
 
-    [Test]
+    [AvaloniaTest]
     public void Revision_grid_column_providers_should_format_dates_notes_ids_and_tooltips()
     {
         GitRevision revision = CreateRevision();
@@ -205,16 +212,109 @@ public sealed class RevisionGridColumnProviderTests
             LocalizationHelpers.GetRelativeDateString(now, revision.CommitDate, displayWeeks: false));
         DateColumnProvider.FormatDate(revision.CommitDate, now, relative: false).Should().Be(revision.CommitDate.ToString("G"));
         NotesColumnProvider.FirstLine(revision.Notes).Should().Be("First note");
-        CommitIdColumnProvider.GetCharLengthForColumnWidth(width: 55, characterWidth: 7).Should().Be(7);
-
-        AuthorNameColumnProvider authorProvider = new(new AuthorRevisionHighlighting());
+        RevisionGridControl grid = new();
+        AuthorNameColumnProvider authorProvider = new(grid, new AuthorRevisionHighlighting());
         authorProvider.TryGetToolTip(revision, out string? authorToolTip).Should().BeTrue();
         authorToolTip.Should().Contain("Author <author@example.com>");
         authorToolTip.Should().Contain("Committer <committer@example.com>");
 
-        CommitIdColumnProvider idProvider = new();
+        CommitIdColumnProvider idProvider = new(grid);
         idProvider.TryGetToolTip(revision, out string? idToolTip).Should().BeTrue();
         idToolTip.Should().Be(revision.Guid);
+        TextBlock idCell = (TextBlock)idProvider.CreateCell();
+        idProvider.Column.Width = new GridLength(55);
+        idProvider.OnColumnWidthChanged();
+        idProvider.UpdateCell(idCell, revision);
+        idCell.Text.Should().NotBeNullOrEmpty();
+        idCell.Text!.Length.Should().BeLessThan(ObjectId.Sha1CharCount);
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Revision_grid_columns_should_preserve_source_text_and_deferred_detail_behavior()
+    {
+        bool originalRelativeDate = AppSettings.RelativeDate;
+        WinFormsShims.Font originalFont = AppSettings.Font;
+        ICommitDataManager commitDataManager = Substitute.For<ICommitDataManager>();
+        try
+        {
+            AppSettings.RelativeDate = false;
+            AppSettings.Font = new WinFormsShims.Font("Segoe UI", 9);
+            GitRevision revision = CreateRevision();
+            revision.Notes = null;
+
+            RevisionGridControl grid = new();
+            NotesColumnProvider notesProvider = new(grid, commitDataManager);
+            Control notesCell = notesProvider.CreateCell();
+            notesProvider.UpdateCell(notesCell, revision);
+
+            ((TextBlock)notesCell).Text.Should().BeEmpty();
+            commitDataManager.Received(1).InitiateDelayedLoadingOfDetails(revision);
+
+            AuthorNameColumnProvider authorProvider = new(grid, new AuthorRevisionHighlighting());
+            DateTime widthWindowStart = DateTime.Now;
+            DateColumnProvider dateProvider = new(grid);
+            DateTime widthWindowEnd = DateTime.Now;
+            BuildStatusColumnProvider buildProvider = new(_ => { }, () => Substitute.For<IGitModule>());
+            authorProvider.CreateCell().Opacity.Should().Be(1,
+                "the source author column uses the row's unmodified foreground");
+            dateProvider.CreateCell().Opacity.Should().Be(1,
+                "the source date column uses the row's unmodified foreground");
+            TextBlock widthProbe = new()
+            {
+                FontFamily = new FontFamily(AppSettings.Font.Name),
+                FontSize = AvaloniaFontSettings.ToDeviceIndependentPixels(AppSettings.Font.Size),
+            };
+            List<double> sourceMeasuredWidths = [];
+            for (DateTime sample = widthWindowStart.AddSeconds(-1);
+                 sample <= widthWindowEnd.AddSeconds(1);
+                 sample = sample.AddSeconds(1))
+            {
+                sourceMeasuredWidths.Add(WinFormsTextMeasurer.MeasureTextRenderer(widthProbe, sample.ToString("G")).Width);
+            }
+
+            sourceMeasuredWidths.Should().Contain(dateProvider.Column.Width.Value,
+                "the source measures the current absolute-date text instead of using a fixed column width");
+            buildProvider.CreateCell().Classes.Should().Contain("gitextensions-commit-header",
+                "the source paints build status with its configured monospace font");
+        }
+        finally
+        {
+            AppSettings.RelativeDate = originalRelativeDate;
+            AppSettings.Font = originalFont;
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Multiline_indicator_should_only_reserve_space_when_the_source_cell_can_fit_it()
+    {
+        RevisionGridControl control = new();
+        MessageColumnProvider provider = (MessageColumnProvider)control.ColumnProviders
+            .Single(column => column.Name == "Message");
+        GitRevision revision = CreateRevision();
+        revision.HasMultiLineMessage = true;
+        Control cell = provider.CreateCell();
+        provider.UpdateCell(cell, revision);
+        AutomationProperties.GetName(cell).Should().Be(revision.Subject.Trim());
+        Window window = new() { Width = 40, Height = 40, Content = cell };
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            MultilineIndicator indicator = cell.GetVisualDescendants().OfType<MultilineIndicator>().Single();
+            indicator.IsVisible.Should().BeFalse(
+                "WinForms suppresses the 26-DIP indicator unless twice that width is available");
+
+            window.Width = 100;
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            indicator.IsVisible.Should().BeTrue();
+        }
+        finally
+        {
+            window.Close();
+        }
     }
 
     [AvaloniaTest]
@@ -342,6 +442,230 @@ public sealed class RevisionGridColumnProviderTests
         existingLabel.IsDashed.Should().BeTrue();
     }
 
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Revision_graph_provider_should_preserve_the_source_cache_lifecycle_for_retained_rows()
+    {
+        RevisionGridControl control = new();
+        RevisionGraphColumnProvider provider = (RevisionGraphColumnProvider)control.ColumnProviders[0];
+        RevisionGraphColumnProvider.TestAccessor accessor = provider.GetTestAccessor();
+        VisibleRowRange range = new(fromIndex: 2, count: 4);
+
+        accessor.RenderGraphToCache(range, toRowIndex: 5, rowHeight: 22);
+
+        accessor.CachedVisibleRange.Equals(range).Should().BeTrue();
+        accessor.LastRenderedRow.Should().Be(5);
+        provider.Clear();
+        accessor.LastRenderedRow.Should().Be(-1);
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Avatar_provider_should_show_the_source_placeholder_while_loading()
+    {
+        TaskCompletionSource<byte[]?> avatarCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        IAvatarProvider avatarProvider = Substitute.For<IAvatarProvider>();
+        avatarProvider.GetAvatarAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>())
+            .Returns(avatarCompletion.Task);
+        RevisionGridControl grid = new();
+        AvatarColumnProvider provider = new(grid, avatarProvider, Substitute.For<IAvatarCacheCleaner>());
+        Image cell = (Image)provider.CreateCell();
+
+        provider.OnCellPainting(cell, CreateRevision());
+
+        cell.Source.Should().BeSameAs(Images.User80);
+        avatarCompletion.SetResult(null);
+    }
+
+    [AvaloniaTest]
+    public void Message_provider_should_render_bisect_markers_like_the_original()
+    {
+        RevisionGridControl control = new();
+        MessageColumnProvider provider = (MessageColumnProvider)control.ColumnProviders
+            .Single(column => column.Name == "Message");
+        GitRevision revision = CreateRevision();
+        IGitRef good = CreateRef(Substitute.For<IGitModule>(), revision.ObjectId, "good", "refs/bisect/good-1");
+        IGitRef bad = CreateRef(Substitute.For<IGitModule>(), revision.ObjectId, "bad", "refs/bisect/bad");
+        good.IsBisectGood.Returns(true);
+        bad.IsBisectBad.Returns(true);
+        revision.Refs = [good, bad];
+        Control cell = provider.CreateCell();
+
+        provider.UpdateCell(cell, revision);
+
+        cell.GetVisualDescendants().OfType<Image>()
+            .Count(image => image.Classes.Contains("revision-bisect-marker"))
+            .Should().Be(2);
+        cell.GetVisualDescendants().OfType<RevisionGridRefRenderer.RefLabelControl>()
+            .Should().BeEmpty();
+    }
+
+    [AvaloniaTest]
+    public void Message_provider_should_compact_matching_remote_branch_until_hovered()
+    {
+        bool originalShowRemoteBranches = AppSettings.ShowRemoteBranches;
+        try
+        {
+            AppSettings.ShowRemoteBranches = true;
+            RevisionGridControl control = new();
+            MessageColumnProvider provider = (MessageColumnProvider)control.ColumnProviders
+                .Single(column => column.Name == "Message");
+            provider.ApplySettings();
+            GitRevision revision = CreateRevision();
+            IGitModule module = Substitute.For<IGitModule>();
+            module.GetEffectiveSetting("remote.upstream.prefix", string.Empty).Returns("prefix/");
+            IGitRef local = CreateRef(module, revision.ObjectId, "main", "refs/heads/main", isHead: true);
+            IGitRef tracked = CreateRef(module, revision.ObjectId, "origin/main", "refs/remotes/origin/main", isRemote: true);
+            tracked.Remote.Returns("origin");
+            tracked.LocalName.Returns("main");
+            local.IsTrackingRemote(tracked).Returns(true);
+            IGitRef matchingRemote = CreateRef(module, revision.ObjectId, "upstream/prefix/main", "refs/remotes/upstream/prefix/main", isRemote: true);
+            matchingRemote.Remote.Returns("upstream");
+            matchingRemote.LocalName.Returns("prefix/main");
+            revision.Refs = [local, tracked, matchingRemote];
+            Control cell = provider.CreateCell();
+
+            provider.UpdateCell(cell, revision);
+
+            RevisionGridRefRenderer.RefLabelControl label = cell.GetVisualDescendants()
+                .OfType<RevisionGridRefRenderer.RefLabelControl>()
+                .Single(item => ReferenceEquals(item.GitRef, matchingRemote));
+            label.Label.Should().Be("upstream");
+
+            label.IsHighlighted = true;
+
+            label.Label.Should().Be("upstream/prefix/main");
+        }
+        finally
+        {
+            AppSettings.ShowRemoteBranches = originalShowRemoteBranches;
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Message_provider_should_keep_exactly_one_ref_highlight_and_restore_it_after_refresh()
+    {
+        RevisionGridControl control = new();
+        MessageColumnProvider provider = (MessageColumnProvider)control.ColumnProviders
+            .Single(column => column.Name == "Message");
+        provider.ApplySettings();
+        IGitModule module = Substitute.For<IGitModule>();
+        GitRevision firstRevision = CreateRevision();
+        IGitRef firstRef = CreateRef(module, firstRevision.ObjectId, "main", "refs/heads/main", isHead: true);
+        firstRevision.Refs = [firstRef];
+        GitRevision secondRevision = new(ObjectId.Parse("abcdef1234567890abcdef1234567890abcdef12"))
+        {
+            Subject = "Second revision",
+        };
+        IGitRef secondRef = CreateRef(module, secondRevision.ObjectId, "feature", "refs/heads/feature", isHead: true);
+        secondRevision.Refs = [secondRef];
+        Control firstCell = provider.CreateCell();
+        Control secondCell = provider.CreateCell();
+        provider.UpdateCell(firstCell, firstRevision);
+        provider.UpdateCell(secondCell, secondRevision);
+        RevisionGridRefRenderer.RefLabelControl firstLabel = GetLabel(firstCell, firstRef);
+        RevisionGridRefRenderer.RefLabelControl secondLabel = GetLabel(secondCell, secondRef);
+
+        provider.SetHighlight(firstCell, firstLabel).Should().BeTrue();
+        provider.SetHighlight(firstCell, firstLabel).Should().BeFalse();
+        firstLabel.IsHighlighted.Should().BeTrue();
+        firstCell.Cursor.Should().NotBeNull();
+
+        provider.SetHighlight(secondCell, secondLabel).Should().BeTrue();
+        firstLabel.IsHighlighted.Should().BeFalse();
+        firstCell.Cursor.Should().BeNull();
+        secondLabel.IsHighlighted.Should().BeTrue();
+
+        provider.UpdateCell(secondCell, secondRevision);
+        RevisionGridRefRenderer.RefLabelControl refreshedLabel = GetLabel(secondCell, secondRef);
+        refreshedLabel.Should().NotBeSameAs(secondLabel);
+        secondLabel.IsHighlighted.Should().BeFalse();
+        refreshedLabel.IsHighlighted.Should().BeTrue();
+        secondCell.Cursor.Should().NotBeNull();
+
+        provider.UpdateCell(secondCell, firstRevision);
+        refreshedLabel.IsHighlighted.Should().BeFalse();
+        secondCell.Cursor.Should().BeNull();
+
+        provider.SetHighlight(firstCell, firstLabel).Should().BeTrue();
+        provider.Clear();
+        firstLabel.IsHighlighted.Should().BeFalse();
+        firstCell.Cursor.Should().BeNull();
+
+        static RevisionGridRefRenderer.RefLabelControl GetLabel(Control cell, IGitRef gitRef)
+            => cell.GetVisualDescendants()
+                .OfType<RevisionGridRefRenderer.RefLabelControl>()
+                .Single(label => ReferenceEquals(label.GitRef, gitRef));
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Revision_grid_should_hide_its_active_tooltip_when_the_owner_window_deactivates()
+    {
+        bool originalTooltips = AppSettings.ShowRevisionGridTooltips.Value;
+        Window owner = new() { Width = 900, Height = 180 };
+        try
+        {
+            AppSettings.ShowRevisionGridTooltips.Value = true;
+            RevisionGridControl control = new();
+            GitRevision revision = CreateRevision();
+            revision.HasMultiLineMessage = true;
+            revision.Body = revision.Subject + "\n\nTooltip body";
+            control.GetTestAccessor().SetRevisions([revision]);
+            owner.Content = control;
+            owner.Show();
+            owner.Activate();
+            Dispatcher.UIThread.RunJobs();
+            control.GetTestAccessor().OwnerWindow.Should().BeSameAs(owner);
+            Control messageCell = control.GetVisualDescendants()
+                .OfType<Control>()
+                .Single(item => item.Classes.Contains("revision-message-cell"));
+            Point point = messageCell.TranslatePoint(
+                    new Point(messageCell.Bounds.Width / 2, messageCell.Bounds.Height / 2),
+                    owner)
+                ?? throw new InvalidOperationException("The revision message cell is not attached.");
+
+            owner.MouseMove(point, RawInputModifiers.None);
+            Dispatcher.UIThread.RunJobs();
+            ToolTip.GetTip(messageCell).Should().NotBeNull();
+            ToolTip.SetIsOpen(messageCell, true);
+            ToolTip.GetIsOpen(messageCell).Should().BeTrue();
+
+            control.GetTestAccessor().RaiseOwnerWindowDeactivated();
+            Dispatcher.UIThread.RunJobs();
+
+            ToolTip.GetIsOpen(messageCell).Should().BeFalse();
+        }
+        finally
+        {
+            owner.Close();
+            AppSettings.ShowRevisionGridTooltips.Value = originalTooltips;
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Column_provider_should_preserve_the_source_format_paint_and_tooltip_order()
+    {
+        bool originalTooltips = AppSettings.ShowRevisionGridTooltips.Value;
+        try
+        {
+            AppSettings.ShowRevisionGridTooltips.Value = true;
+            RecordingColumnProvider provider = new();
+            Control cell = provider.CreateCell();
+
+            provider.UpdateCell(cell, CreateRevision());
+
+            provider.Stages.Should().Equal("format", "paint", "tooltip");
+            ToolTip.GetTip(cell).Should().Be("provider tooltip");
+        }
+        finally
+        {
+            AppSettings.ShowRevisionGridTooltips.Value = originalTooltips;
+        }
+    }
+
     private static GitRevision CreateRevision()
         => new(ObjectId.Parse("1234567890abcdef1234567890abcdef12345678"))
         {
@@ -387,6 +711,33 @@ public sealed class RevisionGridColumnProviderTests
         gitRef.IsRemote.Returns(isRemote);
         gitRef.IsTag.Returns(isTag);
         return gitRef;
+    }
+
+    private sealed class RecordingColumnProvider : ColumnProvider
+    {
+        public RecordingColumnProvider()
+            : base("Recording", new GridLength(10), minimumWidth: 1, resizable: false)
+        {
+        }
+
+        public List<string> Stages { get; } = [];
+
+        public override Control CreateCell() => new TextBlock();
+
+        public override void OnCellFormatting(Control control, GitRevision revision)
+            => Stages.Add("format");
+
+        public override void OnCellPainting(Control control, GitRevision revision)
+            => Stages.Add("paint");
+
+        public override bool TryGetToolTip(
+            GitRevision revision,
+            [NotNullWhen(returnValue: true)] out string? toolTip)
+        {
+            Stages.Add("tooltip");
+            toolTip = "provider tooltip";
+            return true;
+        }
     }
 
     private readonly record struct ColumnSettings(

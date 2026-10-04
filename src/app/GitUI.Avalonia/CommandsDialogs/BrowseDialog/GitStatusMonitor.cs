@@ -1,9 +1,10 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using Avalonia.Threading;
 using GitCommands;
 using GitCommands.Git;
 using GitExtensions.Extensibility;
 using GitExtensions.Extensibility.Git;
+using GitUI.NBugReports;
 
 namespace GitUI.CommandsDialogs.BrowseDialog;
 
@@ -39,7 +40,11 @@ public sealed class GitStatusMonitor : IDisposable
     /// https://github.com/microsoft/WSL/issues/4581
     /// </summary>
     private const int PeriodicUpdateIntervalWSL = 60 * 1000;
-    private const int MaxConsecutiveErrors = 3;
+
+    /// <summary>
+    /// The number how often an update must fail in a row until the monitoring is stopped.
+    /// </summary>
+    private const int _maxConsecutiveErrors = 3;
 
     /// <summary>
     /// git-status command is running and no cancellation has been requested
@@ -62,6 +67,7 @@ public sealed class GitStatusMonitor : IDisposable
     private readonly CancellationTokenSequence _statusSequence = new();
     private readonly GetAllChangedFilesOutputParser _getAllChangedFilesOutputParser;
     private readonly Func<bool> _isMinimized;
+    private Action? _detachCommands;
     private bool _disposed;
 
     // Timestamps to schedule status updates, limit the update interval dynamically
@@ -128,6 +134,65 @@ public sealed class GitStatusMonitor : IDisposable
 
         Init(commandsSource);
         _getAllChangedFilesOutputParser = new GetAllChangedFilesOutputParser(() => commandsSource.UICommands.Module);
+
+        return;
+
+        void WorkTreeWatcherError(object? sender, ErrorEventArgs e)
+        {
+            // Called for instance at buffer overflow
+            ScheduleNextUpdateTime(FileChangedUpdateDelay);
+        }
+
+        void GitDirChanged(object? sender, FileSystemEventArgs e)
+        {
+            if (_gitPath is null)
+            {
+                return;
+            }
+
+            // git directory changed
+            if (string.Equals(Path.GetFileName(e.FullPath), "index.lock", PathComparison))
+            {
+                return;
+            }
+
+            if (_submodulesPath is not null
+                && IsSameOrDescendantPath(e.FullPath, _submodulesPath)
+                && Directory.Exists(e.FullPath))
+            {
+                // submodules directory's subdir changed
+                // cut/paste/rename/delete operations are not expected on directories inside nested .git dirs
+                return;
+            }
+
+            _gitDirWatcher.EnableRaisingEvents = false;
+            ScheduleNextUpdateTime(FileChangedUpdateDelay);
+        }
+
+        void WorkTreeChanged(object? sender, FileSystemEventArgs e)
+        {
+            if (_gitPath is not null && IsSameOrDescendantPath(e.FullPath, _gitPath))
+            {
+                GitDirChanged(sender, e);
+                return;
+            }
+
+            if (string.Equals(Path.GetFileName(e.FullPath), ".git", PathComparison))
+            {
+                // new submodule .git file
+                return;
+            }
+
+            if (string.Equals(Path.GetFileName(e.FullPath), "index.lock", PathComparison)
+                && string.Equals(Path.GetFileName(Path.GetDirectoryName(e.FullPath)), ".git", PathComparison))
+            {
+                // old submodule .git\index.lock file
+                return;
+            }
+
+            _workTreeWatcher.EnableRaisingEvents = false;
+            ScheduleNextUpdateTime(FileChangedUpdateDelay);
+        }
     }
 
     public void InvalidateGitWorkingDirectoryStatus()
@@ -148,6 +213,10 @@ public sealed class GitStatusMonitor : IDisposable
         }
 
         _disposed = true;
+        _detachCommands?.Invoke();
+        _detachCommands = null;
+        UICommandsSource = null;
+
         _currentStatus = GitStatusMonitorState.Stopped;
         _timerRefresh.Stop();
         _timerRefresh.Tick -= TimerRefreshTick;
@@ -189,6 +258,10 @@ public sealed class GitStatusMonitor : IDisposable
         set
         {
             ThreadHelper.AssertOnUIThread();
+            if (_disposed)
+            {
+                return;
+            }
 
             GitStatusMonitorState previousStatus = _currentStatus;
             _currentStatus = value;
@@ -264,82 +337,72 @@ public sealed class GitStatusMonitor : IDisposable
 
     private IGitUICommandsSource? UICommandsSource { get; set; }
 
-    private void GitDirChanged(object? sender, FileSystemEventArgs e)
-    {
-        if (_gitPath is null)
-        {
-            return;
-        }
-
-        if (string.Equals(Path.GetFileName(e.FullPath), "index.lock", PathComparison))
-        {
-            return;
-        }
-
-        if (_submodulesPath is not null
-            && IsSameOrDescendantPath(e.FullPath, _submodulesPath)
-            && Directory.Exists(e.FullPath))
-        {
-            return;
-        }
-
-        _gitDirWatcher.EnableRaisingEvents = false;
-        ScheduleNextUpdateTime(FileChangedUpdateDelay);
-    }
-
     private void Init(IGitUICommandsSource commandsSource)
     {
         UICommandsSource = commandsSource ?? throw new ArgumentNullException(nameof(commandsSource));
         UICommandsSource.UICommandsChanged += commandsSource_GitUICommandsChanged;
-        ActivateCommands(commandsSource.UICommands);
-    }
-
-    private void commandsSource_GitUICommandsChanged(object? sender, GitUICommandsChangedEventArgs e)
-    {
-        IGitUICommands? oldCommands = e.OldCommands;
-        if (oldCommands is not null)
+        commandsSource_activate(commandsSource);
+        _detachCommands = () =>
         {
-            oldCommands.PreCheckoutBranch -= GitUICommands_PreCheckout;
-            oldCommands.PreCheckoutRevision -= GitUICommands_PreCheckout;
-            oldCommands.PostCheckoutBranch -= GitUICommands_PostCheckout;
-            oldCommands.PostCheckoutRevision -= GitUICommands_PostCheckout;
-            oldCommands.PostRepositoryChanged -= GitUICommands_PostRepositoryChanged;
+            commandsSource.UICommandsChanged -= commandsSource_GitUICommandsChanged;
+            commandsSource_deactivate(commandsSource.UICommands);
+        };
+
+        return;
+
+        void commandsSource_GitUICommandsChanged(object? sender, GitUICommandsChangedEventArgs e)
+        {
+            if (e.OldCommands is not null)
+            {
+                commandsSource_deactivate(e.OldCommands);
+            }
+
+            if (sender is IGitUICommandsSource source)
+            {
+                commandsSource_activate(source);
+            }
         }
 
-        if (sender is IGitUICommandsSource source)
+        void commandsSource_activate(IGitUICommandsSource sender)
         {
-            ActivateCommands(source.UICommands);
+            IGitUICommands newCommands = sender.UICommands;
+            newCommands.PreCheckoutBranch += GitUICommands_PreCheckout;
+            newCommands.PreCheckoutRevision += GitUICommands_PreCheckout;
+            newCommands.PostCheckoutBranch += GitUICommands_PostCheckout;
+            newCommands.PostCheckoutRevision += GitUICommands_PostCheckout;
+            newCommands.PostRepositoryChanged += GitUICommands_PostRepositoryChanged;
+
+            IGitModule module = newCommands.Module;
+            StartWatchingChanges(module.WorkingDir, module.WorkingDirGitDir);
         }
-    }
 
-    private void ActivateCommands(IGitUICommands commands)
-    {
-        commands.PreCheckoutBranch += GitUICommands_PreCheckout;
-        commands.PreCheckoutRevision += GitUICommands_PreCheckout;
-        commands.PostCheckoutBranch += GitUICommands_PostCheckout;
-        commands.PostCheckoutRevision += GitUICommands_PostCheckout;
-        commands.PostRepositoryChanged += GitUICommands_PostRepositoryChanged;
-
-        IGitModule module = commands.Module;
-        StartWatchingChanges(module.WorkingDir, module.WorkingDirGitDir);
-    }
-
-    private void GitUICommands_PostCheckout(object? sender, GitUIPostActionEventArgs e)
-    {
-        CurrentStatus = GitStatusMonitorState.Running;
-    }
-
-    private void GitUICommands_PostRepositoryChanged(object? sender, GitUIEventArgs e)
-    {
-        lock (_statusSequenceLock)
+        void commandsSource_deactivate(IGitUICommands commands)
         {
-            _isFirstPostRepoChanged = true;
+            commands.PreCheckoutBranch -= GitUICommands_PreCheckout;
+            commands.PreCheckoutRevision -= GitUICommands_PreCheckout;
+            commands.PostCheckoutBranch -= GitUICommands_PostCheckout;
+            commands.PostCheckoutRevision -= GitUICommands_PostCheckout;
+            commands.PostRepositoryChanged -= GitUICommands_PostRepositoryChanged;
         }
-    }
 
-    private void GitUICommands_PreCheckout(object? sender, GitUIEventArgs e)
-    {
-        CurrentStatus = GitStatusMonitorState.Paused;
+        void GitUICommands_PreCheckout(object? sender, GitUIEventArgs e)
+        {
+            CurrentStatus = GitStatusMonitorState.Paused;
+        }
+
+        void GitUICommands_PostCheckout(object? sender, GitUIPostActionEventArgs e)
+        {
+            CurrentStatus = GitStatusMonitorState.Running;
+        }
+
+        void GitUICommands_PostRepositoryChanged(object? sender, GitUIEventArgs e)
+        {
+            lock (_statusSequenceLock)
+            {
+                // First time after open a repo, trigger an update with locked buffers (to speed up subsequent updates)
+                _isFirstPostRepoChanged = true;
+            }
+        }
     }
 
     private static StringComparison PathComparison
@@ -387,6 +450,7 @@ public sealed class GitStatusMonitor : IDisposable
         }
         catch
         {
+            // no-op
             CurrentStatus = GitStatusMonitorState.Stopped;
         }
     }
@@ -450,6 +514,8 @@ public sealed class GitStatusMonitor : IDisposable
             }
 
             EnableRaisingEvents();
+
+            // capture a consistent state in the main thread
             module = activeModule;
             noLocks = !_isFirstPostRepoChanged;
             cancellationToken = _statusSequence.Next();
@@ -489,13 +555,22 @@ public sealed class GitStatusMonitor : IDisposable
             }
             catch (OperationCanceledException)
             {
+                // No action
             }
             catch (Exception exception)
             {
-                Trace.WriteLine(exception.Message);
+                if (exception.Message?.Contains(BugReportInvoker.DubiousOwnershipSecurityConfigString) is true)
+                {
+                    BugReportInvoker.Report(exception, isTerminating: false);
+                }
+                else
+                {
+                    Trace.WriteLine(exception.Message);
+                }
+
                 try
                 {
-                    if (++_consecutiveErrorCount < MaxConsecutiveErrors)
+                    if (++_consecutiveErrorCount < _maxConsecutiveErrors)
                     {
                         // Try again
                         ScheduleNextInteractiveTime();
@@ -509,6 +584,7 @@ public sealed class GitStatusMonitor : IDisposable
                 }
                 catch
                 {
+                    // No action
                 }
             }
             finally
@@ -574,13 +650,13 @@ public sealed class GitStatusMonitor : IDisposable
         // Start commands, also if running already
         lock (_statusSequenceLock)
         {
-            _statusSequence.CancelCurrent();
-            _commandIsRunningAndNotCancelled = false;
-
             if (_disposed)
             {
                 return;
             }
+
+            _statusSequence.CancelCurrent();
+            _commandIsRunningAndNotCancelled = false;
 
             int ticks = Environment.TickCount;
             _nextEarliestTime = ticks + MinUpdateInterval;
@@ -590,33 +666,5 @@ public sealed class GitStatusMonitor : IDisposable
                 _nextUpdateTime = ticks + delay;
             }
         }
-    }
-
-    private void WorkTreeChanged(object? sender, FileSystemEventArgs e)
-    {
-        if (_gitPath is not null && IsSameOrDescendantPath(e.FullPath, _gitPath))
-        {
-            GitDirChanged(sender, e);
-            return;
-        }
-
-        if (string.Equals(Path.GetFileName(e.FullPath), ".git", PathComparison))
-        {
-            return;
-        }
-
-        if (string.Equals(Path.GetFileName(e.FullPath), "index.lock", PathComparison)
-            && string.Equals(Path.GetFileName(Path.GetDirectoryName(e.FullPath)), ".git", PathComparison))
-        {
-            return;
-        }
-
-        _workTreeWatcher.EnableRaisingEvents = false;
-        ScheduleNextUpdateTime(FileChangedUpdateDelay);
-    }
-
-    private void WorkTreeWatcherError(object? sender, ErrorEventArgs e)
-    {
-        ScheduleNextUpdateTime(FileChangedUpdateDelay);
     }
 }

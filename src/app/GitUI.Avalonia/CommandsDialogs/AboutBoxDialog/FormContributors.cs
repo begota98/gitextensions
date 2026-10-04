@@ -73,7 +73,7 @@ public sealed partial class FormContributors : GitExtensionsForm
                     VerticalContentAlignment = VerticalAlignment.Top,
                     IsReadOnly = true,
                     IsTabStop = false,
-                    TextWrapping = Avalonia.Media.TextWrapping.NoWrap,
+                    TextWrapping = Avalonia.Media.TextWrapping.Wrap,
                 };
                 ScrollViewer.SetHorizontalScrollBarVisibility(textBox, Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled);
                 ScrollViewer.SetVerticalScrollBarVisibility(textBox, Avalonia.Controls.Primitives.ScrollBarVisibility.Visible);
@@ -96,12 +96,15 @@ public sealed partial class FormContributors : GitExtensionsForm
 
             TabControl GetNewTabControl()
             {
-                return new FullBleedTabControl
+                FullBleedTabControl tabControl = new()
                 {
                     HorizontalAlignment = HorizontalAlignment.Stretch,
                     VerticalAlignment = VerticalAlignment.Stretch,
                     SelectedIndex = 0,
                 };
+                tabControl.Classes.Add("gitextensions-native-tabs");
+                tabControl.Classes.Add("gitextensions-contributors-tabs");
+                return tabControl;
             }
         }
     }

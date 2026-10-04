@@ -767,12 +767,10 @@ internal static class CaptureComparer
 
     private static PixelMetrics AggregatePixelMetrics(IReadOnlyList<PixelMetrics> metrics)
     {
-        long totalPixels = metrics.Sum(metric => (long)Math.Max(metric.ReferenceWidth, metric.CandidateWidth)
-                                                       * Math.Max(metric.ReferenceHeight, metric.CandidateHeight));
+        long totalPixels = metrics.Sum(metric => (long)metric.ComparedPixelCount);
         double Weighted(Func<PixelMetrics, double> selector) =>
             metrics.Sum(metric => selector(metric)
-                                  * (long)Math.Max(metric.ReferenceWidth, metric.CandidateWidth)
-                                  * Math.Max(metric.ReferenceHeight, metric.CandidateHeight)) / totalPixels;
+                                  * metric.ComparedPixelCount) / Math.Max(1, totalPixels);
 
         return new PixelMetrics
         {
@@ -780,6 +778,7 @@ internal static class CaptureComparer
             ReferenceHeight = metrics.Sum(metric => metric.ReferenceHeight),
             CandidateWidth = metrics.Max(metric => metric.CandidateWidth),
             CandidateHeight = metrics.Sum(metric => metric.CandidateHeight),
+            ComparedPixelCount = checked((int)totalPixels),
             Ssim = Math.Round(Weighted(metric => metric.Ssim), 6),
             DifferentPixelFraction = Math.Round(Weighted(metric => metric.DifferentPixelFraction), 6),
             MaximumChannelDelta = metrics.Max(metric => metric.MaximumChannelDelta),
@@ -1000,15 +999,30 @@ internal static class CaptureComparer
     private static string GetFocusOrder(CaptureNode root) =>
         string.Join(
             ",",
-            Flatten(root)
-                .Select((node, index) => (Node: node, Index: index))
-                .Where(item => item.Node.FieldName is not null
-                               && item.Node.TabStop == true
-                               && item.Node.Enabled != false
-                               && item.Node.Visible != false)
-                .OrderBy(item => item.Node.TabIndex ?? int.MaxValue)
-                .ThenBy(item => item.Index)
-                .Select(item => item.Node.FieldName));
+            EnumerateFocusOrder(root).Select(node => node.FieldName));
+
+    private static IEnumerable<CaptureNode> EnumerateFocusOrder(CaptureNode parent)
+    {
+        foreach (CaptureNode child in parent.Children
+                     .Select((node, index) => (Node: node, Index: index))
+                     .OrderBy(item => item.Node.TabIndex ?? int.MaxValue)
+                     .ThenBy(item => item.Index)
+                     .Select(item => item.Node))
+        {
+            if (child.FieldName is not null
+                && child.TabStop == true
+                && child.Enabled != false
+                && child.Visible != false)
+            {
+                yield return child;
+            }
+
+            foreach (CaptureNode descendant in EnumerateFocusOrder(child))
+            {
+                yield return descendant;
+            }
+        }
+    }
 
     private static string ResolveArtifact(string manifestDirectory, string? relativePath, string kind)
     {

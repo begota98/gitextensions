@@ -1,4 +1,4 @@
-﻿using Avalonia.Controls;
+using Avalonia.Controls;
 using Avalonia.Headless.NUnit;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -40,10 +40,9 @@ public sealed class RevisionGridSupportTests
         double renderScale,
         double expectedHeightDip)
     {
+        // Actual native Segoe UI 9pt Graphics.MeasureString("By") height.
         double actual = RevisionGridControl.CalculateRowHeight(
-            fontSizeDip: 12,
-            lineSpacing: 2724,
-            designEmHeight: 2048,
+            measuredTextHeightDip: 17.4609375,
             renderScale);
 
         actual.Should().BeApproximately(expectedHeightDip, 0.0001);
@@ -133,6 +132,148 @@ public sealed class RevisionGridSupportTests
         history.NavigateBackward().Should().Be(second);
     }
 
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void DescribeRevision_should_use_the_complete_name_for_ambiguous_refs()
+    {
+        ObjectId objectId = Id('1');
+        IGitRef branch = new GitRef(null!, objectId, "refs/heads/main");
+        IGitRef tag = new GitRef(null!, objectId, "refs/tags/main");
+        GitRevision revision = new(objectId)
+        {
+            Refs = [branch],
+            Subject = "ambiguous ref",
+        };
+        IGitUICommandsSource source = CreateUICommandsSource();
+        IGitModule module = source.UICommands.Module;
+        module.GetCurrentCheckout().Returns(objectId);
+        RevisionGridControl control = new() { UICommandsSource = source };
+
+        try
+        {
+            control.ReloadRevisions(
+                module,
+                revisionFilter: "HEAD",
+                getRefs: _ => [branch, tag]);
+
+            control.DescribeRevision(revision).Should().Be("refs/heads/main");
+        }
+        finally
+        {
+            control.CancelBackgroundTasks();
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void ReloadRevisions_should_supersede_an_active_load_and_preserve_explicit_selection()
+    {
+        IGitUICommandsSource source = CreateUICommandsSource();
+        RevisionGridControl control = new() { UICommandsSource = source };
+        GitRevision previousSelection = Revision('1', "previous selection");
+        control.GetTestAccessor().SetRevisions([previousSelection]);
+        control.GetTestAccessor().Revisions.SelectedItem = previousSelection;
+        int loadingCount = 0;
+        control.RevisionsLoading += (_, _) => loadingCount++;
+        ObjectId requestedSelection = Id('2');
+
+        try
+        {
+            control.ReloadRevisions(source.UICommands.Module, revisionFilter: "HEAD", getRefs: _ => []);
+            control.ReloadRevisions(
+                source.UICommands.Module,
+                revisionFilter: "HEAD~1",
+                selectedObjectId: requestedSelection,
+                getRefs: _ => []);
+
+            loadingCount.Should().Be(2);
+            control.GetTestAccessor().PendingSelectedObjectId.Should().Be(requestedSelection);
+        }
+        finally
+        {
+            control.CancelBackgroundTasks();
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Revision_grid_should_show_its_source_loading_page_when_first_attached()
+    {
+        RevisionGridControl control = new();
+        Window window = new() { Width = 500, Height = 240, Content = control };
+
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            control.GetTestAccessor().CurrentPage.Should().BeSameAs(control.GetTestAccessor().Revisions);
+            control.GetVisualDescendants().OfType<LoadingControl>().Should().ContainSingle();
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Revision_grid_should_preserve_rows_populated_before_first_attachment()
+    {
+        RevisionGridControl control = new() { UICommandsSource = CreateUICommandsSource() };
+        control.GetTestAccessor().SetRevisions([Revision('1', "already loaded")]);
+        Window window = new() { Width = 500, Height = 240, Content = control };
+
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            control.GetTestAccessor().CurrentPage.Should().BeSameAs(control.GetTestAccessor().Revisions);
+            control.GetTestAccessor().Revisions.ItemCount.Should().Be(1);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Selection_changed_should_throttle_rapid_revision_navigation_like_the_original()
+    {
+        RevisionGridControl control = new() { UICommandsSource = CreateUICommandsSource() };
+        Window window = new() { Width = 500, Height = 240, Content = control };
+        window.Show();
+        try
+        {
+            control.GetTestAccessor().SetRevisions(
+            [
+                Revision('1', "first"),
+                Revision('2', "second"),
+                Revision('3', "third"),
+            ]);
+            Dispatcher.UIThread.RunJobs();
+
+            int selectionChangedCount = 0;
+            control.SelectionChanged += (_, _) => selectionChangedCount++;
+            ListBox revisions = control.GetTestAccessor().Revisions;
+
+            revisions.SelectedIndex = 0;
+            revisions.SelectedIndex = 1;
+            revisions.SelectedIndex = 2;
+
+            selectionChangedCount.Should().Be(0);
+            Thread.Sleep(100);
+            Dispatcher.UIThread.RunJobs();
+            selectionChangedCount.Should().Be(1);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     [Test]
     public void Parent_child_navigation_history_should_reverse_the_last_direction()
     {
@@ -169,6 +310,43 @@ public sealed class RevisionGridSupportTests
         range.Contains(7).Should().BeFalse();
         range.Equals(new VisibleRowRange(3, 4)).Should().BeTrue();
         range.ToString().Should().Be("[3, 6] 4 rows");
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6h.1")]
+    public void SetSelectedRevision_should_focus_the_grid_and_replace_an_existing_selection()
+    {
+        RevisionGridControl control = new() { UICommandsSource = CreateUICommandsSource() };
+        RevisionGridControl.TestAccessor accessor = control.GetTestAccessor();
+        GitRevision[] revisions = [Revision(1), Revision(2), Revision(3)];
+        accessor.SetRevisions(revisions);
+        TextBox otherControl = new();
+        Grid host = new()
+        {
+            RowDefinitions = new RowDefinitions("*,Auto"),
+            Children = { control, otherControl },
+        };
+        Grid.SetRow(otherControl, 1);
+        Window window = new() { Width = 900, Height = 160, Content = host };
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            control.MultiSelect = true;
+            accessor.Revisions.SelectedItems!.Add(revisions[0]);
+            accessor.Revisions.SelectedItems!.Add(revisions[1]);
+            otherControl.Focus(NavigationMethod.Pointer).Should().BeTrue();
+
+            control.SetSelectedRevision(revisions[2].ObjectId).Should().BeTrue();
+            Dispatcher.UIThread.RunJobs();
+
+            accessor.Revisions.SelectedItems!.Cast<object>().Should().ContainSingle().Which.Should().BeSameAs(revisions[2]);
+            accessor.Revisions.IsKeyboardFocusWithin.Should().BeTrue();
+        }
+        finally
+        {
+            window.Close();
+        }
     }
 
     [AvaloniaTest]
@@ -583,6 +761,46 @@ public sealed class RevisionGridSupportTests
     }
 
     [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Revision_grid_tooltip_reload_should_release_retired_cells_and_allow_reregistration()
+    {
+        RevisionGridControl control = new();
+        RevisionGridToolTipProvider provider = new(control);
+        TextBlock cell = new() { Text = "commit subject" };
+        GitRevision revision = new(ObjectId.Parse("1111111111111111111111111111111111111111"));
+        System.Reflection.FieldInfo statesField = typeof(RevisionGridToolTipProvider).GetField(
+            "_cellStates", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        System.Collections.IDictionary states = (System.Collections.IDictionary)statesField.GetValue(provider)!;
+
+        for (int iteration = 0; iteration < 3; iteration++)
+        {
+            provider.UpdateCell(cell, 1, 0, revision);
+            states.Count.Should().Be(1);
+            ToolTip.SetTip(cell, "old tooltip");
+            provider.Clear();
+
+            states.Count.Should().Be(0);
+            ToolTip.GetTip(cell).Should().BeNull();
+            provider.Hide().Should().BeFalse();
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    public void Revision_grid_tooltip_recycling_should_clear_the_previous_commit_text()
+    {
+        RevisionGridToolTipProvider provider = new(new RevisionGridControl());
+        TextBlock cell = new() { Text = "old subject" };
+        provider.UpdateCell(cell, 1, 0, new GitRevision(ObjectId.Parse("1111111111111111111111111111111111111111")));
+        ToolTip.SetTip(cell, "old tooltip");
+
+        provider.UpdateCell(cell, 1, 0, new GitRevision(ObjectId.Parse("2222222222222222222222222222222222222222")));
+
+        ToolTip.GetTip(cell).Should().BeNull();
+        ToolTip.GetIsOpen(cell).Should().BeFalse();
+    }
+
+    [AvaloniaTest]
     [Category("P8.6h.3b.1")]
     public void Revision_grid_message_tooltip_should_include_body_notes_and_refs_like_the_original()
     {
@@ -606,6 +824,9 @@ public sealed class RevisionGridSupportTests
             toolTip.Should().Contain("Notes:");
             toolTip.Should().Contain("review note");
             toolTip.Should().Contain("[branch1]");
+
+            provider.TryGetToolTip(revision, revision.Refs[0], out string? refToolTip).Should().BeTrue();
+            refToolTip.Should().Contain("[branch1]");
         }
         finally
         {
@@ -652,6 +873,7 @@ public sealed class RevisionGridSupportTests
             RevisionGridControl control = new();
             MessageColumnProvider provider = (MessageColumnProvider)control.ColumnProviders
                 .Single(column => column.Name == "Message");
+            provider.ApplySettings();
             GitRevision revision = Revision('a', "subject");
             revision.Refs = [new GitRef(null!, revision.ObjectId, "refs/tags/v1.0^{}")];
             Control cell = provider.CreateCell();
@@ -682,6 +904,7 @@ public sealed class RevisionGridSupportTests
             RevisionGridControl control = new();
             MessageColumnProvider provider = (MessageColumnProvider)control.ColumnProviders
                 .Single(column => column.Name == "Message");
+            provider.ApplySettings();
             GitRevision revision = Revision('a', "subject", multiline: true);
             revision.Body = "subject\n\nbody line one\nbody line two";
             revision.Notes = "review note";

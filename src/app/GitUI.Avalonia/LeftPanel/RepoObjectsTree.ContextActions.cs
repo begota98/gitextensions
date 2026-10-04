@@ -118,7 +118,7 @@ partial class RepoObjectsTree : IMenuItemFactory
         mnubtnOpenWorktree.IsVisible = isSingleWorktreeSelected;
         mnubtnOpenWorktree.IsEnabled = canActOnWorktree && canRunCommands;
         mnubtnDeleteWorktree.IsVisible = isSingleWorktreeSelected;
-        mnubtnDeleteWorktree.IsEnabled = canActOnWorktree && canRunCommands;
+        mnubtnDeleteWorktree.IsEnabled = canActOnWorktree && canRunCommands && worktreeNode is { Worktree.IsMain: false };
         toolStripSeparator13.IsVisible = isSingleWorktreeSelected;
         mnubtnCopyWorktreePath.IsVisible = isSingleWorktreeSelected;
         mnubtnCopyWorktreePath.IsEnabled = isSingleWorktreeSelected;
@@ -177,6 +177,7 @@ partial class RepoObjectsTree : IMenuItemFactory
 
         return action switch
         {
+            "Copy" => copyContextMenuItem,
             "CheckoutLocal" => GetMenuItem(_localBranchMenuItems, MenuItemKey.GitRefCheckout),
             "CheckoutRemote" => GetMenuItem(_remoteBranchMenuItems, MenuItemKey.GitRefCheckout),
             "Merge" => GetMenuItem(_localBranchMenuItems, MenuItemKey.GitRefMerge),
@@ -204,7 +205,9 @@ partial class RepoObjectsTree : IMenuItemFactory
     [System.Diagnostics.CodeAnalysis.MemberNotNull(nameof(_sortByContextMenuItem), nameof(_sortOrderContextMenuItem), nameof(_localBranchMenuItems), nameof(_remoteBranchMenuItems), nameof(_tagNodeMenuItems))]
     private void RegisterContextActions()
     {
-        RegisterAction(RepoAction.Copy, copyContextMenuItem);
+        copyContextMenuItem.SetRevisionFunc(() => _revisionGridInfo.GetSelectedRevisions());
+
+        // Filter for selected
         RegisterAction(RepoAction.Filter, filterForSelectedRefsMenuItem);
 
         // git refs (tag, local & remote branch) menu items (rename, delete, merge, etc)
@@ -222,11 +225,17 @@ partial class RepoObjectsTree : IMenuItemFactory
         RegisterAction(RepoAction.FetchCheckout, mnubtnRemoteBranchFetchAndCheckout);
         RegisterAction(RepoAction.FetchRebase, mnubtnFetchRebase);
         RegisterAction(RepoAction.FetchCreate, mnubtnFetchCreateBranch);
+
+        // BranchPathNode (folder)
         RegisterAction(RepoAction.CreateInFolder, mnubtnCreateBranch);
         RegisterAction(RepoAction.DeleteFolderBranches, mnubtnDeleteAllBranches);
+
+        // Remotes Tree
         RegisterAction(RepoAction.ManageRemotes, mnuBtnManageRemotesFromRootNode);
         RegisterAction(RepoAction.FetchAllRemotes, mnuBtnFetchAllRemotes);
         RegisterAction(RepoAction.PruneAllRemotes, mnuBtnPruneAllRemotes);
+
+        // RemoteRepoNode
         RegisterAction(RepoAction.ManageRemote, mnubtnManageRemotes);
         RegisterAction(RepoAction.EnableRemote, mnubtnEnableRemote);
         RegisterAction(RepoAction.EnableRemoteAndFetch, mnubtnEnableRemoteAndFetch);
@@ -234,6 +243,8 @@ partial class RepoObjectsTree : IMenuItemFactory
         RegisterAction(RepoAction.FetchRemote, mnubtnFetchAllBranchesFromARemote);
         RegisterAction(RepoAction.PruneRemote, mnuBtnPruneAllBranchesFromARemote);
         RegisterAction(RepoAction.OpenRemoteUrl, mnuBtnOpenRemoteUrlInBrowser);
+
+        // SubmoduleNode
         RegisterAction(RepoAction.OpenSubmodule, mnubtnOpenSubmodule);
         RegisterAction(RepoAction.OpenSubmoduleInGitExtensions, mnubtnOpenGESubmodule);
         RegisterAction(RepoAction.ManageSubmodules, mnubtnManageSubmodules);
@@ -242,8 +253,12 @@ partial class RepoObjectsTree : IMenuItemFactory
         RegisterAction(RepoAction.ResetSubmodule, mnubtnResetSubmodule);
         RegisterAction(RepoAction.StashSubmodule, mnubtnStashSubmodule);
         RegisterAction(RepoAction.CommitSubmodule, mnubtnCommitSubmodule);
+
+        // Expand / Collapse
         RegisterAction(RepoAction.Collapse, mnubtnCollapse);
         RegisterAction(RepoAction.Expand, mnubtnExpand);
+
+        // Move up / down (for top level Trees)
         RegisterAction(RepoAction.MoveUp, mnubtnMoveUp);
         RegisterAction(RepoAction.MoveDown, mnubtnMoveDown);
 
@@ -290,10 +305,12 @@ partial class RepoObjectsTree : IMenuItemFactory
         bool canRunCommands = TryGetUICommandsDirect(out IGitUICommands? commands);
         bool canChangeWorkingTree = canRunCommands && !commands!.Module.IsBareRepository();
 
-        bool canCopy = selectedNode is BaseBranchLeafNode or StashNode;
-        bool canFilter = GetSelectedNodes().OfType<IGitRefActions>().Any()
+        bool canCopy = hasSingleSelection && (selectedNode is BaseBranchLeafNode or StashNode) && selectedNode.Visible;
+        copyContextMenuItem.Enable(canCopy);
+
+        // enable if selection contains refs
+        bool canFilter = selectedNodes.OfType<IGitRefActions>().Any()
             && _filterRevisionGridBySpaceSeparatedRefs is not null;
-        SetAction(RepoAction.Copy, canCopy, canCopy);
         SetAction(RepoAction.Filter, canFilter, canFilter);
 
         LocalBranchNode? selectedLocalBranch = selectedNode as LocalBranchNode;
@@ -304,7 +321,8 @@ partial class RepoObjectsTree : IMenuItemFactory
             item.Item.IsVisible = visible; // only display for single-selected branch
 
             /* Enabled items must also be visible; cancellation of menu opening below relies on it.
-             * Avalonia exposes IsVisible before the popup is opened, so no visual-parent workaround is needed. */
+             * Read from local variable because ToolStripItem.Visible will always returns false
+             * because the ContextMenuStrip as the visual parent is not Visible on Opening. */
             item.Item.IsEnabled = visible
 
                 // enable all items for non-current branches or only those applying to the current branch
@@ -355,6 +373,10 @@ partial class RepoObjectsTree : IMenuItemFactory
         // Waiting for the ContextMenuStrip (as the visual parent of its menu items) to be visible to
         // toggle (depending on ToolStripItem.Visible) existing separators in between item groups as required.
         menuMain.ToggleSeparators();
+
+        // Working around the context menu strip being positioned incorrectly on first open - which may be a Windows Forms bug,
+        // see https://stackoverflow.com/q/15841863/2338036.
+        // Avalonia's popup placement is owned by the platform popup implementation and needs no cursor correction.
     }
 
     /// <inheritdoc />

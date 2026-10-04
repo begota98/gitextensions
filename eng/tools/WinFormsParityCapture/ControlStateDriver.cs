@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 
 using GitExtensions.ParityCapture;
 using GitUI.AutoCompletion;
@@ -43,6 +43,9 @@ internal sealed class ControlStateDriver : IDisposable
                 break;
             case CaptureStateKind.Disabled:
                 driver.Disable(target);
+                break;
+            case CaptureStateKind.ReadOnly:
+                driver.MakeReadOnly(target);
                 break;
             case CaptureStateKind.Checked:
                 driver.Check(target);
@@ -127,6 +130,20 @@ internal sealed class ControlStateDriver : IDisposable
         {
             foreach (Control control in EnumerateSelfAndDescendants(root))
             {
+                // Composite controls own private fields that are not themselves children
+                // (notably ContextMenuStrip). Resolve them just as fields on the root.
+                if (!ReferenceEquals(control, root))
+                {
+                    for (Type? type = control.GetType(); type is not null; type = type.BaseType)
+                    {
+                        FieldInfo? field = type.GetField(fieldName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+                        if (field is not null)
+                        {
+                            return field.GetValue(control);
+                        }
+                    }
+                }
+
                 if (control.Name == fieldName)
                 {
                     return control;
@@ -236,6 +253,18 @@ internal sealed class ControlStateDriver : IDisposable
         _restoreActions.Add(() => control.Enabled = previous);
     }
 
+    private void MakeReadOnly(object target)
+    {
+        if (target is not TextBoxBase textBox)
+        {
+            throw new CaptureStateUnsupportedException("The read-only state requires a TextBoxBase.");
+        }
+
+        bool previous = textBox.ReadOnly;
+        textBox.ReadOnly = true;
+        _restoreActions.Add(() => textBox.ReadOnly = previous);
+    }
+
     private void Expand(object target)
     {
         TreeView? treeView = target as TreeView
@@ -310,7 +339,7 @@ internal sealed class ControlStateDriver : IDisposable
 
     private void ActivateContainingTabs(Control control)
     {
-        TabPage[] tabPages = EnumerateParents(control)
+        TabPage[] tabPages = EnumerateSelfAndParents(control)
             .OfType<TabPage>()
             .Reverse()
             .ToArray();
@@ -328,9 +357,9 @@ internal sealed class ControlStateDriver : IDisposable
             _restoreActions.Add(() => tabControl.SelectedTab = previous);
         }
 
-        static IEnumerable<Control> EnumerateParents(Control child)
+        static IEnumerable<Control> EnumerateSelfAndParents(Control child)
         {
-            for (Control? parent = child.Parent; parent is not null; parent = parent.Parent)
+            for (Control? parent = child; parent is not null; parent = parent.Parent)
             {
                 yield return parent;
             }
@@ -339,20 +368,45 @@ internal sealed class ControlStateDriver : IDisposable
 
     private void Hover(object target)
     {
-        if (target is not Control control || !control.IsHandleCreated)
-        {
-            throw new CaptureStateUnsupportedException("The hover state requires a created Control handle.");
-        }
-
-        (Control mouseTarget, Point mousePoint) = FindMouseTarget(control);
+        (Control mouseTarget, Point mousePoint) = FindPointerTarget(target, "hover");
         Point originalCursorPosition = NativeMethods.GetCursorPosition();
         NativeMethods.SetCursorPosition(mouseTarget.PointToScreen(mousePoint));
         NativeMethods.SendMouseMessage(mouseTarget.Handle, NativeMethods.WmMouseMove, mousePoint.X, mousePoint.Y);
+        PumpEvents();
+        if (target is ToolStripItem item && !item.Selected)
+        {
+            // WinForms can clear its transient ToolStrip selection while the message pump
+            // processes other windows. Keep the item in the state reached by the pointer.
+            item.Select();
+            if (!item.Selected)
+            {
+                throw new CaptureStateUnsupportedException("WinForms did not retain the requested toolbar hover state.");
+            }
+        }
+
         _restoreActions.Add(() =>
         {
             NativeMethods.SendMouseMessage(mouseTarget.Handle, NativeMethods.WmMouseLeave, 0, 0);
             NativeMethods.SetCursorPosition(originalCursorPosition);
         });
+    }
+
+    private static (Control Control, Point Point) FindPointerTarget(object target, string state)
+    {
+        if (target is ToolStripItem { Owner.IsHandleCreated: true, Available: true } item
+            && item.Bounds.Width > 0 && item.Bounds.Height > 0)
+        {
+            return (item.Owner, new Point(
+                item.Bounds.Left + (item.Bounds.Width / 2),
+                item.Bounds.Top + (item.Bounds.Height / 2)));
+        }
+
+        if (target is Control { IsHandleCreated: true } control)
+        {
+            return FindMouseTarget(control);
+        }
+
+        throw new CaptureStateUnsupportedException($"The {state} state requires a visible item in a created Control handle.");
     }
 
     private static (Control Control, Point Point) FindMouseTarget(Control control)
@@ -389,6 +443,24 @@ internal sealed class ControlStateDriver : IDisposable
         {
             OpenAutoComplete(autoComplete);
             return;
+        }
+
+        if (target is ContextMenuStrip
+            && _root is GitUI.SpellChecker.EditNetSpell spellEditor
+            && _root.Controls.Find("TextBox", searchAllChildren: true).OfType<RichTextBox>().FirstOrDefault() is { } spellTextBox)
+        {
+            spellEditor.CheckSpelling();
+            int previousSelectionStart = spellTextBox.SelectionStart;
+            int previousSelectionLength = spellTextBox.SelectionLength;
+            int wordStart = FindFirstWordStart(spellTextBox.Text);
+            spellTextBox.Select(Math.Min(wordStart + 2, spellTextBox.TextLength), 0);
+            _restoreActions.Add(() =>
+            {
+                int restoredStart = Math.Min(previousSelectionStart, spellTextBox.TextLength);
+                spellTextBox.Select(
+                    restoredStart,
+                    Math.Min(previousSelectionLength, spellTextBox.TextLength - restoredStart));
+            });
         }
 
         if (target is ToolStripComboBox toolStripComboBox)
@@ -460,6 +532,17 @@ internal sealed class ControlStateDriver : IDisposable
             }
 
             return contextMenu;
+        }
+
+        static int FindFirstWordStart(string text)
+        {
+            int index = 0;
+            while (index < text.Length && char.IsWhiteSpace(text[index]))
+            {
+                index++;
+            }
+
+            return index;
         }
     }
 
@@ -534,17 +617,18 @@ internal sealed class ControlStateDriver : IDisposable
 
     private void Press(object target)
     {
-        if (target is not ButtonBase button || !button.IsHandleCreated)
+        if (target is not ButtonBase && target is not ToolStripItem)
         {
-            throw new CaptureStateUnsupportedException("The pressed state requires a created ButtonBase handle.");
+            throw new CaptureStateUnsupportedException("The pressed state requires a ButtonBase or ToolStripItem.");
         }
 
-        NativeMethods.SendMouseMessage(button.Handle, NativeMethods.WmMouseMove, Math.Max(1, button.ClientSize.Width / 2), Math.Max(1, button.ClientSize.Height / 2));
-        NativeMethods.SendMouseMessage(button.Handle, NativeMethods.WmLButtonDown, Math.Max(1, button.ClientSize.Width / 2), Math.Max(1, button.ClientSize.Height / 2));
+        (Control mouseTarget, Point mousePoint) = FindPointerTarget(target, "pressed");
+        NativeMethods.SendMouseMessage(mouseTarget.Handle, NativeMethods.WmMouseMove, mousePoint.X, mousePoint.Y);
+        NativeMethods.SendMouseMessage(mouseTarget.Handle, NativeMethods.WmLButtonDown, mousePoint.X, mousePoint.Y);
         _restoreActions.Add(() =>
         {
-            NativeMethods.SendMouseMessage(button.Handle, NativeMethods.WmCancelMode, 0, 0);
-            button.Capture = false;
+            NativeMethods.SendMouseMessage(mouseTarget.Handle, NativeMethods.WmCancelMode, 0, 0);
+            mouseTarget.Capture = false;
         });
     }
 }

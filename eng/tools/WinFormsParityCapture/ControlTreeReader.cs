@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.Drawing.Drawing2D;
 using System.Reflection;
+using System.Windows.Forms.VisualStyles;
 using GitExtensions.ParityCapture;
 using GitExtUtils.GitUI.Theming;
 using GitUI.Theming;
@@ -68,12 +69,23 @@ internal sealed class ControlTreeReader
     public CaptureSurface ReadPrimary(Control root, Rectangle screenBounds)
     {
         CaptureNode rootNode = ReadControl(root, parentId: string.Empty, ordinal: 0);
-        Rectangle clientScreenBounds = root.RectangleToScreen(root.ClientRectangle);
-        Rectangle clientSurfaceBounds = new(
-            clientScreenBounds.X - screenBounds.X,
-            clientScreenBounds.Y - screenBounds.Y,
-            clientScreenBounds.Width,
-            clientScreenBounds.Height);
+        Rectangle clientSurfaceBounds;
+        if (root is Form)
+        {
+            Rectangle clientScreenBounds = root.RectangleToScreen(root.ClientRectangle);
+            clientSurfaceBounds = new Rectangle(
+                clientScreenBounds.X - screenBounds.X,
+                clientScreenBounds.Y - screenBounds.Y,
+                clientScreenBounds.Width,
+                clientScreenBounds.Height);
+        }
+        else
+        {
+            // Hosted component captures already contain only the control's client pixels.
+            // RectangleToScreen can resolve through the hidden capture form and must not
+            // turn that host's client rectangle into the component root bounds.
+            clientSurfaceBounds = new Rectangle(Point.Empty, screenBounds.Size);
+        }
 
         // parity-scaffolding: PrintWindow keeps native non-client chrome in the bitmap, while
         // the root control tree describes the product client area. Store its surface-relative
@@ -176,6 +188,8 @@ internal sealed class ControlTreeReader
     {
         string? selectionForeground = null;
         string? selectionBackground = null;
+        string? inactiveSelectionForeground = null;
+        string? inactiveSelectionBackground = null;
         string? gridLine = null;
         string? border = null;
         Color resolvedBackground = control.BackColor;
@@ -191,6 +205,19 @@ internal sealed class ControlTreeReader
             selectionBackground = ColorToArgb(grid.DefaultCellStyle.SelectionBackColor);
             gridLine = ColorToArgb(grid.GridColor);
             border = ColorToArgb(isRevisionGrid ? resolvedBackground : grid.RowHeadersDefaultCellStyle.BackColor);
+        }
+        else if (control is GitUI.UserControls.NativeTreeView { DrawMode: TreeViewDrawMode.Normal } tree
+                 && VisualStyleRenderer.IsSupported && !SystemInformation.HighContrast)
+        {
+            NativeTreePalette selected = NativeTreePalette.Read(tree, state: 3);
+            NativeTreePalette inactive = NativeTreePalette.Read(tree, state: 5);
+            selectionForeground = ColorToArgb(selected.Foreground);
+            selectionBackground = ColorToArgb(selected.Background);
+            additional["selectionBorder"] = ColorToArgb(selected.Border)!;
+            additional["inactiveSelectionBorder"] = ColorToArgb(tree.HideSelection ? Color.Transparent : inactive.Border)!;
+            additional["hotTrack"] = ColorToArgb(ResolveSystemColor(KnownColor.HotTrack))!;
+            inactiveSelectionForeground = ColorToArgb(tree.HideSelection ? tree.ForeColor : inactive.Foreground);
+            inactiveSelectionBackground = ColorToArgb(tree.HideSelection ? Color.Transparent : inactive.Background);
         }
         else if (control is ListView or TreeView or ListBox)
         {
@@ -208,17 +235,26 @@ internal sealed class ControlTreeReader
             AddSemanticColorRoles(additional);
         }
 
+        bool isDashboardLink = control is LinkLabel
+            && _root.GetType().FullName == "GitUI.CommandsDialogs.BrowseDialog.DashboardControl.Dashboard";
+        if (isDashboardLink)
+        {
+            // LinkLabel paints LinkColor, not its ambient Control.ForeColor. Keep both
+            // resolved roles so glyph agreement cannot conceal a lost inherited palette.
+            additional["controlForeground"] = ColorToArgb(control.ForeColor)!;
+        }
+
         return new CaptureColors
         {
-            Foreground = ColorToArgb(control.ForeColor),
+            Foreground = ColorToArgb(isDashboardLink ? ((LinkLabel)control).LinkColor : control.ForeColor),
             Background = ColorToArgb(resolvedBackground),
             Border = border,
             SelectionForeground = selectionForeground,
             SelectionBackground = selectionBackground,
-            InactiveSelectionForeground = selectionForeground,
-            InactiveSelectionBackground = selectionBackground is null
+            InactiveSelectionForeground = inactiveSelectionForeground ?? selectionForeground,
+            InactiveSelectionBackground = inactiveSelectionBackground ?? (selectionBackground is null
                 ? null
-                : ColorToArgb(ResolveSystemColor(KnownColor.InactiveCaption)),
+                : ColorToArgb(ResolveSystemColor(KnownColor.InactiveCaption))),
             DisabledForeground = ColorToArgb(ResolveSystemColor(KnownColor.GrayText)),
             DisabledBackground = ColorToArgb(resolvedBackground),
             GridLine = gridLine,
@@ -516,52 +552,84 @@ internal sealed class ControlTreeReader
     private void IndexFields(object owner)
     {
         HashSet<object> visited = new(ReferenceEqualityComparer.Instance);
-        Queue<object> queue = new();
-        queue.Enqueue(owner);
+        Queue<(object Value, object Owner)> queue = new();
+        queue.Enqueue((owner, owner));
 
         while (queue.Count > 0)
         {
-            object current = queue.Dequeue();
+            (object current, object owningOwner) = queue.Dequeue();
             if (!visited.Add(current))
             {
                 continue;
             }
 
-            Type type = current.GetType();
-            foreach (FieldInfo field in type.GetFields(
-                         BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+            Type currentType = current.GetType();
+            for (Type? declaringType = currentType;
+                 declaringType is not null
+                 && declaringType.Namespace?.StartsWith("System.", StringComparison.Ordinal) is not true;
+                 declaringType = declaringType.BaseType)
             {
-                object? value;
-                try
+                foreach (FieldInfo field in declaringType.GetFields(
+                             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+                             .OrderBy(field => field.MetadataToken))
                 {
-                    value = field.GetValue(current);
-                }
-                catch (TargetInvocationException)
-                {
-                    continue;
-                }
-
-                if (value is null || value is string || value.GetType().IsValueType || ReferenceEquals(value, current))
-                {
-                    continue;
-                }
-
-                if (value is ToolTip toolTip && !_toolTips.Contains(toolTip))
-                {
-                    _toolTips.Add(toolTip);
-                }
-
-                if (value is Control or ToolStripItem or DataGridViewColumn or ColumnHeader)
-                {
-                    if (!_fieldNames.TryGetValue(value, out List<string>? names))
+                    // Nested helpers can capture their owner in compiler-generated fields.
+                    // Those fields are implementation links, not authored control aliases.
+                    if (current is not Control and not ToolStripItem && field.Name.StartsWith('<'))
                     {
-                        names = [];
-                        _fieldNames.Add(value, names);
+                        continue;
                     }
 
-                    if (!names.Contains(field.Name, StringComparer.Ordinal))
+                    object? value;
+                    try
                     {
-                        names.Add(field.Name);
+                        value = field.GetValue(current);
+                    }
+                    catch (TargetInvocationException)
+                    {
+                        continue;
+                    }
+
+                    if (value is null || value is string || value.GetType().IsValueType || ReferenceEquals(value, current)
+                        || (current is not Control and not ToolStripItem && ReferenceEquals(value, owningOwner)))
+                    {
+                        continue;
+                    }
+
+                    if (value is ToolTip toolTip && !_toolTips.Contains(toolTip))
+                    {
+                        _toolTips.Add(toolTip);
+                    }
+
+                    if (value is System.ComponentModel.IContainer container)
+                    {
+                        foreach (System.ComponentModel.IComponent component in container.Components)
+                        {
+                            if (component is ToolTip containedToolTip && !_toolTips.Contains(containedToolTip))
+                            {
+                                _toolTips.Add(containedToolTip);
+                            }
+                        }
+                    }
+
+                    if (value is Control or ToolStripItem or DataGridViewColumn or ColumnHeader)
+                    {
+                        if (!_fieldNames.TryGetValue(value, out List<string>? names))
+                        {
+                            names = [];
+                            _fieldNames.Add(value, names);
+                        }
+
+                        if (!names.Contains(field.Name, StringComparer.Ordinal))
+                        {
+                            names.Add(field.Name);
+                        }
+                    }
+                    else if (IsOwnedNestedHelper(value, currentType) || IsOwnedNestedHelper(value, owningOwner.GetType()))
+                    {
+                        // Preserve the control owner's boundary through sibling/nested
+                        // helpers, without following arbitrary services or object graphs.
+                        queue.Enqueue((value, owningOwner));
                     }
                 }
             }
@@ -570,14 +638,14 @@ internal sealed class ControlTreeReader
             {
                 foreach (Control child in control.Controls)
                 {
-                    queue.Enqueue(child);
+                    queue.Enqueue((child, child));
                 }
 
                 if (control is ToolStrip toolStrip)
                 {
                     foreach (ToolStripItem item in toolStrip.Items)
                     {
-                        queue.Enqueue(item);
+                        queue.Enqueue((item, item));
                     }
                 }
             }
@@ -585,13 +653,39 @@ internal sealed class ControlTreeReader
             {
                 foreach (ToolStripItem item in dropDownItem.DropDownItems)
                 {
-                    queue.Enqueue(item);
+                    queue.Enqueue((item, item));
                 }
             }
         }
     }
 
-    private CaptureNode ReadControl(Control control, string parentId, int ordinal)
+    private static bool IsOwnedNestedHelper(object value, Type ownerType)
+    {
+        Type helperType = value.GetType();
+        if (value is Delegate or IEnumerable or IServiceProvider or System.ComponentModel.IComponent
+            || !helperType.IsClass
+            || helperType.IsDefined(typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute), inherit: false)
+            || helperType.Namespace?.StartsWith("System.", StringComparison.Ordinal) is true
+            || helperType.Namespace?.StartsWith("Avalonia.", StringComparison.Ordinal) is true
+            || helperType.DeclaringType is not Type declaringType)
+        {
+            return false;
+        }
+
+        Type declaration = declaringType.IsGenericType ? declaringType.GetGenericTypeDefinition() : declaringType;
+        for (Type? candidate = ownerType; candidate is not null; candidate = candidate.BaseType)
+        {
+            Type ownerDeclaration = candidate.IsGenericType ? candidate.GetGenericTypeDefinition() : candidate;
+            if (declaration == ownerDeclaration)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private CaptureNode ReadControl(Control control, string parentId, int ordinal, Point semanticOffset = default)
     {
         IReadOnlyList<string> names = GetFieldNames(control);
         string segment = names.FirstOrDefault()
@@ -621,7 +715,7 @@ internal sealed class ControlTreeReader
                 // product field. Emit the controls it owns directly beneath the semantic split.
                 foreach (Control panelChild in child.Controls)
                 {
-                    children.Add(ReadControl(panelChild, id, childOrdinal++));
+                    children.Add(ReadControl(panelChild, id, childOrdinal++, child.Location));
                 }
 
                 continue;
@@ -646,6 +740,7 @@ internal sealed class ControlTreeReader
         }
 
         Rectangle bounds = control.Bounds;
+        bounds.Offset(semanticOffset);
         Size clientSize = control.ClientSize;
         return new CaptureNode
         {
@@ -680,15 +775,16 @@ internal sealed class ControlTreeReader
             Dock = control.Dock.ToString(),
             AutoSize = control.AutoSize,
             Alignment = GetPropertyValue(control, "TextAlign") ?? GetPropertyValue(control, "ContentAlignment"),
-            Text = control.Text,
-            ToolTip = GetToolTip(control),
+            Text = NormalizeText(control.Text),
+            ToolTip = NormalizeText(GetToolTip(control)),
             TranslationSource = names.FirstOrDefault(),
             TabIndex = control.TabIndex,
             TabStop = control.TabStop,
             Enabled = control.Enabled,
             Visible = control.Visible,
             Focused = control.Focused,
-            ReadOnly = GetNullableBoolProperty(control, "ReadOnly"),
+            ReadOnly = GetNullableBoolProperty(control, "ReadOnly")
+                       ?? GetNullableBoolProperty(control, "IsReadOnly"),
             CheckState = control is CheckBox checkBox ? checkBox.CheckState.ToString() : null,
             Selected = control is ListControl listControl ? listControl.SelectedValue is not null : null,
             Expanded = control is TreeView treeView
@@ -781,8 +877,8 @@ internal sealed class ControlTreeReader
             Dock = null,
             AutoSize = item.AutoSize,
             Alignment = item.TextAlign.ToString(),
-            Text = item.Text,
-            ToolTip = item.ToolTipText,
+            Text = NormalizeText(item.Text),
+            ToolTip = NormalizeText(item.ToolTipText),
             TranslationSource = names.FirstOrDefault(),
             TabIndex = null,
             TabStop = null,
@@ -803,6 +899,11 @@ internal sealed class ControlTreeReader
             Children = children
         };
     }
+
+    private static string? NormalizeText(string? text)
+        => text?
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n');
 
     private CaptureNode ReadToolStripItemCollection(ToolStrip popup, string id, Point primaryScreenOrigin)
     {
