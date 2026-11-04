@@ -37,6 +37,32 @@ namespace GitExtensionsTests;
 [NonParallelizable]
 public sealed class RepoObjectsTreeTests
 {
+    private JoinableTaskContext? _previousContext;
+    private JoinableTaskContext _context = null!;
+
+    [SetUp]
+    public void SetUp()
+    {
+        AvaloniaSynchronizationContext.InstallIfNeeded();
+        _previousContext = ThreadHelper.HasJoinableTaskContext ? ThreadHelper.JoinableTaskContext : null;
+        _context = new JoinableTaskContext(Thread.CurrentThread, SynchronizationContext.Current);
+        ThreadHelper.JoinableTaskContext = _context;
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+        }
+        finally
+        {
+            ThreadHelper.JoinableTaskContext = _previousContext!;
+            _context.Dispose();
+        }
+    }
+
     [AvaloniaTest]
     [Category("P8.6i.126")]
     [TestCase(false)]
@@ -1052,8 +1078,6 @@ public sealed class RepoObjectsTreeTests
     [Category("P8.6i.126")]
     public async Task Async_owner_reload_should_restore_same_name_caret_and_logical_filters_without_transient_activation()
     {
-        AvaloniaSynchronizationContext.InstallIfNeeded();
-        ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
         SettingsSnapshot settings = SettingsSnapshot.Capture();
         try
         {
@@ -1394,11 +1418,11 @@ public sealed class RepoObjectsTreeTests
     public void Stash_context_actions_should_route_to_the_existing_commands()
     {
         bool originalShowStashes = AppSettings.RepoObjectsTreeShowStashes;
-        bool originalDontConfirmDrop = AppSettings.DontConfirmStashDrop;
+        bool originalDontConfirmDrop = AppSettings.DontConfirmStashDrop.Value;
         try
         {
             AppSettings.RepoObjectsTreeShowStashes = true;
-            AppSettings.DontConfirmStashDrop = true;
+            AppSettings.DontConfirmStashDrop.Value = true;
             IGitModule module = Substitute.For<IGitModule>();
             module.IsBareRepository().Returns(false);
             IGitUICommands commands = Substitute.For<IGitUICommands>();
@@ -1445,7 +1469,7 @@ public sealed class RepoObjectsTreeTests
         finally
         {
             AppSettings.RepoObjectsTreeShowStashes = originalShowStashes;
-            AppSettings.DontConfirmStashDrop = originalDontConfirmDrop;
+            AppSettings.DontConfirmStashDrop.Value = originalDontConfirmDrop;
         }
     }
 

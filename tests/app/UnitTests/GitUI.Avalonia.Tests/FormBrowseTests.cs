@@ -1,7 +1,8 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.ComponentModel.Design;
 using System.Diagnostics;
 using System.Reflection;
+using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
@@ -56,6 +57,28 @@ public sealed class FormBrowseTests
     private ServiceContainer _serviceContainer = null!;
     private string _workingDirectory = null!;
     private bool _revisionGraphShowArtificialCommits;
+
+    [AvaloniaTest]
+    public void FormBrowse_notification_bars_should_preserve_the_height_needed_by_enlarged_buttons()
+    {
+        WinFormsShims.Font originalFont = AppSettings.Font;
+        try
+        {
+            AppSettings.Font = new WinFormsShims.Font("Arial", 18);
+            using FormBrowse form = new();
+            InteractiveGitActionControl standalone = new();
+            foreach (string name in new[] { "notificationBarGitActionInProgress", "notificationBarBisectInProgress" })
+            {
+                InteractiveGitActionControl bar = form.FindControl<InteractiveGitActionControl>(name)!;
+                bar.MinHeight.Should().Be(standalone.MinHeight);
+                bar.MinHeight.Should().BeGreaterThan(33);
+            }
+        }
+        finally
+        {
+            AppSettings.Font = originalFont;
+        }
+    }
 
     [SetUp]
     public void SetUp()
@@ -165,6 +188,17 @@ public sealed class FormBrowseTests
     [Category("P8.6i.126")]
     public void Browse_tree_should_report_source_toolbar_colors_and_logical_visibility()
     {
+        foreach ((string ownerType, string designer, string field, string sourceType) in new[]
+        {
+            ("GitUI.CommandsDialogs.FormBrowse", "src/app/GitUI/CommandsDialogs/FormBrowse.Designer.cs", "toolStripSplitStash", "ToolStripSplitButton"),
+            ("GitUI.FileStatusList", "src/app/GitUI/UserControls/FileStatusList.Designer.cs", "sepRefresh", "ToolStripSeparator"),
+        })
+        {
+            WinFormsInputMetadata.SourceByType[ownerType].Single(control => control.FieldName == field).SourceType.Should().Be(sourceType);
+            ReadOriginalDesigner(designer).Should().NotMatchRegex($@"(?m)^\s*(?:this\.)?{field}\.BackColor\s*=",
+                "the shared paint-default mapping requires evidence that the original item has no authored BackColor");
+        }
+
         GitModule module = CreateRepositoryWithInitialCommit();
         using FormBrowse form = new(new GitUICommands(_serviceContainer, module));
         form.Show();
@@ -232,6 +266,30 @@ public sealed class FormBrowseTests
                 stash.Colors.Background.Should().Be(stash.Visible == true ? "#00FFFFFF" : background);
                 stash.Colors.DisabledBackground.Should().Be(stash.Visible == true ? "#00FFFFFF" : background);
                 stash.Colors.Foreground.Should().Be(stash.Visible == true ? sourceForeground : foreground);
+                IconSplitButton actualStash = form.FindControl<IconSplitButton>("toolStripSplitStash")!;
+                IBrush? originalStashPaint = actualStash.Background;
+                try
+                {
+                    foreach (Color authored in new[] { Colors.CornflowerBlue, Color.Parse("#00FFFFFF") })
+                    {
+                        actualStash.Background = new SolidColorBrush(authored);
+                        CaptureNode authoredStash = Flatten(new AvaloniaControlTreeReader(form, renderScale: 1)
+                            .ReadPrimary(form, new PixelSize((int)form.Bounds.Width, (int)form.Bounds.Height)).Root)
+                            .Single(node => node.FieldName == "toolStripSplitStash");
+                        authoredStash.Colors.Background.Should().Be($"#{authored.A:X2}{authored.R:X2}{authored.G:X2}{authored.B:X2}",
+                            "an authored stash BackColor is distinct from its shared renderer-only default brush");
+                        authoredStash.Colors.DisabledBackground.Should().Be(authoredStash.Colors.Background);
+                    }
+                }
+                finally
+                {
+                    actualStash.Background = originalStashPaint;
+                }
+
+                CaptureNode restoredStash = Flatten(new AvaloniaControlTreeReader(form, renderScale: 1)
+                    .ReadPrimary(form, new PixelSize((int)form.Bounds.Width, (int)form.Bounds.Height)).Root)
+                    .Single(node => node.FieldName == "toolStripSplitStash");
+                restoredStash.Colors.Background.Should().Be(restoredStash.Visible == true ? "#00FFFFFF" : background);
                 CaptureNode stashSeparator = nodes.Single(node => node.FieldName == "toolStripSeparator2");
                 stashSeparator.Colors.Background.Should().Be(stashSeparator.Visible == true ? "#00FFFFFF" : background);
                 stashSeparator.Colors.DisabledBackground.Should().Be(stashSeparator.Visible == true ? "#00FFFFFF" : background);
@@ -296,6 +354,19 @@ public sealed class FormBrowseTests
         finally
         {
             form.Close();
+        }
+
+        static string ReadOriginalDesigner(string relativePath)
+        {
+            DirectoryInfo? directory = new(AppContext.BaseDirectory);
+            while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "GitExtensions.Avalonia.slnx")))
+            {
+                directory = directory.Parent;
+            }
+
+            string sourceRoot = directory?.FullName
+                ?? throw new InvalidOperationException("The original Designer source root is unavailable.");
+            return File.ReadAllText(Path.Combine(sourceRoot, relativePath));
         }
 
         static IEnumerable<CaptureNode> Flatten(CaptureNode node)
@@ -785,6 +856,12 @@ public sealed class FormBrowseTests
 
             Grid split = form.revisionDiff.FindControl<Grid>("DiffSplitContainer")!;
             split.Bounds.Width.Should().Be(643);
+
+            // Closed overflow gives the source combo hosts their current two-pixel margins,
+            // so the AutoSize row is 27, not its initial 25. The 573-DIP client leaves 507
+            // after its 27-DIP menu, 27-DIP toolbar and 12-DIP content padding. The split
+            // takes floor(209 * 507 / 502) = 211; splitter6 and tab insets30 leave260.
+            form.toolStripFiltersHost.Bounds.Height.Should().Be(27);
             split.Bounds.Height.Should().Be(260);
             split.ColumnDefinitions[0].ActualWidth.Should().Be(300);
             split.ColumnDefinitions[1].ActualWidth.Should().Be(6);
@@ -992,11 +1069,11 @@ public sealed class FormBrowseTests
             new TreeViewItem { Header = new string('W', 80) },
         };
 
-        foreach ((ThemeVariant theme, string tab, string overflow, string scrollThumb, string toolStripChecked) in
+        foreach ((ThemeVariant theme, string tab, string overflow, string scrollThumb) in
                  new[]
                  {
-                     (ThemeVariant.Light, "#FFF3F3F3", "#FFFFFFFF", "#33000000", "#FFCCE8FF"),
-                     (ThemeVariant.Dark, "#FF202020", "#FF232323", "#33FFFFFF", "#FF28445B"),
+                     (ThemeVariant.Light, "#FFF3F3F3", "#FFFFFFFF", "#33000000"),
+                     (ThemeVariant.Dark, "#FF202020", "#FF232323", "#33FFFFFF"),
                  })
         {
             form.RequestedThemeVariant = theme;
@@ -1039,6 +1116,14 @@ public sealed class FormBrowseTests
                 line.UseSystemVisualStyle.Should().Be(theme == ThemeVariant.Light);
             }
 
+            Button toggleLeftPanel = form.FindControl<Button>("toggleLeftPanel")!;
+            toggleLeftPanel.Classes.Should().Contain("checked");
+            Avalonia.Controls.Primitives.ToggleButton showSubmodules =
+                form.repoObjectsTree.FindControl<Avalonia.Controls.Primitives.ToggleButton>("tsbShowSubmodules")!;
+            showSubmodules.IsChecked = true;
+            form.MouseMove(new Avalonia.Point(form.ClientSize.Width - 1, form.ClientSize.Height - 1));
+            Dispatcher.UIThread.RunJobs();
+
             using (WriteableBitmap frame = form.CaptureRenderedFrame()
                        ?? throw new InvalidOperationException("The Browse toolbar frame is unavailable."))
             {
@@ -1046,6 +1131,17 @@ public sealed class FormBrowseTests
                 frame.Save(stream, PngBitmapEncoderOptions.Default);
                 stream.Position = 0;
                 using SKBitmap bitmap = SKBitmap.Decode(stream);
+                string? evidence = Environment.GetEnvironmentVariable("GITEXT_TOOLBAR_STATE_EVIDENCE");
+                string? evidencePath = null;
+                if (!string.IsNullOrWhiteSpace(evidence))
+                {
+                    string directory = Path.Combine(evidence, TestContext.CurrentContext.Test.ID);
+                    Directory.CreateDirectory(directory);
+                    evidencePath = Path.Combine(directory, theme.ToString().ToLowerInvariant());
+                    File.Exists(evidencePath + ".png").Should().BeFalse("a retained toolbar frame must not overwrite another run");
+                    frame.Save(evidencePath + ".png", PngBitmapEncoderOptions.Default);
+                }
+
                 Border separator = form.FindControl<Border>("toolStripSeparator0")!;
                 Avalonia.Point origin = separator.TranslatePoint(default, form)!.Value;
                 Color backdrop = GetColor(form.Background);
@@ -1062,20 +1158,72 @@ public sealed class FormBrowseTests
                             $"the actual named toolbar owner paints source chrome at {x},{y} in {theme}");
                     }
                 }
+
+                List<(string Name, Avalonia.Point Origin, int Row, SKColor[] Actual, SKColor[] Expected)> rows = [];
+                foreach (Button owner in new Button[] { toggleLeftPanel, showSubmodules })
+                {
+                    // The original renderer paints state separately from the content presenter.
+                    GetColor(owner.Background).Should().Be(Colors.Transparent);
+                    GetColor(GetPresenter(owner).Background).Should().Be(Colors.Transparent);
+                    NativeToolStripButtonChrome chrome = owner.GetVisualDescendants().OfType<NativeToolStripButtonChrome>().Single();
+                    chrome.IsChecked.Should().BeTrue();
+                    chrome.IsSelected.Should().BeFalse();
+                    chrome.IsPressed.Should().BeFalse();
+                    chrome.UseSystemVisualStyle.Should().Be(theme == ThemeVariant.Light);
+                    GetColor(chrome.CheckedBrush).Should().Be(Color.Parse(theme == ThemeVariant.Light ? "#CCE8FF" : "#00000000"));
+                    chrome.Bounds.Size.Should().Be(owner.Bounds.Size);
+                    Image icon = owner.GetVisualDescendants().OfType<Image>().Single();
+                    icon.TranslatePoint(default, chrome)!.Value.Y.Should().BeGreaterThanOrEqualTo(2,
+                        "the sampled source chrome rows must not include the actual icon");
+                    Avalonia.Point chromeOrigin = chrome.TranslatePoint(default, form)!.Value;
+                    int width = (int)chrome.Bounds.Width;
+                    Color border = Color.Parse(theme == ThemeVariant.Light ? "#0078D4" : "#2864B4");
+                    Color fill = theme == ThemeVariant.Light ? Color.Parse("#CCE8FF") : GetAmbientBackdrop(owner);
+                    for (int y = 0; y <= 1; y++)
+                    {
+                        SKColor[] actual = new SKColor[width];
+                        SKColor[] expected = new SKColor[width];
+                        for (int x = 0; x < width; x++)
+                        {
+                            Color color = y == 0 || x == 0 || x == width - 1 ? border
+                                : theme != ThemeVariant.Light ? fill
+                                : x == 1 || x == width - 2 ? Color.Parse("#AAD9FF")
+                                : x == 2 || x == width - 3 ? Color.Parse("#C8E6FF") : fill;
+                            actual[x] = bitmap.GetPixel((int)chromeOrigin.X + x, (int)chromeOrigin.Y + y);
+                            expected[x] = new SKColor(color.R, color.G, color.B, color.A);
+                        }
+
+                        rows.Add((owner.Name!, chromeOrigin, y, actual, expected));
+                    }
+                }
+
+                if (evidencePath is not null)
+                {
+                    File.WriteAllText(evidencePath + ".json", JsonSerializer.Serialize(new
+                    {
+                        test = TestContext.CurrentContext.Test.FullName,
+                        theme = theme.ToString(),
+                        captureMethod = "actualAvaloniaHeadlessFormBrowseToolbarFrame",
+                        PixelSize = new { bitmap.Width, bitmap.Height },
+                        rows = rows.Select(row => new
+                        {
+                            row.Name,
+                            row.Origin,
+                            width = row.Actual.Length,
+                            row.Row,
+                            actual = row.Actual.Select(color => color.ToString()).ToArray(),
+                            expected = row.Expected.Select(color => color.ToString()).ToArray(),
+                        }),
+                        scope = "Source-backed checked chrome regression; not a new paired native or full-parity claim.",
+                    }, new JsonSerializerOptions { WriteIndented = true }));
+                }
+
+                foreach ((string name, Avalonia.Point _, int row, SKColor[] actual, SKColor[] expected) in rows)
+                {
+                    actual.Should().Equal(expected,
+                        $"{name} must paint original checked chrome at row {row} in {theme}, without a platform accent");
+                }
             }
-
-            Button toggleLeftPanel = form.FindControl<Button>("toggleLeftPanel")!;
-            toggleLeftPanel.Classes.Should().Contain("checked");
-            GetColor(toggleLeftPanel.Background).Should().Be(Color.Parse(toolStripChecked));
-            GetColor(GetPresenter(toggleLeftPanel).Background).Should().Be(Color.Parse(toolStripChecked));
-
-            Avalonia.Controls.Primitives.ToggleButton showSubmodules =
-                form.repoObjectsTree.FindControl<Avalonia.Controls.Primitives.ToggleButton>("tsbShowSubmodules")!;
-            showSubmodules.IsChecked = true;
-            Dispatcher.UIThread.RunJobs();
-            GetColor(showSubmodules.Background).Should().Be(Color.Parse(toolStripChecked));
-            GetColor(GetPresenter(showSubmodules).Background).Should().Be(Color.Parse(toolStripChecked),
-                "the rendered toggle surface must not inherit Fluent's purple platform accent");
         }
 
         static Avalonia.Controls.Presenters.ContentPresenter GetPresenter(Control control)
@@ -1085,6 +1233,36 @@ public sealed class FormBrowseTests
 
         static Color GetColor(IBrush? brush)
             => brush.Should().BeAssignableTo<ISolidColorBrush>().Which.Color;
+
+        static Color GetAmbientBackdrop(Control owner)
+        {
+            foreach (Control ancestor in owner.GetVisualAncestors().OfType<Control>())
+            {
+                IBrush? background = ancestor switch
+                {
+                    Border border => border.Background,
+                    Panel panel => panel.Background,
+                    Avalonia.Controls.Primitives.TemplatedControl templated => templated.Background,
+                    _ => null,
+                };
+                if (background is null || background.Opacity == 0)
+                {
+                    continue;
+                }
+
+                Color color = GetColor(background);
+                if (color.A == 0)
+                {
+                    continue;
+                }
+
+                background.Opacity.Should().Be(1, "this source backdrop is an opaque ancestor, not another state overlay");
+                color.A.Should().Be(byte.MaxValue);
+                return color;
+            }
+
+            throw new AssertionException("The actual toolbar must have an opaque background owner.");
+        }
     }
 
     [AvaloniaTest]
@@ -1501,7 +1679,9 @@ public sealed class FormBrowseTests
             RepoObjectsTree.TestAccessor accessor = repoObjectsTree.GetTestAccessor();
             IconSplitButton worktreeButton = form.FindControl<IconSplitButton>("toolStripWorktrees")!;
 
-            await WaitUntilAsync(() => worktreeButton.IsVisible);
+            await WaitUntilAsync(() => accessor.Tree.Items.OfType<TreeViewItem>()
+                .Any(item => HeaderText(item).StartsWith("Worktrees", StringComparison.Ordinal) && item.Items.Count == 2));
+            worktreeButton.IsVisible.Should().BeTrue();
 
             TreeViewItem root = accessor.Tree.Items.Cast<TreeViewItem>()
                 .Single(item => HeaderText(item).StartsWith("Worktrees", StringComparison.Ordinal));
@@ -2007,7 +2187,7 @@ public sealed class FormBrowseTests
             "ShowArtificialCommits",
             "ShowStashes",
             "showGitNotesToolStripMenuItem",
-            "ShowSessionCheckpoints",
+            "ShowSessionRefs",
             "|",
             "Grid_labelsToolStripMenuItem",
             "ShowRemoteBranches",
@@ -2064,7 +2244,7 @@ public sealed class FormBrowseTests
         toolbarItems[1].Items.Should().HaveCount(7);
         toolbarItems[2].Items.Should().BeEmpty();
         MenuItem scripts = toolbars.Items.OfType<MenuItem>().Last();
-        StackPanel scriptsToolbar = form.FindControl<StackPanel>("ToolStripScripts")!;
+        NativeToolStrip scriptsToolbar = form.FindControl<NativeToolStrip>("ToolStripScripts")!;
         scriptsToolbar.IsVisible.Should().BeTrue();
         scripts.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         scriptsToolbar.IsVisible.Should().BeFalse();
@@ -2169,6 +2349,7 @@ public sealed class FormBrowseTests
             // filter. A saved status setting must not skip its artificial destination.
             AppSettings.ShowGitStatusForArtificialCommits = false;
             GitModule module = CreateRepositoryWithInitialCommit();
+            ObjectId head = module.GetCurrentCheckout();
             File.AppendAllText(Path.Combine(_workingDirectory, "tracked.txt"), "dirty");
             ILockableNotifier notifier = Substitute.For<ILockableNotifier>();
             IGitUICommands commands = Substitute.For<IGitUICommands>();
@@ -2178,7 +2359,13 @@ public sealed class FormBrowseTests
                 .Returns(call => _serviceContainer.GetService(call.Arg<Type>()));
             using FormBrowse form = new(commands);
             form.Show();
-            await WaitUntilAsync(() => form.RevisionGrid.SelectedRevision?.IsArtificial == true);
+            await WaitUntilAsync(() => form.RevisionGrid.SelectedRevision?.ObjectId == head
+                && form.RevisionGrid.GetTestAccessor().Revisions.Items.OfType<GitRevision>()
+                    .Any(revision => revision.ObjectId == ObjectId.WorkTreeId));
+
+            // The source starts on HEAD; explicitly establish the artificial-row navigation precondition.
+            form.RevisionGrid.SetSelectedRevision(ObjectId.WorkTreeId).Should().BeTrue();
+            form.RevisionGrid.SelectedRevision!.IsArtificial.Should().BeTrue();
 
             MenuItem navigate = GetMainMenuItem(form, "navigateToolStripMenuItem");
             MenuItem goToCurrent = GetTaggedMenuItem(navigate, "GotoCurrentRevision");
@@ -2641,7 +2828,7 @@ public sealed class FormBrowseTests
             TextBlock loadingStatus = form.RevisionGrid.FindControl<TextBlock>("lblLoadingStatus")!;
             await WaitUntilAsync(() => loadingStatus.Text == "1 revisions" && form.RevisionGrid.SelectedRevision is not null);
 
-            form.RevisionGrid.SelectedId.Should().Be(selectedId);
+            form.RevisionGrid.SelectedRevision?.ObjectId.Should().Be(selectedId);
             form.FindControl<FilterToolBar>("ToolStripFilters")!
                 .FindControl<ComboBox>("tstxtRevisionFilter")!.Text.Should().Be("initial");
             form.FindControl<Control>("leftPanel")!.IsVisible.Should().BeFalse();
@@ -3034,6 +3221,135 @@ public sealed class FormBrowseTests
                 tree.IsVisible.Should().BeTrue();
                 list.IsVisible.Should().BeFalse();
                 form.fileTree.FileStatusList.SelectedRelativePath.Should().Be(RelativePath.From("src/followed.txt"));
+            }
+            finally
+            {
+                form.Close();
+            }
+        }
+        finally
+        {
+            AppSettings.CommitInfoPosition = originalPosition;
+            AppSettings.ShowSplitViewLayout = originalShowSplitView;
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task FormBrowse_file_tree_should_clear_empty_selection_and_refill_without_retaining_the_previous_file(bool clearWhileHidden)
+    {
+        CommitInfoPosition originalPosition = AppSettings.CommitInfoPosition;
+        bool originalShowSplitView = AppSettings.ShowSplitViewLayout;
+        try
+        {
+            AppSettings.CommitInfoPosition = CommitInfoPosition.BelowList;
+            AppSettings.ShowSplitViewLayout = true;
+            GitModule module = CreateRepositoryWithInitialCommit();
+            using FormBrowse form = new(new GitUICommands(_serviceContainer, module));
+            form.Show();
+            try
+            {
+                await WaitUntilAsync(() => form.RevisionGrid.SelectedRevision is not null);
+                GitRevision revision = form.RevisionGrid.GetSelectedRevisions().Single();
+                form.CommitInfoTabControl.SelectedItem = form.TreeTabPage;
+                await WaitUntilAsync(() =>
+                    form.fileTree.DisplayedRevision?.ObjectId == revision.ObjectId
+                    && form.fileTree.FileStatusList.SelectedItem?.Item.Name == "tracked.txt"
+                    && form.fileTree.FileViewer.TextEditor.Text == "content");
+
+                if (clearWhileHidden)
+                {
+                    form.CommitInfoTabControl.SelectedItem = form.CommitInfoTabPage;
+                    Dispatcher.UIThread.RunJobs();
+                }
+
+                ListBox revisions = form.RevisionGrid.GetTestAccessor().Revisions;
+                (revisions.SelectedItems
+                    ?? throw new AssertionException("The actual revision grid must retain its selection collection.")).Clear();
+                form.RevisionGrid.GetSelectedRevisions().Should().BeEmpty();
+                if (clearWhileHidden)
+                {
+                    (form.fileTree.DisplayedRevision?.ObjectId).Should().Be(revision.ObjectId,
+                        "the original defers hidden File tree updates until that tab is selected");
+                    form.CommitInfoTabControl.SelectedItem = form.TreeTabPage;
+                }
+
+                await WaitUntilAsync(() =>
+                    form.fileTree.DisplayedRevision is null
+                    && form.fileTree.FileStatusList.GitItemStatuses.Count == 0
+                    && form.fileTree.FileViewer.TextEditor.Text.Length == 0);
+                form.fileTree.FileStatusList.SelectedItem.Should().BeNull();
+
+                form.RevisionGrid.SetSelectedRevision(revision.ObjectId).Should().BeTrue();
+                await WaitUntilAsync(() =>
+                    form.fileTree.DisplayedRevision?.ObjectId == revision.ObjectId
+                    && form.fileTree.FileStatusList.SelectedItem?.Item.Name == "tracked.txt"
+                    && form.fileTree.FileViewer.TextEditor.Text == "content");
+            }
+            finally
+            {
+                form.Close();
+            }
+        }
+        finally
+        {
+            AppSettings.CommitInfoPosition = originalPosition;
+            AppSettings.ShowSplitViewLayout = originalShowSplitView;
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task FormBrowse_script_file_options_should_follow_the_effective_lower_pane_visibility(bool fileTree)
+    {
+        CommitInfoPosition originalPosition = AppSettings.CommitInfoPosition;
+        bool originalShowSplitView = AppSettings.ShowSplitViewLayout;
+        try
+        {
+            AppSettings.CommitInfoPosition = CommitInfoPosition.BelowList;
+            AppSettings.ShowSplitViewLayout = true;
+            GitModule module = CreateRepositoryWithInitialCommit();
+            using FormBrowse form = new(new GitUICommands(_serviceContainer, module));
+            form.Show();
+            try
+            {
+                await WaitUntilAsync(() => form.RevisionGrid.SelectedRevision is not null);
+                RevisionDiffControl pane = fileTree ? form.fileTree : form.revisionDiff;
+                TabItem page = fileTree ? form.TreeTabPage : form.DiffTabPage;
+                form.CommitInfoTabControl.SelectedItem = page;
+                await WaitUntilAsync(() =>
+                    pane.FileStatusList.SelectedItem?.Item.Name == "tracked.txt"
+                    && pane.FileViewer.TextEditor.Text.Length > 0);
+                pane.IsEffectivelyVisible.Should().BeTrue();
+                TopLevel.GetTopLevel(pane).Should().BeSameAs(form);
+                RevisionDiffControl inactivePane = fileTree ? form.revisionDiff : form.fileTree;
+                TopLevel.GetTopLevel(inactivePane).Should().BeNull(
+                    "Avalonia detaches inactive tab contents instead of setting their local visibility false");
+                form.GetScriptOptionsProvider().GetValues("SelectedRelativePaths")
+                    .Should().Equal("tracked.txt".EscapeForCommandLine());
+
+                Button splitToggle = form.FindControl<Button>("toggleSplitViewLayout")
+                    ?? throw new AssertionException("The source split-view command must remain available.");
+                Click(form, splitToggle, MouseButton.Left);
+                Dispatcher.UIThread.RunJobs();
+                AppSettings.ShowSplitViewLayout.Should().BeFalse();
+                form.CommitInfoTabControl.SelectedItem.Should().BeSameAs(page,
+                    "hiding the panel does not change the retained selected tab");
+                pane.IsEffectivelyVisible.Should().BeFalse();
+                (pane.FileStatusList.SelectedItem?.Item.Name).Should().Be("tracked.txt",
+                    "source hidden panes retain their data, but do not contribute script options");
+                form.GetScriptOptionsProvider().Should().BeSameAs(ScriptOptionsProviderBase.Default);
+
+                Click(form, splitToggle, MouseButton.Left);
+                Dispatcher.UIThread.RunJobs();
+                pane.IsEffectivelyVisible.Should().BeTrue();
+                TopLevel.GetTopLevel(pane).Should().BeSameAs(form);
+                form.GetScriptOptionsProvider().GetValues("SelectedRelativePaths")
+                    .Should().Equal("tracked.txt".EscapeForCommandLine());
             }
             finally
             {

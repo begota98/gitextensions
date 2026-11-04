@@ -45,6 +45,13 @@ internal abstract class Tree : NodeBase, IDisposable
         Attached();
     }
 
+    public virtual void Dispose()
+    {
+        Detached();
+        SetUICommandsSource(null);
+        _reloadTaskRunner.Dispose();
+    }
+
     public RepoTreeKind Kind { get; }
 
     internal RepoObjectsTree OwnerControl => Owner;
@@ -74,12 +81,6 @@ internal abstract class Tree : NodeBase, IDisposable
     {
         get => Owner.GetTreeVisibility(Kind);
         set => Owner.SetTreeVisibility(Kind, value);
-    }
-
-    public virtual void Dispose()
-    {
-        Detached();
-        _reloadTaskRunner.Dispose();
     }
 
     public void Attached()
@@ -131,12 +132,22 @@ internal abstract class Tree : NodeBase, IDisposable
             return;
         }
 
+        // Portable ref refresh replaces root owners; a disposed generation must not
+        // remain alive through the command source's module-change notification.
+        if (_uiCommandsSource is not null)
+        {
+            _uiCommandsSource.UICommandsChanged -= UICommandsSource_UICommandsChanged;
+        }
+
         _uiCommandsSource = uiCommands;
         if (uiCommands is not null)
         {
-            uiCommands.UICommandsChanged += (_, _) => OnModuleChanged();
+            uiCommands.UICommandsChanged += UICommandsSource_UICommandsChanged;
         }
     }
+
+    private void UICommandsSource_UICommandsChanged(object? sender, GitUICommandsChangedEventArgs e)
+        => OnModuleChanged();
 
     // Invoke from child class to reload nodes for the current Tree. Clears Nodes, invokes
     // input async function that should populate Nodes, then fills the tree view with its contents,
@@ -159,6 +170,11 @@ internal abstract class Tree : NodeBase, IDisposable
                 Nodes newNodes = Module.IsValidGitWorkingDir()
                     ? await loadNodesTask(getRefs, cancellationToken)
                     : new Nodes(tree: null);
+
+                // The nodes are added to the tree view in one go, which can take seconds for thousands of refs.
+                // Posted messages, like the continuation of this task, are handled before painting, so wait for
+                // the UI thread to be idle to let the rest of the window (e.g. the revision grid) be painted first.
+                await WaitForIdleAsync(cancellationToken);
 
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
@@ -192,6 +208,21 @@ internal abstract class Tree : NodeBase, IDisposable
                 LoadingCompleted.TrySetResult();
             }
         });
+
+    /// <summary>
+    ///  Completes when the UI thread has no more messages to handle, i.e. after the pending painting is done.
+    /// </summary>
+    /// <param name="cancellationToken">The token to cancel waiting.</param>
+    internal static async Task WaitForIdleAsync(CancellationToken cancellationToken)
+    {
+        // The idle priority is not processed without a message loop, like in unit tests.
+        if (Avalonia.Application.Current?.ApplicationLifetime is not Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)
+        {
+            return;
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle, cancellationToken);
+    }
 
     private void FillTreeViewNode(string? originalSelectedNodeFullNamePath, bool firstTime)
     {

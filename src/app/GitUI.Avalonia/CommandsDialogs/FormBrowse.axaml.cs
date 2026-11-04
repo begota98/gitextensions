@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using Avalonia;
 using Avalonia.Automation;
@@ -56,6 +56,128 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
 {
     private const int VerticalScrollBarWidthAt96Dpi = 17;
 
+    /*
+        MENUS
+        ═════
+                ABEFGIJKLMOQUWXYZ
+            C   Commands
+            D   Dashboard
+            H   Help
+            N   Navigate (inserted by FormBrowseMenus)
+            P   Plugins
+            R   Repository
+            S   Start
+            T   Tools
+            V   View (inserted by FormBrowseMenus)
+                GitHub (inserted dynamically)
+
+        START menu
+        ══════════
+                ABDEGHIJKMNPQSTUVWYZ
+            C   Create new repository...
+            F   Favorite repositories
+            L   Clone repository...
+            O   Open...
+            R   Recent repositories
+            X   Exit
+
+        DASHBOARD menu
+        ══════════════
+            R   Refresh
+            S   Recent repositories settings
+
+        REPOSITORY menu
+        ═══════════════
+                DFHJLNPQVYZ
+            A   Edit .gitattributes
+            B   Synchronize all submodules
+            C   Close (go to Dashboard)
+            E   Edit .git/info/exclude
+            G   Git maintenance
+            I   Edit .gitignore
+            K   Sparse Working Copy
+            M   Edit .mailmap
+            O   Repository settings
+            R   Refresh
+            S   Manage submodules...
+            T   Remote repositories...
+            U   Update all submodules
+            W   Worktrees
+            X   File Explorer
+
+        REPOSITORY ▷ WORKTREES submenu
+        ══════════════════════════════
+            C   Create a worktree...
+            M   Manage worktrees...
+
+        REPOSITORY ▷ GIT MAINTENANCE submenu
+        ════════════════════════════════════
+            C   Compress git database
+            R   Recover lost objects...
+            D   Delete index.lock
+            E   Edit .git/config
+
+        COMMANDS menu
+        ═════════════
+                JQXZ
+            /   Pull/Fetch...
+            A   Apply patch...
+            B   Create branch...
+            C   Commit...
+            D   Delete tag...
+            E   Rebase...
+            F   Format patch...
+            G   Show reflog...
+            H   View patch file...
+            I   Bisect...
+            K   Checkout branch...
+            L   Delete branch...
+            M   Merge branches...
+            N   Manage stashes...
+            O   Checkout revision...
+            P   Push...
+            R   Reset changes...
+            S   Solve merge conflicts...
+            T   Create tag...
+            U   Undo last commit
+            V   Archive revision...
+            W   Clean working directory...
+            Y   Cherry pick...
+
+        GITHUB (Repository hosts) menu
+        ══════════════════════════════
+                BDEGHIJKLMNOQRSTUVWXYZ
+            A   Add upstream remote
+            C   Create pull requests...
+            F   Fork/Clone repository
+            P   View pull requests...
+
+        PLUGINS menu
+        ════════════
+            S   Plugin Settings
+
+        TOOLS menu
+        ══════════
+                ADEFHIJLMNOQRTUVWXYZ
+            B   Git bash
+            C   Git command log
+            G   Git GUI
+            K   GitK
+            P   PuTTY
+            S   Settings
+
+        HELP menu
+        ═════════
+                BEFGHIJKLNOPQSVWXZ
+            A   About
+            C   Changelog
+            D   Donate
+            M   User manual
+            R   Report an issue
+            T   Translate
+            U   Check for updates
+            Y   Yes, I allow telemetry
+    */
     private readonly TranslationString _closeAll = new("Close all windows");
     private readonly TranslationString _noSubmodulesPresent = new("No submodules");
     private readonly TranslationString _topProjectModuleFormat = new("Top project: {0}");
@@ -97,6 +219,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
 
     // The source adds SystemInformation.VerticalScrollBarWidth (17 pixels at 96 DPI) to its
     // 490-pixel content width. Avalonia DIPs are the same 96-DPI design units.
+    // enough to fit CommitInfoHeader in most cases, when the width is (avatar + commit hash)
     private GridLength _commitInfoWidth = new(490 + VerticalScrollBarWidthAt96Dpi);
     private GpgInfo? _gpgInfo;
     private GitRevision? _gpgInfoLoadingRevision;
@@ -120,6 +243,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
     private bool _fileBlameHistoryLeftPanelStartupState;
     private TabItem? _consoleTabPage;
     private OutputHistoryControllerBase? _outputHistoryController;
+    private KeyModifiers _pushActivationModifiers;
 
     private UpdateTargets _selectedRevisionUpdatedTargets = UpdateTargets.None;
 
@@ -154,8 +278,6 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
     /// <param name="args">The start up arguments.</param>
     public FormBrowse(IGitUICommands commands, BrowseArguments args)
         : this(commands, args, gpgInfoProvider: null)
-
-    // Type or member is obsolete
     {
     }
 
@@ -275,8 +397,6 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         DragDrop.AddDropHandler(this, FormBrowse_DragDrop);
         branchSelect.Click += CurrentBranchClick;
         BranchSelectFlyout.Opening += CurrentBranchDropDownOpening;
-        BranchSelectFlyout.Opened += (_, _) =>
-            Dispatcher.UIThread.Post(() => WinFormsToolStripMenuSizer.Apply(BranchSelectFlyout, branchSelect), DispatcherPriority.Loaded);
         branchSelect.AddHandler(
             PointerReleasedEvent,
             branchSelect_MouseUp,
@@ -287,6 +407,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         InitializeToolbarOverflow();
         toolStripButtonPull.Click += ToolStripButtonPullClick;
         toolStripButtonPush.Click += ToolStripButtonPushClick;
+        InitializePushActivationModifiers();
         toolStripButtonCommit.Click += CommitToolStripMenuItemClick;
         toolStripSplitStash.Click += ToolStripSplitStashButtonClick;
         toolStripFileExplorer.Click += FileExplorerToolStripMenuItemClick;
@@ -304,8 +425,6 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         manageStashesToolStripMenuItem.Click += ManageStashesToolStripMenuItemClick;
         createAStashToolStripMenuItem.Click += CreateStashToolStripMenuItemClick;
 
-        // The toolstrip and menu items must be initialised after InitializeComplete
-        // which invokes the translation logic and applies the current language to the components.
         _NO_TRANSLATE_WorkingDir.Initialize(
             () => UICommands,
             _repositoryHistoryUIService
@@ -336,19 +455,32 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
             .LoadHotkeys(RevisionGridControl.HotkeySettingsName);
         ToolStripFilters.RefreshRevisionGridShortcutKeys(revisionGridHotkeys);
         RevisionGrid.RefreshMenuShortcutKeys(revisionGridHotkeys);
+
+        // The toolstrip and menu items must be initialised after InitializeComplete
+        // which invokes the translation logic and applies the current language to the components.
         InitMenusAndToolbars(args.RevFilter, args.PathFilter.ToPosixPath());
         InitializeToolbarsMenus();
         LoadUserMenu();
+
+        // Application is init, the repo related operations are triggered in InternalInitialize()
+        // "Repo" related methods, creates _dashboard
         InternalInitialize();
     }
 
     private void LoadUserMenu()
     {
         ReloadScriptHotkeys();
-        ToolStripScripts.Children.Clear();
+        for (int i = ToolStripScripts.Items.Count - 1; i >= 0; i--)
+        {
+            if (ToolStripScripts.Items[i].Tag as string == "userscript")
+            {
+                ToolStripScripts.Items.RemoveAt(i);
+            }
+        }
+
         if (_scriptsManager is null)
         {
-            ToolStripScripts.IsVisible = true;
+            ToolStripScripts.GripVisible = false;
             return;
         }
 
@@ -360,24 +492,41 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         {
             IconButton button = new()
             {
-                Content = script.Name,
+                // store scriptname
+                Content = AvaloniaTranslationUtils.ToAvaloniaMnemonics(script.Name ?? string.Empty),
                 Icon = script.GetIcon(),
                 Tag = "userscript",
             };
             button.Classes.Add("gitextensions-toolbar-button");
+            NativeToolStrip.SetItemUseNativeButtonSize(button, true);
             KeyGesture? gesture = KeysMapper.ToKeyGesture(
                 hotkeys.FirstOrDefault(hotkey => hotkey.Name == script.GetDisplayName())?.KeyData);
             ToolTip.SetTip(button, gesture is null ? script.Name : $"{script.Name} ({gesture})");
             button.Click += (_, _) => ExecuteCommand(script.HotkeyCommandIdentifier);
+
+            // add to toolstrip
             ToolStripScripts.Children.Add(button);
         }
 
-        ToolStripScripts.IsVisible = true;
+        ToolStripScripts.GripVisible = ToolStripScripts.Items.Any(item => item.Tag as string == "userscript");
     }
 
     private void InitializeToolbarOverflow()
     {
         ToolStripMain.PreferredSizeChanged += (_, _) => UpdateMainToolbarOverflow();
+        foreach (Control toolbar in new Control[] { ToolStripMain, ToolStripFilters })
+        {
+            toolbar.PropertyChanged += (_, args) =>
+            {
+                if (args.Property == IsVisibleProperty)
+                {
+                    // Hidden wrapper grids can retain a zero measure constraint; the source
+                    // owners notify their actual ToolStripPanel when visibility is restored.
+                    _topPanel.InvalidateMeasure();
+                }
+            };
+        }
+
         _NO_TRANSLATE_WorkingDir.PropertyChanged += (_, args) =>
         {
             if (args.Property == WidthProperty)
@@ -429,6 +578,8 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
     {
         base.OnLoad(e);
 
+        // All app init is done, make all repo related similar to switching repos
+
         CancellationToken cancellationToken = _loadOperationsCancellationTokenSource.Token;
         _loadOperations.FileAndForget(async () =>
         {
@@ -451,8 +602,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
 
     private void OnActivated(EventArgs e)
     {
-        // WinForms posts this work after activation so the native window is fully displayed.
-        // Avalonia's dispatcher provides the equivalent application-independent boundary.
+        // wait for windows to really be displayed, which isn't necessarily the case in OnLoad()
         Dispatcher.UIThread.Post(OnActivate);
     }
 
@@ -464,7 +614,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
 
     private void OnFormClosing(WindowClosingEventArgs e)
     {
-        // File-history mode temporarily hides the left panel without persisting that forced state.
+        // Restore state at startup if file history mode, ignore the forced setting
         if (_isFileHistoryMode && _fileBlameHistoryLeftPanelStartupState && !leftPanel.IsVisible)
         {
             MainSplitContainer.ColumnDefinitions[0].Width = _leftPanelWidth.Value > 0
@@ -482,6 +632,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
     {
         ToolStripMain.Dispose();
         ToolStripFilters.Strip.Dispose();
+        ToolStripScripts.Dispose();
         if (_hasRuntimeCommands)
         {
             PluginRegistry.Unregister(UICommands);
@@ -535,11 +686,10 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
     public override void AddTranslationItems(ITranslation translation)
     {
         base.AddTranslationItems(translation);
-        translation.AddTranslationItem(nameof(FormBrowse), nameof(ToolStripMain), "Text", "");
-        translation.AddTranslationItem(nameof(FormBrowse), nameof(ToolStripFilters), "Text", "");
-        translation.AddTranslationItem(nameof(FormBrowse), nameof(ToolStripScripts), "Text", "");
-        translation.AddTranslationItem(nameof(FormBrowse), nameof(_NO_TRANSLATE_WorkingDir), "Text", "");
-        translation.AddTranslationItem(nameof(FormBrowse), nameof(toolsToolStripMenuItem), "Text", "");
+        translation.AddTranslationItem(nameof(FormBrowse), nameof(ToolStripMain), "Text", "Standard");
+        translation.AddTranslationItem(nameof(FormBrowse), nameof(ToolStripFilters), "Text", "Filters");
+        translation.AddTranslationItem(nameof(FormBrowse), nameof(ToolStripScripts), "Text", "Scripts");
+        translation.AddTranslationItem(nameof(FormBrowse), nameof(toolsToolStripMenuItem), "Text", "&Tools");
         translation.AddTranslationItem(nameof(FormBrowse), nameof(RefreshButton), "ToolTipText", "Refresh");
         translation.AddTranslationItem(nameof(FormBrowse), nameof(toggleLeftPanel), "ToolTipText", "Toggle left panel");
         translation.AddTranslationItem(nameof(FormBrowse), nameof(toggleSplitViewLayout), "ToolTipText", "Toggle split view layout");
@@ -604,148 +754,10 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         }
     }
 
-    private void InternalInitialize()
-    {
-        IGitModule module = Module;
-        RevisionGrid.OnRepositoryChanged();
-
-        // check for updates
-        if (_updateCheckService is not null
-            && AppSettings.CheckForUpdates
-            && AppSettings.LastUpdateCheck.AddDays(7) < DateTime.Now)
-        {
-            AppSettings.LastUpdateCheck = DateTime.Now;
-            _updateCheckService.SearchForUpdatesAndShow(this, AppSettings.AppVersion, alwaysShow: false);
-        }
-
-        bool hasWorkingDir = !string.IsNullOrEmpty(module.WorkingDir);
-        bool isValidWorkingDir = module.IsValidGitWorkingDir();
-        bool isBareRepository = isValidWorkingDir && module.IsBareRepository();
-        bool enableWorkingTreeCommands = isValidWorkingDir && !isBareRepository;
-        string branchName = isValidWorkingDir ? module.GetSelectedBranch() : string.Empty;
-
-        Title = _appTitleGenerator!.Generate(module.WorkingDir, isValidWorkingDir, branchName);
-
-        refreshToolStripMenuItem.IsEnabled = isValidWorkingDir;
-        refreshToolStripMenuItem.InputGesture = isValidWorkingDir ? new KeyGesture(Key.F5) : null;
-        WinFormsToolStripMenuSizer.SetShortcutDisplayString(
-            refreshToolStripMenuItem,
-            isValidWorkingDir ? "F5" : string.Empty);
-        refreshDashboardToolStripMenuItem.InputGesture = isValidWorkingDir ? null : new KeyGesture(Key.F5);
-        WinFormsToolStripMenuSizer.SetShortcutDisplayString(
-            refreshDashboardToolStripMenuItem,
-            isValidWorkingDir ? string.Empty : "F5");
-        repositoryToolStripMenuItem.IsVisible = isValidWorkingDir;
-        dashboardToolStripMenuItem.IsVisible = !isValidWorkingDir;
-        _formBrowseMenus?.SetVisible(isValidWorkingDir);
-        commandsToolStripMenuItem.IsVisible = isValidWorkingDir;
-        fileExplorerToolStripMenuItem.IsEnabled = isValidWorkingDir;
-        manageRemoteRepositoriesToolStripMenuItem1.IsEnabled = isValidWorkingDir;
-        commitToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
-        checkoutBranchToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
-        branchToolStripMenuItem.IsEnabled = isValidWorkingDir;
-        deleteBranchToolStripMenuItem.IsEnabled = isValidWorkingDir;
-        pullToolStripMenuItem.IsEnabled = isValidWorkingDir;
-        fetchAllToolStripMenuItem.IsEnabled = isValidWorkingDir;
-        mergeBranchToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
-        rebaseToolStripMenuItem.IsEnabled = false;
-        tagToolStripMenuItem.IsEnabled = isValidWorkingDir;
-        deleteTagToolStripMenuItem.IsEnabled = isValidWorkingDir;
-        archiveToolStripMenuItem.IsEnabled = false;
-        stashToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
-        toolStripMenuItemReflog.IsEnabled = enableWorkingTreeCommands;
-        cleanupToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
-        applyPatchToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
-        manageWorktreeToolStripMenuItem.IsEnabled = isValidWorkingDir;
-        gitMaintenanceToolStripMenuItem.IsEnabled = isValidWorkingDir;
-        repoSettingsToolStripMenuItem.IsEnabled = isValidWorkingDir;
-        editgitignoreToolStripMenuItem1.IsEnabled = enableWorkingTreeCommands;
-        editgitinfoexcludeToolStripMenuItem.IsEnabled = isValidWorkingDir;
-        editGitAttributesToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
-        editmailmapToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
-        menuitemSparse.IsEnabled = enableWorkingTreeCommands;
-        manageSubmodulesToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
-        updateAllSubmodulesToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
-        synchronizeAllSubmodulesToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
-        _createPullRequestsToolStripMenuItem.IsEnabled = isValidWorkingDir;
-        _viewPullRequestsToolStripMenuItem.IsEnabled = isValidWorkingDir;
-        _addUpstreamRemoteToolStripMenuItem.IsEnabled = isValidWorkingDir;
-        RefreshButton.IsEnabled = isValidWorkingDir;
-        branchSelect.IsEnabled = isValidWorkingDir;
-        toolStripButtonLevelUp.IsEnabled = hasWorkingDir && !isBareRepository;
-        toolStripButtonLevelUp.Icon = isValidWorkingDir && module.SuperprojectModule is not null
-            ? Images.NavigateUp
-            : Images.SubmodulesManage;
-        toolStripButtonPull.IsEnabled = isValidWorkingDir;
-        toolStripButtonPush.IsEnabled = isValidWorkingDir;
-        toolStripButtonPush.ResetBeforeUpdate();
-        toolStripButtonCommit.IsEnabled = enableWorkingTreeCommands;
-        toolStripSplitStash.IsEnabled = enableWorkingTreeCommands;
-        pullToolStripMenuItem1.IsEnabled = enableWorkingTreeCommands;
-        mergeToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
-        rebaseToolStripMenuItem1.IsEnabled = enableWorkingTreeCommands;
-        stashChangesToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
-        stashStagedToolStripMenuItem.IsVisible = module.GitVersion.SupportStashStaged;
-        toolStripFileExplorer.IsEnabled = isValidWorkingDir;
-        userShell.IsEnabled = Directory.Exists(module.WorkingDir);
-        ToolStripFilters.IsEnabled = isValidWorkingDir;
-        branchSelect.Content = string.IsNullOrEmpty(branchName) ? "Branch" : branchName;
-        pluginsToolStripMenuItem.IsVisible = isValidWorkingDir;
-        UpdateRepositoryHostsMenu();
-        UpdatePluginMenu(isValidWorkingDir);
-        UpdateFetchAllVisibility();
-        RefreshDefaultPullAction();
-        toolsToolStripMenuItem.RefreshState(module.IsBareRepository());
-
-        if (isValidWorkingDir)
-        {
-            HideDashboard();
-            _formBrowseMenus?.InsertRevisionGridMainMenuItems(repositoryToolStripMenuItem);
-            _NO_TRANSLATE_WorkingDir.RefreshContent();
-            _aheadBehindDataProvider?.ResetCache();
-            lblRepoPath.Text = $"{module.WorkingDir}  —  {branchName}";
-            lblStatus.Text = $"git: {GitVersion.Current}";
-            RevisionGrid.ReloadRevisions(module, selectedObjectId: RevisionGrid.SelectedId);
-            UpdateSubmodulesStructure();
-            RefreshPushButton(module, branchName);
-        }
-        else
-        {
-            ShowDashboard();
-            _worktrees = [];
-            toolStripWorktrees.IsVisible = false;
-            _NO_TRANSLATE_WorkingDir.RefreshContent();
-            lblRepoPath.Text = "No git repository";
-            lblStatus.Text = "Start the app inside a repository or pass one on the command line: GitExtensions.Avalonia browse <path>";
-            toolStripButtonPush.ResetToDefaultState();
-        }
-
-        _gitStatusMonitor?.Active = isValidWorkingDir && NeedsGitStatusMonitor();
-        UpdateStashCount();
-        OnActivate();
-        LoadUserMenu();
-        UICommands.RaisePostBrowseInitialize(this);
-    }
-
     private static bool NeedsGitStatusMonitor()
         => AppSettings.ShowGitStatusInBrowseToolbar
             || (AppSettings.ShowGitStatusForArtificialCommits
                 && AppSettings.RevisionGraphShowArtificialCommits);
-
-    private void HideDashboard()
-    {
-        if (_dashboard is not null)
-        {
-            _dashboard.IsVisible = false;
-        }
-
-        mainContentGrid.IsVisible = true;
-        toolPanel.IsVisible = true;
-        toolStripMainHost.IsVisible = true;
-        toolStripFiltersHost.IsVisible = true;
-        ToolStripScripts.IsVisible = true;
-        _repositoryHistoryUIService?.TriggerBranchNameCacheUpdate(onlyIfEmpty: true);
-    }
 
     private void ChangeWorkingDirectory(string path)
     {
@@ -803,6 +815,9 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         });
     }
 
+    /// <summary>
+    /// Refresh revisions, also handling changes external to GE.
+    /// </summary>
     private void RefreshRevisions()
     {
         RevisionGrid.ReloadRevisions(Module, selectedObjectId: RevisionGrid.SelectedId);
@@ -894,9 +909,12 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
     private void UpdateRepositoryHostsMenu()
     {
         IRepositoryHostPlugin? firstHost = PluginRegistry.GitHosters.FirstOrDefault();
+
+        // Show "Repository hosts" menu item when there is at least 1 repository host plugin loaded
         _repositoryHostsToolStripMenuItem.IsVisible = firstHost is not null;
         if (firstHost is not null)
         {
+            // TODO: support more than one Git hosting provider plugin (ADO, GitLab,...)
             _repositoryHostsToolStripMenuItem.Header = firstHost.Name;
         }
     }
@@ -937,6 +955,21 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         _dashboard.IsVisible = true;
         _dashboard.RefreshContent();
         _dashboard.Focus();
+    }
+
+    private void HideDashboard()
+    {
+        if (_dashboard is not null)
+        {
+            _dashboard.IsVisible = false;
+        }
+
+        mainContentGrid.IsVisible = true;
+        toolPanel.IsVisible = true;
+        toolStripMainHost.IsVisible = true;
+        toolStripFiltersHost.IsVisible = true;
+        ToolStripScripts.IsVisible = true;
+        _repositoryHistoryUIService?.TriggerBranchNameCacheUpdate(onlyIfEmpty: true);
     }
 
     private void UpdatePluginMenu(bool validWorkingDir)
@@ -995,8 +1028,141 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         mainMenuStrip.InvalidateVisual();
     }
 
+    private void InternalInitialize()
+    {
+        IGitModule module = Module;
+        RevisionGrid.OnRepositoryChanged();
+
+        // check for updates
+        if (_updateCheckService is not null
+            && AppSettings.CheckForUpdates
+            && AppSettings.LastUpdateCheck.AddDays(7) < DateTime.Now)
+        {
+            AppSettings.LastUpdateCheck = DateTime.Now;
+            _updateCheckService.SearchForUpdatesAndShow(this, AppSettings.AppVersion, alwaysShow: false);
+        }
+
+        bool hasWorkingDir = !string.IsNullOrEmpty(module.WorkingDir);
+        bool isValidWorkingDir = module.IsValidGitWorkingDir();
+        bool isBareRepository = isValidWorkingDir && module.IsBareRepository();
+        bool enableWorkingTreeCommands = isValidWorkingDir && !isBareRepository;
+        string branchName = isValidWorkingDir ? module.GetSelectedBranch() : string.Empty;
+
+        // Explicit call: Title is normally updated on RevisionGrid filter change
+        Title = _appTitleGenerator!.Generate(module.WorkingDir, isValidWorkingDir, branchName);
+
+        refreshToolStripMenuItem.IsEnabled = isValidWorkingDir;
+        refreshToolStripMenuItem.InputGesture = isValidWorkingDir ? new KeyGesture(Key.F5) : null;
+        WinFormsToolStripMenuSizer.SetShortcutDisplayString(
+            refreshToolStripMenuItem,
+            isValidWorkingDir ? "F5" : string.Empty);
+        refreshDashboardToolStripMenuItem.InputGesture = isValidWorkingDir ? null : new KeyGesture(Key.F5);
+        WinFormsToolStripMenuSizer.SetShortcutDisplayString(
+            refreshDashboardToolStripMenuItem,
+            isValidWorkingDir ? string.Empty : "F5");
+
+        // repositoryToolStripMenuItem.Visible
+        repositoryToolStripMenuItem.IsVisible = isValidWorkingDir;
+        dashboardToolStripMenuItem.IsVisible = !isValidWorkingDir;
+        _formBrowseMenus?.SetVisible(isValidWorkingDir);
+
+        // commandsToolStripMenuItem.Visible
+        commandsToolStripMenuItem.IsVisible = isValidWorkingDir;
+        fileExplorerToolStripMenuItem.IsEnabled = isValidWorkingDir;
+        manageRemoteRepositoriesToolStripMenuItem1.IsEnabled = isValidWorkingDir;
+        commitToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
+        checkoutBranchToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
+        branchToolStripMenuItem.IsEnabled = isValidWorkingDir;
+        deleteBranchToolStripMenuItem.IsEnabled = isValidWorkingDir;
+        pullToolStripMenuItem.IsEnabled = isValidWorkingDir;
+        fetchAllToolStripMenuItem.IsEnabled = isValidWorkingDir;
+        mergeBranchToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
+        rebaseToolStripMenuItem.IsEnabled = false;
+        tagToolStripMenuItem.IsEnabled = isValidWorkingDir;
+        deleteTagToolStripMenuItem.IsEnabled = isValidWorkingDir;
+        archiveToolStripMenuItem.IsEnabled = false;
+        stashToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
+        toolStripMenuItemReflog.IsEnabled = enableWorkingTreeCommands;
+        cleanupToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
+        applyPatchToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
+        manageWorktreeToolStripMenuItem.IsEnabled = isValidWorkingDir;
+        gitMaintenanceToolStripMenuItem.IsEnabled = isValidWorkingDir;
+        repoSettingsToolStripMenuItem.IsEnabled = isValidWorkingDir;
+        editgitignoreToolStripMenuItem1.IsEnabled = enableWorkingTreeCommands;
+        editgitinfoexcludeToolStripMenuItem.IsEnabled = isValidWorkingDir;
+        editGitAttributesToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
+        editmailmapToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
+        menuitemSparse.IsEnabled = enableWorkingTreeCommands;
+        manageSubmodulesToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
+        updateAllSubmodulesToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
+        synchronizeAllSubmodulesToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
+        _createPullRequestsToolStripMenuItem.IsEnabled = isValidWorkingDir;
+        _viewPullRequestsToolStripMenuItem.IsEnabled = isValidWorkingDir;
+        _addUpstreamRemoteToolStripMenuItem.IsEnabled = isValidWorkingDir;
+        RefreshButton.IsEnabled = isValidWorkingDir;
+        branchSelect.IsEnabled = isValidWorkingDir;
+        toolStripButtonLevelUp.IsEnabled = hasWorkingDir && !isBareRepository;
+        toolStripButtonLevelUp.Icon = isValidWorkingDir && module.SuperprojectModule is not null
+            ? Images.NavigateUp
+            : Images.SubmodulesManage;
+        toolStripButtonPull.IsEnabled = isValidWorkingDir;
+        toolStripButtonPush.IsEnabled = isValidWorkingDir;
+        toolStripButtonPush.ResetBeforeUpdate();
+        toolStripButtonCommit.IsEnabled = enableWorkingTreeCommands;
+        toolStripSplitStash.IsEnabled = enableWorkingTreeCommands;
+        pullToolStripMenuItem1.IsEnabled = enableWorkingTreeCommands;
+        mergeToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
+        rebaseToolStripMenuItem1.IsEnabled = enableWorkingTreeCommands;
+        stashChangesToolStripMenuItem.IsEnabled = enableWorkingTreeCommands;
+        stashStagedToolStripMenuItem.IsVisible = module.GitVersion.SupportStashStaged;
+        toolStripFileExplorer.IsEnabled = isValidWorkingDir;
+        userShell.IsEnabled = Directory.Exists(module.WorkingDir);
+        ToolStripFilters.IsEnabled = isValidWorkingDir;
+
+        // Avalonia uses underscores for access keys; retain the source ampersand notation and literal branch underscores.
+        branchSelect.Content = AvaloniaTranslationUtils.ToAvaloniaMnemonics(string.IsNullOrEmpty(branchName) ? "Branch" : branchName);
+        pluginsToolStripMenuItem.IsVisible = isValidWorkingDir;
+        UpdateRepositoryHostsMenu();
+        UpdatePluginMenu(isValidWorkingDir);
+        UpdateFetchAllVisibility();
+        RefreshDefaultPullAction();
+        toolsToolStripMenuItem.RefreshState(module.IsBareRepository());
+
+        if (isValidWorkingDir)
+        {
+            HideDashboard();
+
+            // add Navigate and View menu
+            _formBrowseMenus?.InsertRevisionGridMainMenuItems(repositoryToolStripMenuItem);
+            _NO_TRANSLATE_WorkingDir.RefreshContent();
+            _aheadBehindDataProvider?.ResetCache();
+            lblRepoPath.Text = $"{module.WorkingDir}  —  {branchName}";
+            lblStatus.Text = $"git: {GitVersion.Current}";
+            RevisionGrid.ReloadRevisions(module, selectedObjectId: RevisionGrid.SelectedId);
+            UpdateSubmodulesStructure();
+            RefreshPushButton(module, branchName);
+        }
+        else
+        {
+            ShowDashboard();
+            _worktrees = [];
+            toolStripWorktrees.IsEnabled = false;
+            _NO_TRANSLATE_WorkingDir.RefreshContent();
+            lblRepoPath.Text = "No git repository";
+            lblStatus.Text = "Start the app inside a repository or pass one on the command line: GitExtensions.Avalonia browse <path>";
+            toolStripButtonPush.ResetToDefaultState();
+        }
+
+        _gitStatusMonitor?.Active = isValidWorkingDir && NeedsGitStatusMonitor();
+        UpdateStashCount();
+        OnActivate();
+        LoadUserMenu();
+        UICommands.RaisePostBrowseInitialize(this);
+    }
+
     private void SetShortcutKeyDisplayStringsFromHotkeySettings()
     {
+        // Add shortcuts to the menu items
         // Avalonia keeps display gestures separately from routed hotkeys. Preserve the
         // original ToolStrip menu text column as well as the form-level command route.
         SetShortcutKeyDisplayString(commitToolStripMenuItem, Command.Commit);
@@ -1018,7 +1184,8 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         helpToolStripMenuItem.RefreshShortcutKeys(Hotkeys);
         toolsToolStripMenuItem.RefreshShortcutKeys(Hotkeys);
 
-        // Set shortcuts on the Browse toolbar with commands in RevGrid.
+        // Set shortcuts on the Browse toolbar with commands in RevGrid
+        // TODO: add more
         UpdateTooltipWithShortcut(toggleLeftPanel, Command.ToggleLeftPanel);
         UpdateTooltipWithShortcut(toolStripButtonCommit, Command.Commit);
         UpdateTooltipWithShortcut(EditSettings, Command.OpenSettings);
@@ -1075,12 +1242,14 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
 
     public override IScriptOptionsProvider GetScriptOptionsProvider()
     {
-        if (CommitInfoTabControl.SelectedItem == TreeTabPage)
+        // Inactive Avalonia tab content is detached and can retain effective visibility.
+        // Source Control.Visible excludes that page as well as a collapsed parent pane.
+        if (fileTree.IsEffectivelyVisible && TopLevel.GetTopLevel(fileTree) == this)
         {
             return fileTree.ScriptOptionsProvider;
         }
 
-        if (CommitInfoTabControl.SelectedItem == DiffTabPage)
+        if (revisionDiff.IsEffectivelyVisible && TopLevel.GetTopLevel(revisionDiff) == this)
         {
             return revisionDiff.ScriptOptionsProvider;
         }
@@ -1102,10 +1271,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         }
 
         _selectedRevisionUpdatedTargets |= UpdateTargets.FileTree;
-        if (revision is not null)
-        {
-            fileTree.DisplayDiffTab([revision]);
-        }
+        fileTree.DisplayDiffTab(revision is null ? [] : [revision]);
     }
 
     private void OpenRepository(string path, ObjectId selectedId, ObjectId firstId)
@@ -1235,7 +1401,6 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         Lazy<IReadOnlyCollection<GitRevision>> getStashRevs,
         bool forceRefresh)
     {
-        ToolStripFilters.RefreshRevisionFunction(getRefs);
         IGitModule module = Module;
         string workingDirectory = module.WorkingDir;
         CancellationToken cancellationToken = _loadOperationsCancellationTokenSource.Token;
@@ -1251,6 +1416,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
             ConfigFileRemoteSettingsManager remotesManager = new(() => module);
             IReadOnlyList<Remote> disabledRemotes = remotesManager.GetDisabledRemotes();
             cancellationToken.ThrowIfCancellationRequested();
+            await GitUI.LeftPanel.Tree.WaitForIdleAsync(cancellationToken);
             await _loadOperations.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             if (!ReferenceEquals(Module, module))
             {
@@ -1258,7 +1424,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
             }
 
             _worktrees = worktrees;
-            toolStripWorktrees.IsVisible = worktrees.Count > 1;
+            toolStripWorktrees.IsEnabled = true;
             repoObjectsTree.SetRefs(
                 refs,
                 stashes,
@@ -1370,8 +1536,48 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
 
     private void PushToolStripMenuItemClick(object? sender, EventArgs e)
     {
-        UICommands.StartPushDialog(this, pushOnShow: false);
+        KeyModifiers modifiers = _pushActivationModifiers;
+        _pushActivationModifiers = KeyModifiers.None;
+        UICommands.StartPushDialog(this, pushOnShow: modifiers.HasFlag(KeyModifiers.Shift));
     }
+
+    private void InitializePushActivationModifiers()
+    {
+        // WinForms reads the current modifiers at Click. Capture only this activation's
+        // input, including popup events and Space's release, before framework dispatch.
+        foreach (InputElement target in new InputElement[] { pushToolStripMenuItem, toolStripButtonPush })
+        {
+            target.AddHandler(PointerReleasedEvent, CapturePushPointerModifiers, RoutingStrategies.Tunnel);
+            target.AddHandler(KeyDownEvent, CapturePushKeyModifiers, RoutingStrategies.Tunnel);
+            target.AddHandler(KeyUpEvent, CapturePushKeyModifiers, RoutingStrategies.Tunnel);
+        }
+
+        AddHandler(PointerReleasedEvent, ClearPushActivationModifiers, RoutingStrategies.Bubble, handledEventsToo: true);
+        AddHandler(KeyDownEvent, ClearPushActivationModifiers, RoutingStrategies.Bubble, handledEventsToo: true);
+        AddHandler(KeyUpEvent, ClearPushActivationModifiers, RoutingStrategies.Bubble, handledEventsToo: true);
+        mainMenuStrip.Loaded += (_, _) =>
+        {
+            // The menu attaches its interaction handler with the visual tree. Register
+            // cleanup afterwards so it cannot clear modifiers before the menu's Click.
+            mainMenuStrip.RemoveHandler(PointerReleasedEvent, ClearPushActivationModifiers);
+            mainMenuStrip.RemoveHandler(KeyDownEvent, ClearPushActivationModifiers);
+            mainMenuStrip.RemoveHandler(KeyUpEvent, ClearPushActivationModifiers);
+            mainMenuStrip.AddHandler(PointerReleasedEvent, ClearPushActivationModifiers, RoutingStrategies.Bubble, handledEventsToo: true);
+            mainMenuStrip.AddHandler(KeyDownEvent, ClearPushActivationModifiers, RoutingStrategies.Bubble, handledEventsToo: true);
+            mainMenuStrip.AddHandler(KeyUpEvent, ClearPushActivationModifiers, RoutingStrategies.Bubble, handledEventsToo: true);
+        };
+        mainMenuStrip.Closed += ClearPushActivationModifiers;
+        Deactivated += (_, _) => _pushActivationModifiers = KeyModifiers.None;
+    }
+
+    private void CapturePushPointerModifiers(object? sender, PointerReleasedEventArgs e)
+        => _pushActivationModifiers = e.KeyModifiers;
+
+    private void CapturePushKeyModifiers(object? sender, KeyEventArgs e)
+        => _pushActivationModifiers = e.KeyModifiers;
+
+    private void ClearPushActivationModifiers(object? sender, RoutedEventArgs e)
+        => _pushActivationModifiers = KeyModifiers.None;
 
     private void RefreshToolStripMenuItemClick(object sender, EventArgs e)
     {
@@ -1395,6 +1601,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         UICommands.StartApplyPatchDialog(this);
     }
 
+    // Cross-platform constraint: a confined app cannot execute a host terminal.
     private void userShell_Click(object? sender, EventArgs e)
     {
         if (OperatingSystem.IsWindows()
@@ -1419,7 +1626,6 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         }
         catch (PlatformNotSupportedException exception) when (FlatpakEnvironment.IsFlatpak())
         {
-            // Cross-platform constraint: a confined app cannot execute a host terminal.
             MessageBoxes.FailedToRunShell(this, "Git bash", exception);
         }
         catch (Exception exception)
@@ -1547,6 +1753,12 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         }
 
         LoadHotkeys(HotkeySettingsName);
+        RevisionGrid.ReloadHotkeys();
+        RevisionGrid.ReloadTranslation();
+        RevisionInfo.ReloadHotkeys();
+        fileTree.ReloadHotkeys();
+        revisionDiff.ReloadHotkeys();
+        repoObjectsTree.ReloadHotkeys();
         SetShortcutKeyDisplayStringsFromHotkeySettings();
         _NO_TRANSLATE_WorkingDir.RefreshShortcutKeys(Hotkeys);
         ToolStripFilters.RefreshBrowseDialogShortcutKeys(Hotkeys ?? []);
@@ -1555,10 +1767,27 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
             .LoadHotkeys(RevisionGridControl.HotkeySettingsName);
         ToolStripFilters.RefreshRevisionGridShortcutKeys(revisionGridHotkeys);
         RevisionGrid.RefreshMenuShortcutKeys(revisionGridHotkeys);
-        revisionDiff.ReloadHotkeys();
-        fileTree.ReloadHotkeys();
         LoadUserMenu();
         AvatarService.UpdateAvatarInitialFontsSettings();
+
+        // Clear the separate caches for diff/merge tools
+        _loadOperations.FileAndForget(() => new CustomDiffMergeToolProvider().ClearAsync(isDiff: false));
+        CancellationToken cancellationToken = _loadOperationsCancellationTokenSource.Token;
+        _loadOperations.FileAndForget(async () =>
+        {
+            revisionDiff.CancelLoadCustomDifftools();
+            RevisionGrid.CancelLoadCustomDifftools();
+
+            await new CustomDiffMergeToolProvider().ClearAsync(isDiff: true);
+
+            // The tool lists are created when the forms are init, must be redone after clearing the cache
+            await _loadOperations.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+            revisionDiff.LoadCustomDifftools();
+            RevisionGrid.LoadCustomDifftools();
+        });
+
+        _dashboard?.RefreshContent();
+
         RevisionGrid.ApplyColumnSettings();
         RevisionGrid.RefreshRealizedRows();
         RevisionInfo.Revision = RevisionGrid.SelectedRevision;
@@ -1596,7 +1825,8 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         _gpgInfoLoaded = false;
         revisionGpgInfo1.DisplayVerificationPending();
 
-        bool showGpgInfoTab = revision?.IsArtificial is false && AppSettings.ShowGpgInformation.Value;
+        // Don't show the "GPG" tab for artificial commits
+        bool showGpgInfoTab = revision?.IsArtificial is false && AppSettings.ShowGpgInformation;
         GpgInfoTabPage.IsVisible = showGpgInfoTab;
         if (!showGpgInfoTab)
         {
@@ -1688,6 +1918,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
             return;
         }
 
+        // fall back to operation without info in the button
         UpdateCommitButtonAndGetBrush(status: null, showCount: false);
         RevisionGrid.UpdateArtificialCommitCount(status: null);
     }
@@ -1716,6 +1947,12 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         CancellationToken cancellationToken = _loadOperationsCancellationTokenSource.Token;
         _loadOperations.FileAndForget(async () =>
         {
+            // Always query only current branch here
+            // because, due to race condition with left panel async refresh:
+            // * when there are a lot of branches, we end up here 1st (and so, we want only the current branch data
+            // because getting ahead - behind data for all branches will be (very ?) long
+            // * when there are few branches, we will end up here not in 1st
+            // and the data will be taken from cache (so what we pass as argument is kind of useless)
             IReadOnlyDictionary<string, AheadBehindData>? aheadBehindData = await Task.Run(
                 () => _aheadBehindDataProvider.GetData(branchName),
                 cancellationToken);
@@ -1780,6 +2017,8 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         else if (CommitInfoTabControl.SelectedItem == DiffTabPage)
         {
             revisionDiff.ReloadHotkeys();
+
+            // workaround to avoid focusing the "filter files" combobox
             revisionDiff.SwitchFocus(alreadyContainedFocus: false);
         }
         else if (selectingGpgInfo)
@@ -1903,6 +2142,8 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         _gitStatusMonitor?.InvalidateGitWorkingDirectoryStatus();
         _submoduleStatusProvider?.Init();
         repoObjectsTree.ClearTrees();
+
+        // Reset branch colors whenever we open a new repository
         module.ResetRemoteColors();
 
         UICommands = UICommands.WithGitModule(module);
@@ -1917,9 +2158,14 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         if (!string.Equals(originalWorkingDir, Module.WorkingDir, pathComparison))
         {
             ChangeTerminalActiveFolder(Module.WorkingDir);
+
+            // Reset the filter when switching repos
+            // If we're applying custom branch or revision filters - reset them
             RevisionGrid.ResetAllFilters();
             ToolStripFilters.ClearQuickFilters();
             revisionDiff.RepositoryChanged();
+
+            _selectedRevisionUpdatedTargets = UpdateTargets.None;
         }
 
         InternalInitialize();
@@ -1983,6 +2229,9 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         checkout.Click += (_, _) => QueueBranchCheckout();
         BranchSelectFlyout.Items.Add(checkout);
         BranchSelectFlyout.Items.Add(new Separator());
+
+        // Make sure there are never more than a 100 branches added to the menu
+        // Git Extensions will hang when the drop down is too large...
         foreach (IGitRef branch in Module.GetRefs(RefsFilter.Heads).Take(100))
         {
             if (branch.ObjectId.IsZero)
@@ -1996,7 +2245,8 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
                 KnownColor.Menu);
             MenuItem item = new()
             {
-                Header = branch.Name,
+                // WinForms treats underscores literally; escape Avalonia's mnemonic marker only.
+                Header = branch.Name.Replace("_", "__", StringComparison.Ordinal),
                 Icon = new Image
                 {
                     Width = 16,
@@ -2004,18 +2254,17 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
                     Source = (isBranchVisible ? Images.Branch : Images.EyeClosed).AdaptLightness(),
                 },
                 Foreground = isBranchVisible
-                    ? null
+                    ? branchSelect.Foreground
                     : new SolidColorBrush(AvaloniaThemeResources.ToMediaColor(
                         DrawingColor.Silver.AdaptForeColor(menuBackColor))),
             };
+
+            // Source branch captions use the empty shortcut column even when checkout has a shortcut.
+            item.Classes.Add("gitextensions-menu-no-gesture");
             item.Classes.Add("gitextensions-branch-entry");
             item.Click += (_, _) => QueueBranchCheckout(branch.Name);
             BranchSelectFlyout.Items.Add(item);
         }
-
-        // WinForms measures the whole ToolStripDropDownMenu after dynamic items are added.
-        // Measure before Avalonia places the flyout so the shortcut column is never clipped.
-        WinFormsToolStripMenuSizer.Apply(BranchSelectFlyout, branchSelect);
     }
 
     private void _forkCloneMenuItem_Click(object? sender, EventArgs e)
@@ -2151,16 +2400,15 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         GoToChild = 37,
         GoToParent = 38,
 
-        /* deprecated: RotateApplicationIcon = 14, */
-
         // WinForms routes F5 through ToolStripItem.ShortcutKeys. Avalonia has no ToolStrip,
         // so refresh joins the same command dispatcher without changing persisted upstream IDs.
         Refresh = 50,
+
+        /* deprecated: RotateApplicationIcon = 14, */
     }
 
     private void AddNotes()
     {
-        // Avalonia exposes the current row directly instead of WinForms' GetSelectedRevisionOrDefault helper.
         GitRevision? revision = RevisionGrid.SelectedRevision;
         if (revision?.IsArtificial is not false)
         {
@@ -2242,9 +2490,18 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         }
 
         // generic handling of this form's hotkeys (upstream)
-        if (base.ProcessHotkey(keyData))
+        KeyModifiers previousModifiers = _pushActivationModifiers;
+        _pushActivationModifiers = KeysMapper.ToKeyGesture(keyData)?.KeyModifiers ?? KeyModifiers.None;
+        try
         {
-            return true;
+            if (base.ProcessHotkey(keyData))
+            {
+                return true;
+            }
+        }
+        finally
+        {
+            _pushActivationModifiers = previousModifiers;
         }
 
         object? focused = FocusManager?.GetFocusedElement();
@@ -2347,13 +2604,13 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
             case Command.OpenWithDifftoolFirstToLocal: OpenWithDifftoolFirstToLocal(); break;
             case Command.OpenWithDifftoolSelectedToLocal: OpenWithDifftoolSelectedToLocal(); break;
             case Command.EditFile: EditFile(); break;
-            case Command.OpenAsTempFile when fileTree.IsEffectivelyVisible: fileTree.ExecuteCommand(RevisionDiffControl.Command.OpenAsTempFile); break;
-            case Command.OpenAsTempFileWith when fileTree.IsEffectivelyVisible: fileTree.ExecuteCommand(RevisionDiffControl.Command.OpenAsTempFileWith); break;
+            case Command.OpenAsTempFile when fileTree.IsEffectivelyVisible && TopLevel.GetTopLevel(fileTree) == this: fileTree.ExecuteCommand(RevisionDiffControl.Command.OpenAsTempFile); break;
+            case Command.OpenAsTempFileWith when fileTree.IsEffectivelyVisible && TopLevel.GetTopLevel(fileTree) == this: fileTree.ExecuteCommand(RevisionDiffControl.Command.OpenAsTempFileWith); break;
             case Command.ToggleBetweenArtificialAndHeadCommits: RevisionGrid.ExecuteCommand(RevisionGridControl.Command.ToggleBetweenArtificialAndHeadCommits); break;
             case Command.GoToChild: RestoreFileStatusListFocus(() => RevisionGrid.ExecuteCommand(RevisionGridControl.Command.GoToChild)); break;
             case Command.GoToParent: RestoreFileStatusListFocus(() => RevisionGrid.ExecuteCommand(RevisionGridControl.Command.GoToParent)); break;
             case Command.PullOrFetch: PullToolStripMenuItemClick(this, EventArgs.Empty); break;
-            case Command.Push: UICommands.StartPushDialog(this, pushOnShow: false); break;
+            case Command.Push: PushToolStripMenuItemClick(this, EventArgs.Empty); break;
             case Command.CreateBranch: CreateBranchToolStripMenuItemClick(this, EventArgs.Empty); break;
             case Command.MergeBranches: MergeBranchToolStripMenuItemClick(this, EventArgs.Empty); break;
             case Command.CreateTag: TagToolStripMenuItemClick(this, EventArgs.Empty); break;
@@ -2368,11 +2625,11 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
 
         void OpenWithDifftool()
         {
-            if (revisionDiff.IsEffectivelyVisible)
+            if (revisionDiff.IsEffectivelyVisible && TopLevel.GetTopLevel(revisionDiff) == this)
             {
                 revisionDiff.ExecuteCommand(RevisionDiffControl.Command.OpenWithDifftool);
             }
-            else if (fileTree.IsEffectivelyVisible)
+            else if (fileTree.IsEffectivelyVisible && TopLevel.GetTopLevel(fileTree) == this)
             {
                 fileTree.ExecuteCommand(RevisionDiffControl.Command.OpenWithDifftool);
             }
@@ -2380,7 +2637,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
 
         void OpenWithDifftoolFirstToLocal()
         {
-            if (revisionDiff.IsEffectivelyVisible)
+            if (revisionDiff.IsEffectivelyVisible && TopLevel.GetTopLevel(revisionDiff) == this)
             {
                 revisionDiff.ExecuteCommand(RevisionDiffControl.Command.OpenWithDifftoolFirstToLocal);
             }
@@ -2388,7 +2645,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
 
         void OpenWithDifftoolSelectedToLocal()
         {
-            if (revisionDiff.IsEffectivelyVisible)
+            if (revisionDiff.IsEffectivelyVisible && TopLevel.GetTopLevel(revisionDiff) == this)
             {
                 revisionDiff.ExecuteCommand(RevisionDiffControl.Command.OpenWithDifftoolSelectedToLocal);
             }
@@ -2396,11 +2653,11 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
 
         void EditFile()
         {
-            if (revisionDiff.IsEffectivelyVisible)
+            if (revisionDiff.IsEffectivelyVisible && TopLevel.GetTopLevel(revisionDiff) == this)
             {
                 revisionDiff.ExecuteCommand(RevisionDiffControl.Command.EditFile);
             }
-            else if (fileTree.IsEffectivelyVisible)
+            else if (fileTree.IsEffectivelyVisible && TopLevel.GetTopLevel(fileTree) == this)
             {
                 fileTree.ExecuteCommand(RevisionDiffControl.Command.EditFile);
             }
@@ -2581,7 +2838,8 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
 
     private void PullToolStripMenuItemClick(object? sender, EventArgs e)
     {
-        UICommands.StartPullDialog(this);
+        // "Pull/Fetch..." menu item always opens the dialog
+        DoPull(pullAction: AppSettings.FormPullAction, isSilent: false);
     }
 
     private void ToolStripButtonPullClick(object sender, EventArgs e)
@@ -2757,6 +3015,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
 
     private void UpdateSubmodulesStructure()
     {
+        // Submodule status is updated on git-status updates. To make sure supermodule status is updated, update immediately (once)
         if (_submoduleStatusProvider is null)
         {
             return;
@@ -2825,6 +3084,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
 
     private List<MenuItem> PopulateToolbar(SubmoduleInfoResult result)
     {
+        // Second task: Populate submodule toolbar menu on UI thread.
         RemoveSubmoduleButtons();
         List<MenuItem> newItems = [.. result.OurSubmodules.Select(submodule => CreateSubmoduleMenuItem(submodule))];
 
@@ -2841,6 +3101,8 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         if (result.SuperProject is not null)
         {
             SubmoduleFlyout.Items.Add(new Separator());
+
+            // Show top project only if it's not our super project
             if (result.TopProject is not null && result.TopProject != result.SuperProject)
             {
                 MenuItem topProjectItem = CreateSubmoduleMenuItem(result.TopProject, _topProjectModuleFormat.Text);
@@ -2900,6 +3162,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         {
             if (item.Tag is not string path)
             {
+                // not a submodule
                 continue;
             }
 
@@ -2942,15 +3205,14 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
     }
 
     /// <summary>
-    ///  Adds a tab with a console interface over the current working copy. Recreates the
-    ///  terminal when the tab is activated again after the shell exits.
+    /// Adds a tab with console interface to Git over the current working copy. Recreates the terminal on tab activation if user exits the shell.
+    /// Uses the configured console emulator (portable shell).
     /// </summary>
     private void FillTerminalTab()
     {
-        // If terminal control already exists, just focus it
+        // Tab page already created
         // Check if there are available console emulators
-        // Delay-create the terminal window when the tab is first selected
-        if (!AppSettings.ShowConEmuTab.Value
+        if (!AppSettings.ShowConEmuTab
             || _consoleEmulatorsRegistry is null
             || _consoleEmulatorsRegistry.AvailableConsoleEmulators.Count == 0
             || _consoleTabPage is not null)
@@ -2958,7 +3220,6 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
             return;
         }
 
-        // We have to set ImageKey after it's added to the tab control
         _consoleTabPage = new TabItem
         {
             Header = _consoleTabCaption.Text,
@@ -2976,6 +3237,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
             return;
         }
 
+        // Delay-create the terminal window when the tab is first selected
         _terminal ??= _consoleEmulatorsRegistry.CreateShellRunner();
         if (_terminal is null)
         {
@@ -2992,6 +3254,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
             _terminal.StartShell(Module.WorkingDir);
         }
 
+        // If terminal control already exists, just focus it
         _terminal.FocusTerminal();
     }
 
@@ -3003,7 +3266,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         }
 
         OutputHistoryControl outputHistoryControl = new();
-        _outputHistoryController = AppSettings.ShowOutputHistoryAsTab.Value
+        _outputHistoryController = AppSettings.ShowOutputHistoryAsTab
             ? new OutputHistoryTabController(
                 outputHistoryProvider,
                 outputHistoryControl,
@@ -3015,7 +3278,7 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
                 mainContentGrid,
                 outputHistorySplitter,
                 outputHistoryPanelHost,
-                AppSettings.OutputHistoryPanelVisible.Value);
+                AppSettings.OutputHistoryPanelVisible);
     }
 
     public void ChangeTerminalActiveFolder(string path)
@@ -3208,6 +3471,104 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
         base.OnClosed(e);
     }
 
+    private void toolStripWorktrees_ButtonClick(object? sender, EventArgs e)
+    {
+        manageWorktreeToolStripMenuItem_Click(sender, e);
+    }
+
+    private void toolStripWorktrees_DropDownOpening(object? sender, EventArgs e)
+    {
+        WorktreeFlyout.Items.Clear();
+        IReadOnlyList<GitWorktree> worktrees = Module.GetWorktrees();
+        string currentWorkingDirectory = Module.WorkingDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        StringComparison comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        foreach (GitWorktree worktree in worktrees)
+        {
+            bool isCurrent = string.Equals(
+                worktree.Path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                currentWorkingDirectory,
+                comparison);
+            string displayName = worktree.GetDisplayName(
+                Path.GetFileName(worktree.Path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
+            MenuItem item = new()
+            {
+                Header = displayName,
+                Tag = worktree.Path,
+                Icon = new Image { Width = 16, Height = 16, Source = Properties.Images.WorkTree },
+                ToggleType = MenuItemToggleType.CheckBox,
+                IsChecked = isCurrent,
+                IsEnabled = !isCurrent && !worktree.IsDeleted,
+            };
+            if (worktree.IsDeleted)
+            {
+                item.Classes.Add("worktree-deleted");
+            }
+
+            item.Click += WorktreeToolStripMenuItem_Click;
+            WorktreeFlyout.Items.Add(item);
+        }
+
+        WorktreeFlyout.Items.Add(new Separator());
+        MenuItem createItem = CreateWorktreeFlyoutItem(TranslatedStrings.CreateWorktree, Properties.Images.WorkTree);
+        createItem.Click += (_, _) =>
+        {
+            string mainPath = worktrees.Count > 0 ? worktrees[0].Path : Module.WorkingDir;
+            if (UICommands.WorktreeCreate(this, mainPath))
+            {
+                RefreshRevisions();
+            }
+        };
+        WorktreeFlyout.Items.Add(createItem);
+
+        MenuItem pruneItem = CreateWorktreeFlyoutItem(TranslatedStrings.PruneWorktrees);
+        pruneItem.Click += (_, _) =>
+        {
+            if (UICommands.StartCommandLineProcessDialog(this, command: null, "worktree prune"))
+            {
+                UICommands.RepoChangedNotifier.Notify();
+            }
+        };
+        WorktreeFlyout.Items.Add(pruneItem);
+
+        MenuItem manageItem = CreateWorktreeFlyoutItem(TranslatedStrings.ManageWorktrees, Properties.Images.WorkTree);
+        manageItem.Click += manageWorktreeToolStripMenuItem_Click;
+        WorktreeFlyout.Items.Add(manageItem);
+    }
+
+    private void WorktreeToolStripMenuItem_Click(object? sender, EventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string path })
+        {
+            return;
+        }
+
+        if (!Directory.Exists(path))
+        {
+            MessageBoxes.ShowError(this, string.Format(TranslatedStrings.WorktreeDirectoryNotFound, path), TranslatedStrings.Error);
+            return;
+        }
+
+        SetWorkingDir(Path.GetFullPath(path));
+    }
+
+    private void undoLastCommitToolStripMenuItem_Click(object sender, EventArgs e)
+    {
+        bool confirmed = MessageBoxes.ConfirmSuppressible(this, _undoLastCommitText.Text, _undoLastCommitCaption.Text, AppSettings.DontConfirmUndoLastCommit, icon: TaskDialogIcon.Warning);
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        ArgumentString arguments = Commands.Reset(ResetMode.Soft, "HEAD~1");
+        Module.GitExecutable.RunCommand(arguments);
+        RefreshToolStripMenuItemClick(refreshToolStripMenuItem, EventArgs.Empty);
+        RefreshGitStatusMonitor();
+    }
+
     internal TestAccessor GetTestAccessor()
         => new(this);
 
@@ -3331,104 +3692,6 @@ public sealed partial class FormBrowse : GitModuleForm, IBrowseRepo
 
     internal FileStatusList fileStatusList => revisionDiff.FileStatusList;
     internal Editor.FileViewer fileViewer => revisionDiff.FileViewer;
-
-    private void toolStripWorktrees_ButtonClick(object? sender, EventArgs e)
-    {
-        manageWorktreeToolStripMenuItem_Click(sender, e);
-    }
-
-    private void toolStripWorktrees_DropDownOpening(object? sender, EventArgs e)
-    {
-        WorktreeFlyout.Items.Clear();
-        IReadOnlyList<GitWorktree> worktrees = Module.GetWorktrees();
-        string currentWorkingDirectory = Module.WorkingDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        StringComparison comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-
-        foreach (GitWorktree worktree in worktrees)
-        {
-            bool isCurrent = string.Equals(
-                worktree.Path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                currentWorkingDirectory,
-                comparison);
-            string displayName = worktree.GetDisplayName(
-                Path.GetFileName(worktree.Path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
-            MenuItem item = new()
-            {
-                Header = displayName,
-                Tag = worktree.Path,
-                Icon = new Image { Width = 16, Height = 16, Source = Properties.Images.WorkTree },
-                ToggleType = MenuItemToggleType.CheckBox,
-                IsChecked = isCurrent,
-                IsEnabled = !isCurrent && !worktree.IsDeleted,
-            };
-            if (worktree.IsDeleted)
-            {
-                item.Classes.Add("worktree-deleted");
-            }
-
-            item.Click += WorktreeToolStripMenuItem_Click;
-            WorktreeFlyout.Items.Add(item);
-        }
-
-        WorktreeFlyout.Items.Add(new Separator());
-        MenuItem createItem = CreateWorktreeFlyoutItem(TranslatedStrings.CreateWorktree, Properties.Images.WorkTree);
-        createItem.Click += (_, _) =>
-        {
-            string mainPath = worktrees.Count > 0 ? worktrees[0].Path : Module.WorkingDir;
-            if (UICommands.WorktreeCreate(this, mainPath))
-            {
-                RefreshRevisions();
-            }
-        };
-        WorktreeFlyout.Items.Add(createItem);
-
-        MenuItem pruneItem = CreateWorktreeFlyoutItem(TranslatedStrings.PruneWorktrees);
-        pruneItem.Click += (_, _) =>
-        {
-            if (UICommands.StartCommandLineProcessDialog(this, command: null, "worktree prune"))
-            {
-                UICommands.RepoChangedNotifier.Notify();
-            }
-        };
-        WorktreeFlyout.Items.Add(pruneItem);
-
-        MenuItem manageItem = CreateWorktreeFlyoutItem(TranslatedStrings.ManageWorktrees, Properties.Images.WorkTree);
-        manageItem.Click += manageWorktreeToolStripMenuItem_Click;
-        WorktreeFlyout.Items.Add(manageItem);
-    }
-
-    private void WorktreeToolStripMenuItem_Click(object? sender, EventArgs e)
-    {
-        if (sender is not MenuItem { Tag: string path })
-        {
-            return;
-        }
-
-        if (!Directory.Exists(path))
-        {
-            MessageBoxes.ShowError(this, string.Format(TranslatedStrings.WorktreeDirectoryNotFound, path), TranslatedStrings.Error);
-            return;
-        }
-
-        SetWorkingDir(Path.GetFullPath(path));
-    }
-
-    private void undoLastCommitToolStripMenuItem_Click(object sender, EventArgs e)
-    {
-        bool confirmed = MessageBoxes.ConfirmSuppressible(this, _undoLastCommitText.Text, _undoLastCommitCaption.Text, AppSettings.DontConfirmUndoLastCommit, icon: TaskDialogIcon.Warning);
-
-        if (!confirmed)
-        {
-            return;
-        }
-
-        ArgumentString arguments = Commands.Reset(ResetMode.Soft, "HEAD~1");
-        Module.GitExecutable.RunCommand(arguments);
-        RefreshToolStripMenuItemClick(refreshToolStripMenuItem, EventArgs.Empty);
-        RefreshGitStatusMonitor();
-    }
 
     private void fileToolStripMenuItem_RecentRepositoriesCleared(object sender, EventArgs e)
     {

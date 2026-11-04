@@ -11,8 +11,9 @@ namespace GitUI.LeftPanel;
 internal sealed class RemoteBranchTree : BaseRefTree
 {
     private readonly IAheadBehindDataProvider? _aheadBehindDataProvider;
+    private Dictionary<string, Remote> _remoteByName = [];
     private readonly IReadOnlyList<Remote> _disabledRemotes;
-    private readonly IReadOnlyList<Remote> _enabledRemotes;
+    private readonly IReadOnlyList<Remote>? _enabledRemotes;
     private readonly IConfigFileRemoteSettingsManager? _remotesManager;
 
     public RemoteBranchTree(
@@ -27,10 +28,18 @@ internal sealed class RemoteBranchTree : BaseRefTree
     {
         _aheadBehindDataProvider = aheadBehindDataProvider;
         _disabledRemotes = disabledRemotes ?? [];
-        _enabledRemotes = enabledRemotes ?? [];
+        _enabledRemotes = enabledRemotes;
+        _remoteByName = (_enabledRemotes ?? []).ToDictionary(remote => remote.Name, StringComparer.Ordinal);
         _remotesManager = remotesManager;
         FillTree(branches, CancellationToken.None);
         Complete(TranslatedStrings.Remotes, Images.BranchRemoteRoot, expanded: true);
+    }
+
+    protected override async Task PreloadAsync(CancellationToken token)
+    {
+        IReadOnlyList<Remote> remotes = await Module.GetRemotesAsync();
+        token.ThrowIfCancellationRequested();
+        _remoteByName = remotes.ToDictionary(r => r.Name);
     }
 
     protected override Nodes FillTree(IReadOnlyList<IGitRef> branches, CancellationToken token)
@@ -39,21 +48,16 @@ internal sealed class RemoteBranchTree : BaseRefTree
         IDictionary<string, AheadBehindData>? aheadBehindData = _aheadBehindDataProvider?.GetData()?
             .DistinctBy(pair => pair.Value.RemoteRef)
             .ToDictionary(pair => pair.Value.RemoteRef, pair => pair.Value);
-        Dictionary<string, Remote> enabledByName = _enabledRemotes.ToDictionary(remote => remote.Name, StringComparer.Ordinal);
+        Dictionary<string, Remote> enabledByName = _remoteByName;
 
         // Create nodes for enabled remotes with branches
         FillNested(
-            PrioritizedBranches(branches),
+            ConfiguredBranches(),
             (parent, path, gitRef, level) =>
             {
                 token.ThrowIfCancellationRequested();
                 if (gitRef is not null)
                 {
-                    if (gitRef.ObjectId.IsZero)
-                    {
-                        throw new InvalidOperationException($"Branch '{gitRef.Name}' has no ObjectId.");
-                    }
-
                     RemoteBranchNode node = new(this, parent, gitRef);
                     if (aheadBehindData?.TryGetValue(gitRef.CompleteName, out AheadBehindData aheadBehind) is true)
                     {
@@ -79,7 +83,7 @@ internal sealed class RemoteBranchTree : BaseRefTree
                 .OfType<RemoteRepoNode>()
                 .Select(node => node.FullPath),
         ];
-        foreach (Remote remote in _enabledRemotes
+        foreach (Remote remote in (_enabledRemotes ?? [])
                      .Where(remote => !representedRemotes.Contains(remote.Name))
                      .OrderBy(remote => remote.Name, StringComparer.OrdinalIgnoreCase))
         {
@@ -113,6 +117,25 @@ internal sealed class RemoteBranchTree : BaseRefTree
         }
 
         return Nodes;
+
+        IEnumerable<IGitRef> ConfiguredBranches()
+        {
+            foreach (IGitRef branch in PrioritizedBranches(branches))
+            {
+                token.ThrowIfCancellationRequested();
+                if (branch.ObjectId.IsZero)
+                {
+                    throw new InvalidOperationException($"Branch '{branch.Name}' has no ObjectId.");
+                }
+
+                // Standalone preview callers can omit the configuration snapshot. Runtime
+                // callers supply it, including an empty list: orphan refs are not remotes.
+                if (_enabledRemotes is null || enabledByName.ContainsKey(branch.Name.SubstringUntil('/')))
+                {
+                    yield return branch;
+                }
+            }
+        }
     }
 
     protected override void PostFillTreeViewNode(bool firstTime)

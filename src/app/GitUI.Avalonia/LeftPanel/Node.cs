@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using GitExtensions.Extensibility.Git;
 using GitUI.LeftPanel.Interfaces;
+using TreeNode = Avalonia.Controls.TreeViewItem;
 
 namespace GitUI.LeftPanel;
 
@@ -21,13 +22,20 @@ internal abstract class Node : NodeBase, INode
 
     /// <summary>
     /// The tree node representing this node.
-    /// Avalonia retains one native item per model node rather than recycling it for another node.
+    /// Note that it may not always be set; which <see cref="Node"/> it represents does not change because
+    /// <see cref="Nodes.FillTreeViewNode(TreeViewItem)"/> reuses each node's own <see cref="TreeViewItem"/>.
     /// </summary>
     protected internal override TreeViewItem TreeViewNode
     {
         get => _treeViewNode!;
         protected set => _treeViewNode = value;
     }
+
+    /// <summary>
+    ///  Gets the tree view that shows this node, also while the subtree containing the node is still being built
+    ///  and its <see cref="TreeNode"/> is not yet attached (see <see cref="Nodes.FillTreeViewNode(TreeNode)"/>).
+    /// </summary>
+    protected TreeView? OwnerTreeView => Owner.FindControl<TreeView>("treeMain");
 
     protected IWin32Window? ParentWindow()
         => Owner;

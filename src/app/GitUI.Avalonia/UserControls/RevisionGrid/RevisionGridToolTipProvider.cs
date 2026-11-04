@@ -124,6 +124,11 @@ internal sealed class RevisionGridToolTipProvider
         {
             string newText = GetToolTipText(highlightToolTip, highlightRef);
             object? tip = string.IsNullOrEmpty(newText) ? null : newText;
+
+            // Do not deactivate the tooltip to force it to be shown again: deactivating resets its
+            // state, so the new text would only appear once the initial delay elapsed - and as the
+            // graph column builds its text for every hovered pixel, that delay would restart with
+            // nearly every mouse move. Windows updates the text of a displayed tooltip in place.
             if (!Equals(ToolTip.GetTip(cell), tip))
             {
                 ToolTip.SetTip(cell, tip);
@@ -142,9 +147,15 @@ internal sealed class RevisionGridToolTipProvider
                 }
 
                 string? toolTip;
-                bool hasToolTip = provider is MessageColumnProvider
-                    ? provider.TryGetToolTip(state.Revision, highlightRef, out toolTip)
-                    : provider.TryGetToolTip(state.Revision, out toolTip);
+                bool hasToolTip = provider switch
+                {
+                    MessageColumnProvider => provider.TryGetToolTip(state.Revision, highlightRef, out toolTip),
+
+                    // A graph tooltip identifies the actual lane beneath this pixel,
+                    // not merely the revision represented by its recycled row.
+                    RevisionGraphColumnProvider graph => graph.TryGetToolTip(state.Revision, e.GetPosition(cell).X, out toolTip),
+                    _ => provider.TryGetToolTip(state.Revision, out toolTip),
+                };
                 if (hasToolTip
                     && !string.IsNullOrWhiteSpace(toolTip))
                 {
@@ -181,6 +192,9 @@ internal sealed class RevisionGridToolTipProvider
 
         _cellStates.Clear();
         _isTruncatedByCellPos.Clear();
+
+        // A row index no longer identifies the same revision, so the memorized cell must not
+        // suppress the update of the tooltip for the cell the pointer is resting on.
         _previousRowIndex = -1;
         _previousColumnIndex = -1;
         _previousHighlight = null;
@@ -205,11 +219,13 @@ internal sealed class RevisionGridToolTipProvider
             // Its next hover must not reuse the previous commit's cached tooltip/highlight.
             ToolTip.SetIsOpen(cell, false);
             ToolTip.SetTip(cell, null);
-            _previousRowIndex = -1;
-            _previousColumnIndex = -1;
-            _previousHighlight = null;
         }
 
+        // Portable column painters refresh each cell's tooltip, unlike the source's
+        // shared ToolTip. Even an unchanged row needs its next hover regenerated.
+        _previousRowIndex = -1;
+        _previousColumnIndex = -1;
+        _previousHighlight = null;
         _cellStates[cell] = new CellState(columnIndex, rowIndex, revision);
         TextBlock? textBlock = cell as TextBlock ?? cell.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault();
         SetTruncation(columnIndex, rowIndex, IsTruncated(textBlock));

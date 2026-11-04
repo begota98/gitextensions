@@ -4,6 +4,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Data;
 using Avalonia.Diagnostics;
 using Avalonia.Input;
+using Avalonia.Markup.Xaml.MarkupExtensions;
 using Avalonia.Media;
 using Avalonia.VisualTree;
 using GitCommands;
@@ -64,7 +65,6 @@ internal sealed partial class FilterToolBar : TranslatedControl
     private bool _isApplyingFilter;
     private bool _filterBeingChanged;
     private bool _updatingSuggestions;
-    private string _advancedFilterToolTip = string.Empty;
     private Func<RefsFilter, IReadOnlyList<IGitRef>>? _getRefs;
     private Action<string>? _showInvalidReference;
     private string? _tslblRevisionFilterToolTip;
@@ -74,6 +74,28 @@ internal sealed partial class FilterToolBar : TranslatedControl
     {
         InitializeComponent();
         _defaultOwnerFont = (innerStackPanel.FontFamily, innerStackPanel.FontSize, innerStackPanel.FontStyle, innerStackPanel.FontWeight);
+
+        innerStackPanel.PreferredSizeChanged += (_, _) =>
+        {
+            // A constrained DesiredSize can stay unchanged when the source preferred size grows.
+            // Relay that change through this wrapper's template caches to its actual owner row.
+            InvalidateMeasure();
+            Control? ancestor = innerStackPanel.GetVisualParent() as Control;
+            while (ancestor is not null && ReferenceEquals(ancestor.TemplatedParent, this))
+            {
+                ancestor.InvalidateMeasure();
+                ancestor = ancestor.GetVisualParent() as Control;
+            }
+
+            if (Parent is Control host)
+            {
+                host.InvalidateMeasure();
+                if (host.Parent is GitUI.Compat.WinFormsControls.ToolStripPanel row)
+                {
+                    row.InvalidateMeasure();
+                }
+            }
+        };
 
         // Select an option until we get a filter bound.
         tsbtnAdvancedFilter.Click += tsbtnAdvancedFilter_ButtonClick;
@@ -86,10 +108,14 @@ internal sealed partial class FilterToolBar : TranslatedControl
         tsmiShowBranchesCurrent.Click += tsmiShowBranchesCurrent_Click;
         tsmiShowBranchesFiltered.Click += tsmiShowBranchesFiltered_Click;
         tsmiShowOnlyFirstParent.Click += tsmiShowOnlyFirstParent_Click;
-        tscboBranchFilter.PointerPressed += tscboBranchFilter_Click;
+
+        // ComboBox toggles its popup on release. Run the source Click afterward so
+        // an opening press cannot be undone by the framework's release handler.
+        tscboBranchFilter.AddHandler(PointerReleasedEvent, tscboBranchFilter_Click, handledEventsToo: true);
         tscboBranchFilter.DropDownOpened += tscboBranchFilter_DropDown;
         tscboBranchFilter.KeyUp += tscboBranchFilter_KeyUp;
         tscboBranchFilter.PropertyChanged += tscboBranchFilter_TextChanged;
+        tscboBranchFilter.TextUpdate += tscboBranchFilter_TextUpdate;
         tstxtRevisionFilter.KeyUp += tstxtRevisionFilter_KeyUp;
         tsmiBranchLocal.Click += (_, _) => UpdateBranchFilterItems();
         tsmiBranchRemote.Click += (_, _) => UpdateBranchFilterItems();
@@ -110,7 +136,23 @@ internal sealed partial class FilterToolBar : TranslatedControl
 
         SetBranchMode(tsmiShowBranchesAll, Properties.Images.BranchLocal);
         InitializeComplete();
-        _advancedFilterToolTip = ToolTip.GetTip(tsbtnAdvancedFilter)?.ToString() ?? string.Empty;
+
+        foreach (TemplatedControl button in new TemplatedControl[]
+        {
+            tsbtnAdvancedFilter, tssbtnShowBranches, tsddbtnBranchFilter, tsddbtnRevisionFilter,
+        })
+        {
+            MenuFlyout? menu = button switch
+            {
+                SplitButton split => split.Flyout as MenuFlyout,
+                DropDownButton dropDown => dropDown.Flyout as MenuFlyout,
+                _ => null,
+            };
+            if (menu is not null)
+            {
+                WinFormsToolStripMenuSizer.ConfigureToolbarDropDown(menu, button);
+            }
+        }
     }
 
     /// <summary>
@@ -408,9 +450,12 @@ internal sealed partial class FilterToolBar : TranslatedControl
         tsddbtnRevisionFilter.Foreground = foreground;
         tsddbtnRevisionFilter.Background = background;
         tscboBranchFilter.Foreground = foreground;
-        tscboBranchFilter.Background = background;
+
+        // Native ComboBox hosts use SystemColors.Window, not the transparent strip.
+        // Resolve the same known color through the live portable theme boundary.
+        tscboBranchFilter[!BackgroundProperty] = new DynamicResourceExtension("GitExtensionsWindowBackgroundBrush");
         tstxtRevisionFilter.Foreground = foreground;
-        tstxtRevisionFilter.Background = background;
+        tstxtRevisionFilter[!BackgroundProperty] = new DynamicResourceExtension("GitExtensionsWindowBackgroundBrush");
     }
 
     private void SelectShowBranchesFilterOption(int selectedIndex)
@@ -527,6 +572,7 @@ internal sealed partial class FilterToolBar : TranslatedControl
             tscboBranchFilter.ItemsSource = matches.Length == 0
                 ? _noResultsFound
                 : matches;
+            tscboBranchFilter.ResizeDropDownWidth();
             tscboBranchFilter.Text = currentText;
             tscboBranchFilter.IsDropDownOpen = true;
         }
@@ -559,7 +605,10 @@ internal sealed partial class FilterToolBar : TranslatedControl
     }
 
     private void RefreshRevisionFilterItems()
-        => tstxtRevisionFilter.ItemsSource = _revisionFilters.ToArray();
+    {
+        tstxtRevisionFilter.ItemsSource = _revisionFilters.ToArray();
+        tstxtRevisionFilter.ResizeDropDownWidth();
+    }
 
     private void SetBranchMode(MenuItem source, Avalonia.Media.IImage icon)
     {
@@ -605,9 +654,12 @@ internal sealed partial class FilterToolBar : TranslatedControl
 
             // Add to dropdown and settings, unless already included
             PromoteRevisionFilter(tstxtRevisionFilter.Text?.Trim() ?? string.Empty);
+
+            // Native ToolStripItem only shows nonempty ToolTipText. An empty
+            // Avalonia string would still create a popup, so clear its tip.
             ToolTip.SetTip(
                 tsbtnAdvancedFilter,
-                string.IsNullOrEmpty(e.FilterSummary) ? _advancedFilterToolTip : e.FilterSummary);
+                string.IsNullOrEmpty(e.FilterSummary) ? null : e.FilterSummary);
             tsbtnAdvancedFilter.Icon = e.HasFilter
                 ? Properties.Images.FunnelExclamation
                 : Properties.Images.FunnelPencil;
@@ -650,6 +702,16 @@ internal sealed partial class FilterToolBar : TranslatedControl
 
     private void tscboBranchFilter_Click(object sender, EventArgs e)
     {
+        if (e is PointerReleasedEventArgs pointer
+            && (pointer.InitialPressMouseButton != MouseButton.Left
+                || pointer.Source is not Avalonia.Visual source
+                || (!ReferenceEquals(source, tscboBranchFilter)
+                    && !source.GetVisualAncestors().Contains(tscboBranchFilter))))
+        {
+            // Selecting a popup row must retain ComboBox's normal selection/close route.
+            return;
+        }
+
         if (!tscboBranchFilter.IsDropDownOpen)
         {
             tscboBranchFilter.IsDropDownOpen = true;
@@ -675,11 +737,11 @@ internal sealed partial class FilterToolBar : TranslatedControl
         }
 
         _filterBeingChanged = true;
-        tscboBranchFilter_TextUpdate(sender, e);
     }
 
     private void tscboBranchFilter_TextUpdate(object sender, EventArgs e)
     {
+        _filterBeingChanged = true;
         if (!_isApplyingFilter && !_updatingSuggestions && tscboBranchFilter.IsDropDownOpen)
         {
             UpdateBranchFilterItems();

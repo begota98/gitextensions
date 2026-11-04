@@ -296,7 +296,7 @@ partial class FileStatusList
 
     private void DiffTwoSelected_Click(object? sender, EventArgs e)
     {
-        // Avalonia closes the flyout automatically when the "main menu" is clicked before invoking the default difftool.
+        // "main menu" clicked, dropdown closes automatically, invoke default difftool
         List<FileStatusItem> diffFiles = [.. SelectedItems];
         if (diffFiles.Count != 2)
         {
@@ -317,7 +317,7 @@ partial class FileStatusList
 
     private void DiffWithRemembered_Click(object? sender, EventArgs e)
     {
-        // Avalonia closes the flyout automatically when the "main menu" is clicked before invoking the default difftool.
+        // "main menu" clicked, dropdown closes automatically, invoke default difftool
         FileStatusItem? selected = SelectedFileStatusItem;
 
         // For first item, the second revision is explicitly remembered
@@ -587,6 +587,11 @@ partial class FileStatusList
         }
     }
 
+    public void InitializeContextMenuAndToolbar()
+    {
+        tsmiShowUntrackedFiles.IsChecked = Module.GetEffectiveSetting("status.showuntrackedfiles") != "no";
+    }
+
     public void InitResetFileToToolStripMenuItem()
     {
         // Multiple parent/child can be selected, only the the first is shown.
@@ -696,7 +701,7 @@ partial class FileStatusList
 
     private void OpenFilesWithDiffTool(RevisionDiffKind diffKind, object? sender)
     {
-        // Avalonia closes the flyout automatically when the "main menu" is clicked before invoking the default mergetool.
+        // "main menu" clicked, dropdown closes automatically, invoke default mergetool
         OpenFilesWithDiffTool(diffKind, GetCustomTool(sender));
     }
 
@@ -1230,7 +1235,7 @@ partial class FileStatusList
         tsmiFilterFileInGrid.IsVisible = _filterFileInGrid is not null;
         tsmiFilterFileInGrid.IsEnabled = _filterFileInGrid is not null && _revisionDiffController.ShouldShowMenuFileHistory(selectionInfo);
         tsmiFileHistory.IsEnabled = _revisionDiffController.ShouldShowMenuFileHistory(selectionInfo);
-        tsmiBlame.IsEnabled = AppSettings.UseDiffViewerForBlame.Value || _blame is null
+        tsmiBlame.IsEnabled = AppSettings.UseDiffViewerForBlame || _blame is null
             ? _revisionDiffController.ShouldShowMenuBlame(selectionInfo)
             : _revisionDiffController.ShouldShowMenuShowInFileTree(selectionInfo);
         if (!tsmiBlame.IsEnabled)

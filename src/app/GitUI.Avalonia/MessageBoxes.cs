@@ -184,7 +184,7 @@ public class MessageBoxes : Translate
         bool result = TaskDialog.ShowDialog(owner, page) == TaskDialogButton.Yes;
         if (page.Verification.Checked)
         {
-            AppSettings.DontConfirmUpdateSubmodulesOnCheckout = result;
+            AppSettings.DontConfirmUpdateSubmodulesOnCheckout.Value = result;
             AppSettings.UpdateSubmodulesOnCheckout = result;
         }
 
@@ -192,7 +192,7 @@ public class MessageBoxes : Translate
     }
 
     public static bool ConfirmBranchCheckout(WinFormsShims.IWin32Window? owner, string branchName)
-        => !AppSettings.ConfirmBranchCheckout.Value
+        => !AppSettings.ConfirmBranchCheckout
            || Confirm(owner, string.Format(Instance._confirmBranchCheckout.Text, branchName), Instance._confirmBranchCheckoutCaption.Text);
 
     public static bool ConfirmRetryOpenVisualStudio(WinFormsShims.IWin32Window? owner = null)
@@ -220,6 +220,10 @@ public class MessageBoxes : Translate
         WinFormsShims.MessageBoxDefaultButton defaultButton = WinFormsShims.MessageBoxDefaultButton.Button1)
         => GitExtensions.Extensibility.MessageBoxes.Show(owner, text, caption, buttons, icon, defaultButton);
 
+    /// <summary>
+    ///  Shows a message box without specifying an icon.
+    /// </summary>
+    /// <returns>The <see cref="DialogResult"/> selected by the user.</returns>
     public static WinFormsShims.DialogResult Show(
         WinFormsShims.IWin32Window? owner,
         string text,

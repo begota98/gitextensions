@@ -120,16 +120,16 @@ public sealed partial class FormCommit : GitModuleForm
     private readonly CancellationTokenSequence _commitSequence = new();
     private readonly SplitterManager _splitterManager = new(new AppSettingsPath("CommitDialog"));
     private readonly Subject<string> _selectionFilterSubject = new();
+    private readonly IDisposable? _selectionFilterSubscription;
     private readonly IFullPathResolver _fullPathResolver = null!;
     private readonly List<string> _formattedLines = [];
 
     private const string _feat = "feat";
 
     private static readonly string[] _headerCommitTypes = ["build", "chore", "ci", "docs", _feat, "fix", "perf", "refactor", "style", "test"];
-    private static readonly string[] _footerKeywords = ["BREAKING CHANGE", "Co-authored-by", "Reviewed-by"];
 
     private readonly ObservableCollection<string> _selectionFilterHistory = [];
-    private readonly IDisposable? _selectionFilterSubscription;
+    private static readonly string[] _footerKeywords = ["BREAKING CHANGE", "Co-authored-by", "Reviewed-by"];
     private Task _unstagedTask = Task.CompletedTask;
     private Task _closePersistenceTask = Task.CompletedTask;
     private bool _insertScopeParentheses;
@@ -165,6 +165,11 @@ public sealed partial class FormCommit : GitModuleForm
     /// </summary>
     [GeneratedRegex(@"\{\{(?<pattern>.*?)\}\}(?:\[(?<index>\d+)\])?", RegexOptions.ExplicitCapture)]
     private static partial Regex ReplaceMessageRegex();
+
+    /// <summary>
+    ///  Occurs after a commit has been created by this dialog.
+    /// </summary>
+    public event EventHandler? CommitCreated;
 
     private CommitKind CommitKind
     {
@@ -269,6 +274,7 @@ public sealed partial class FormCommit : GitModuleForm
         toolAuthor.LostFocus += toolAuthor_Leave;
         toolAuthorLabelItem.Click += toolAuthorLabelItem_Click;
         commitAuthorStatus.Click += commitCommitter_Click;
+        /* If not changed, by default show "no sign commit" */
         gpgSignCommitToolStripComboBox.SelectionChanged += gpgSignCommitChanged;
         closeDialogAfterEachCommitToolStripMenuItem.Click += closeDialogAfterEachCommitToolStripMenuItem_Click;
         closeDialogAfterAllFilesCommittedToolStripMenuItem.Click += closeDialogAfterAllFilesCommittedToolStripMenuItem_Click;
@@ -302,6 +308,8 @@ public sealed partial class FormCommit : GitModuleForm
         selectionFilter.ItemsSource = _selectionFilterHistory;
         selectionFilter.PropertyChanged += OnSelectionFilterTextChanged;
         selectionFilter.SelectionChanged += OnSelectionFilterIndexChanged;
+
+        // TODO this code is very similar to code in FileStatusList
         _selectionFilterSubscription = _selectionFilterSubject
             .Throttle(TimeSpan.FromMilliseconds(250))
             .ObserveOn(SynchronizationContext.Current!)
@@ -337,6 +345,16 @@ public sealed partial class FormCommit : GitModuleForm
     /// </summary>
     /// The Amend checkbox is disabled after soft reset.
     private bool PushForced => (Amend.IsChecked == true || !Amend.IsEnabled) && AppSettings.CommitAndPushForcedWhenAmend;
+
+    protected override void OnApplicationActivated()
+    {
+        if (!_bypassActivatedEventHandler && AppSettings.RefreshArtificialCommitOnApplicationActivated)
+        {
+            RescanChanges();
+        }
+
+        base.OnApplicationActivated();
+    }
 
     protected override void OnLoad(EventArgs e)
     {
@@ -374,16 +392,6 @@ public sealed partial class FormCommit : GitModuleForm
         UpdateAuthorInfo();
         TrackLifecycleTask(UpdateBranchNameDisplayAsync());
         base.OnShown(e);
-    }
-
-    protected override void OnApplicationActivated()
-    {
-        if (!_bypassActivatedEventHandler && AppSettings.RefreshArtificialCommitOnApplicationActivated)
-        {
-            RescanChanges();
-        }
-
-        base.OnApplicationActivated();
     }
 
     protected override void OnKeyUp(KeyEventArgs e)
@@ -457,7 +465,7 @@ public sealed partial class FormCommit : GitModuleForm
         if (!_messageEditedByUser)
         {
             _assigningInitialMessage = true;
-            Message.Text = message;
+            Message.Text = message; // initial assignment
             _assigningInitialMessage = false;
         }
 
@@ -507,6 +515,196 @@ public sealed partial class FormCommit : GitModuleForm
         toolbarCommitOverflow.IsVisible = !showInline;
     }
 
+    public override bool ProcessHotkey(WinFormsShims.Keys keyData)
+    {
+        // generic handling of this form's hotkeys (upstream)
+        if (base.ProcessHotkey(keyData))
+        {
+            return true;
+        }
+
+        // downstream (without keys for quick search and without keys for text selection and copy e.g. in commit message)
+        if (GitExtensionsControl.IsTextEditKey(keyData, multiLine: true))
+        {
+            return false;
+        }
+
+        // route to visible controls which have their own hotkeys
+        return _currentFilesList.ProcessHotkey(keyData)
+            || SelectedDiff.ProcessHotkey(keyData);
+    }
+
+    private void FileViewer_TopScrollReached(object? sender, EventArgs e)
+    {
+        FileStatusList fileStatus = _currentItemStaged ? Staged : Unstaged;
+        fileStatus.SelectPreviousVisibleItem();
+        SelectedDiff.ScrollToBottom();
+    }
+
+    private void FileViewer_BottomScrollReached(object? sender, EventArgs e)
+    {
+        FileStatusList fileStatus = _currentItemStaged ? Staged : Unstaged;
+        fileStatus.SelectNextVisibleItem();
+        SelectedDiff.ScrollToTop();
+    }
+
+    private void MoveSelection(bool backwards)
+    {
+        if (Message.IsKeyboardFocusWithin)
+        {
+            _currentFilesList = Staged;
+        }
+
+        _currentFilesList.SelectNextItem(backwards, loop: true);
+    }
+
+    public static readonly string HotkeySettingsName = "Commit";
+
+    internal enum Command
+    {
+        /* obsolete: AddToGitIgnore = 0, */
+        /* obsolete: DeleteSelectedFiles = 1, */
+        /* obsolete: ResetSelectedFiles = 6, */
+        /* obsolete: StageSelectedFile = 7, */
+        /* obsolete: UnStageSelectedFile = 8, */
+        /* obsolete: ShowHistory = 9, */
+        /* obsolete: OpenFile = 13, */
+        /* obsolete: OpenFileWith = 14, */
+        /* obsolete: EditFile = 15, */
+        FocusUnstagedFiles = 2,
+        FocusSelectedDiff = 3,
+        FocusStagedFiles = 4,
+        FocusCommitMessage = 5,
+        ToggleSelectionFilter = 10,
+        StageAll = 11,
+        OpenWithDifftool = 12,
+        AddSelectionToCommitMessage = 16,
+        CreateBranch = 17,
+        Refresh = 18,
+        SelectNext = 19, // Ctrl+N
+        SelectNext_AlternativeHotkey1 = 20, // Alt+Down
+        SelectNext_AlternativeHotkey2 = 21, // Alt+Right
+        SelectPrevious = 22, // Ctrl+P
+        SelectPrevious_AlternativeHotkey1 = 23, // Alt+Up
+        SelectPrevious_AlternativeHotkey2 = 24, // Alt+Left
+        ConventionalCommit_PrefixMessage = 25, // Ctrl+T
+        ConventionalCommit_PrefixMessageWithScope = 26, // Ctrl+Shift+T
+    }
+
+    private bool AddSelectionToCommitMessage()
+    {
+        if (!SelectedDiff.IsKeyboardFocusWithin)
+        {
+            return false;
+        }
+
+        string selectedText = SelectedDiff.GetSelectedText();
+        if (string.IsNullOrEmpty(selectedText))
+        {
+            return false;
+        }
+
+        if (Message.SelectionLength == 0)
+        {
+            selectedText += '\n';
+        }
+
+        int selectionStart = Message.SelectionStart;
+        Message.SelectedText = selectedText;
+        Message.SelectionStart = selectionStart + selectedText.Length;
+        return true;
+    }
+
+    private bool FocusStagedFiles()
+    {
+        Staged.Focus();
+        return true;
+    }
+
+    private bool FocusUnstagedFiles()
+    {
+        Unstaged.Focus();
+        return true;
+    }
+
+    private bool FocusSelectedDiff()
+    {
+        SelectedDiff.Focus();
+        return true;
+    }
+
+    private bool FocusCommitMessage()
+    {
+        Message.Focus();
+        return true;
+    }
+
+    private bool StageAllFiles()
+    {
+        if (Unstaged.IsEmpty)
+        {
+            return false;
+        }
+
+        StageAllAccordingToFilter();
+        return true;
+    }
+
+    private bool ToggleSelectionFilter()
+    {
+        bool visible = !toolbarSelectionFilter.IsVisible;
+        SetVisibilityOfSelectionFilter(visible);
+        if (visible)
+        {
+            selectionFilter.Focus();
+        }
+        else if (selectionFilter.IsKeyboardFocusWithin)
+        {
+            Unstaged.Focus();
+        }
+
+        return true;
+    }
+
+    private void ShowOnlyMyMessagesToolStripMenuItem_CheckedChanged(object? sender, EventArgs e)
+    {
+        AppSettings.CommitDialogShowOnlyMyMessages = ShowOnlyMyMessagesToolStripMenuItem.IsChecked == true;
+    }
+
+    protected override bool ExecuteCommand(int cmd)
+    {
+        switch ((Command)cmd)
+        {
+            case Command.ConventionalCommit_PrefixMessage: OpenConventionalCommitMenu(insertScope: false); return true;
+            case Command.ConventionalCommit_PrefixMessageWithScope: OpenConventionalCommitMenu(insertScope: true); return true;
+            case Command.FocusStagedFiles: return FocusStagedFiles();
+            case Command.FocusUnstagedFiles: return FocusUnstagedFiles();
+            case Command.FocusSelectedDiff: return FocusSelectedDiff();
+            case Command.FocusCommitMessage: return FocusCommitMessage();
+            case Command.ToggleSelectionFilter: return ToggleSelectionFilter();
+            case Command.StageAll: return StageAllFiles();
+            case Command.OpenWithDifftool: OpenWithDiffTool(); return true;
+            case Command.AddSelectionToCommitMessage: return AddSelectionToCommitMessage();
+            case Command.CreateBranch: createBranchToolStripButton_Click(this, EventArgs.Empty); return true;
+            case Command.Refresh: ReloadChanges(); return true;
+            case Command.SelectNext:
+            case Command.SelectNext_AlternativeHotkey1:
+            case Command.SelectNext_AlternativeHotkey2: MoveSelection(backwards: false); return true;
+            case Command.SelectPrevious:
+            case Command.SelectPrevious_AlternativeHotkey1:
+            case Command.SelectPrevious_AlternativeHotkey2: MoveSelection(backwards: true); return true;
+            default: return base.ExecuteCommand(cmd);
+        }
+    }
+
+    public override IScriptOptionsProvider GetScriptOptionsProvider()
+    {
+        return new ScriptOptionsProvider(
+            _currentFilesList,
+            () => SelectedDiff.CurrentFileLine,
+            () => SelectedDiff.CurrentFileColumn);
+    }
+
     private void ComputeUnstagedFiles(Action<IReadOnlyList<GitItemStatus>> onComputed, bool doAsync)
     {
         // Avalonia controls enforce thread affinity, so snapshot the original menu state before AsyncLoader switches threads.
@@ -517,6 +715,8 @@ public sealed partial class FormCommit : GitModuleForm
 
         IReadOnlyList<GitItemStatus> GetAllChangedFilesWithSubmodulesStatus(CancellationToken cancellationToken)
         {
+            // Dirty submodules need to be kept in unstaged, update the status
+            // if this is a submodule, update the status, may be dirty
             return Module.GetAllChangedFilesWithSubmodulesStatus(
                 excludeIgnoredFiles,
                 excludeAssumeUnchangedFiles,
@@ -562,6 +762,34 @@ public sealed partial class FormCommit : GitModuleForm
     {
         _indexOperationInProgress = !enable;
         UpdateStageButtons();
+    }
+
+    private async Task UpdateBranchNameDisplayAsync()
+    {
+        string currentBranchName = Module.GetSelectedBranch();
+        IGitRef? currentBranch = Module.GetRefs(RefsFilter.Heads).FirstOrDefault(branch => branch.LocalName == currentBranchName);
+        string pushTo;
+        if (currentBranch is null)
+        {
+            pushTo = string.Empty;
+        }
+        else if (string.IsNullOrEmpty(currentBranch.TrackingRemote))
+        {
+            string? defaultRemote = Module.GetRemoteNames().FirstOrDefault(remote => remote == "origin")
+                ?? Module.GetRemoteNames().OrderBy(remote => remote).FirstOrDefault();
+            pushTo = defaultRemote is null
+                ? _statusBarBranchWithoutRemote.Text
+                : $"{defaultRemote}/{currentBranchName} {_untrackedRemote.Text}";
+        }
+        else
+        {
+            pushTo = $"{currentBranch.TrackingRemote}/{currentBranch.MergeWith}";
+        }
+
+        await this.SwitchToMainThreadAsync();
+        branchNameLabel.Text = string.IsNullOrEmpty(pushTo) ? currentBranchName : $"{currentBranchName} {char.ConvertFromUtf32(0x2192)}";
+        remoteNameLabel.Content = pushTo;
+        Title = string.Format(_formTitle.Text, currentBranchName, PathUtil.GetDisplayPath(Module.WorkingDir));
     }
 
     private void Initialize(bool loadUnstaged = true)
@@ -715,230 +943,6 @@ public sealed partial class FormCommit : GitModuleForm
         }
     }
 
-    private (GitRevision? headRev, GitRevision indexRev, GitRevision workTreeRev) GetHeadRevisions()
-    {
-        ObjectId headId = Module.GetCurrentCheckout();
-        GitRevision? headRevision = headId.IsZero ? null : new GitRevision(headId);
-        GitRevision indexRevision = headId.IsZero
-            ? new GitRevision(ObjectId.IndexId)
-            : new GitRevision(ObjectId.IndexId) { ParentIds = [headId] };
-        GitRevision workTreeRevision = new(ObjectId.WorkTreeId) { ParentIds = [ObjectId.IndexId] };
-        return (headRevision, indexRevision, workTreeRevision);
-    }
-
-    public override bool ProcessHotkey(WinFormsShims.Keys keyData)
-    {
-        // generic handling of this form's hotkeys (upstream)
-        if (base.ProcessHotkey(keyData))
-        {
-            return true;
-        }
-
-        // downstream (without keys for quick search and without keys for text selection and copy e.g. in commit message)
-        if (GitExtensionsControl.IsTextEditKey(keyData, multiLine: true))
-        {
-            return false;
-        }
-
-        // route to visible controls which have their own hotkeys
-        return _currentFilesList.ProcessHotkey(keyData)
-            || SelectedDiff.ProcessHotkey(keyData);
-    }
-
-    private void FileViewer_TopScrollReached(object? sender, EventArgs e)
-    {
-        FileStatusList fileStatus = _currentItemStaged ? Staged : Unstaged;
-        fileStatus.SelectPreviousVisibleItem();
-        SelectedDiff.ScrollToBottom();
-    }
-
-    private void FileViewer_BottomScrollReached(object? sender, EventArgs e)
-    {
-        FileStatusList fileStatus = _currentItemStaged ? Staged : Unstaged;
-        fileStatus.SelectNextVisibleItem();
-        SelectedDiff.ScrollToTop();
-    }
-
-    private void MoveSelection(bool backwards)
-    {
-        if (Message.IsKeyboardFocusWithin)
-        {
-            _currentFilesList = Staged;
-        }
-
-        _currentFilesList.SelectNextItem(backwards, loop: true);
-    }
-
-    public static readonly string HotkeySettingsName = "Commit";
-
-    internal enum Command
-    {
-        /* obsolete: AddToGitIgnore = 0, */
-        /* obsolete: DeleteSelectedFiles = 1, */
-        /* obsolete: ResetSelectedFiles = 6, */
-        /* obsolete: StageSelectedFile = 7, */
-        /* obsolete: UnStageSelectedFile = 8, */
-        /* obsolete: ShowHistory = 9, */
-        /* obsolete: OpenFile = 13, */
-        /* obsolete: OpenFileWith = 14, */
-        /* obsolete: EditFile = 15, */
-        FocusUnstagedFiles = 2,
-        FocusSelectedDiff = 3,
-        FocusStagedFiles = 4,
-        FocusCommitMessage = 5,
-        ToggleSelectionFilter = 10,
-        StageAll = 11,
-        OpenWithDifftool = 12,
-        AddSelectionToCommitMessage = 16,
-        CreateBranch = 17,
-        Refresh = 18,
-        SelectNext = 19, // Ctrl+N
-        SelectNext_AlternativeHotkey1 = 20, // Alt+Down
-        SelectNext_AlternativeHotkey2 = 21, // Alt+Right
-        SelectPrevious = 22, // Ctrl+P
-        SelectPrevious_AlternativeHotkey1 = 23, // Alt+Up
-        SelectPrevious_AlternativeHotkey2 = 24, // Alt+Left
-        ConventionalCommit_PrefixMessage = 25, // Ctrl+T
-        ConventionalCommit_PrefixMessageWithScope = 26, // Ctrl+Shift+T
-    }
-
-    private bool AddSelectionToCommitMessage()
-    {
-        if (!SelectedDiff.IsKeyboardFocusWithin)
-        {
-            return false;
-        }
-
-        string selectedText = SelectedDiff.GetSelectedText();
-        if (string.IsNullOrEmpty(selectedText))
-        {
-            return false;
-        }
-
-        if (Message.SelectionLength == 0)
-        {
-            selectedText += '\n';
-        }
-
-        int selectionStart = Message.SelectionStart;
-        Message.SelectedText = selectedText;
-        Message.SelectionStart = selectionStart + selectedText.Length;
-        return true;
-    }
-
-    private bool ToggleSelectionFilter()
-    {
-        bool visible = !toolbarSelectionFilter.IsVisible;
-        SetVisibilityOfSelectionFilter(visible);
-        if (visible)
-        {
-            selectionFilter.Focus();
-        }
-        else if (selectionFilter.IsKeyboardFocusWithin)
-        {
-            Unstaged.Focus();
-        }
-
-        return true;
-    }
-
-    private bool FocusStagedFiles()
-    {
-        Staged.Focus();
-        return true;
-    }
-
-    private bool FocusUnstagedFiles()
-    {
-        Unstaged.Focus();
-        return true;
-    }
-
-    private bool FocusSelectedDiff()
-    {
-        SelectedDiff.Focus();
-        return true;
-    }
-
-    private bool FocusCommitMessage()
-    {
-        Message.Focus();
-        return true;
-    }
-
-    private bool StageAllFiles()
-    {
-        if (Unstaged.IsEmpty)
-        {
-            return false;
-        }
-
-        StageAllAccordingToFilter();
-        return true;
-    }
-
-    protected override bool ExecuteCommand(int cmd)
-    {
-        switch ((Command)cmd)
-        {
-            case Command.ConventionalCommit_PrefixMessage: OpenConventionalCommitMenu(insertScope: false); return true;
-            case Command.ConventionalCommit_PrefixMessageWithScope: OpenConventionalCommitMenu(insertScope: true); return true;
-            case Command.FocusStagedFiles: return FocusStagedFiles();
-            case Command.FocusUnstagedFiles: return FocusUnstagedFiles();
-            case Command.FocusSelectedDiff: return FocusSelectedDiff();
-            case Command.FocusCommitMessage: return FocusCommitMessage();
-            case Command.ToggleSelectionFilter: return ToggleSelectionFilter();
-            case Command.StageAll: return StageAllFiles();
-            case Command.OpenWithDifftool: OpenWithDiffTool(); return true;
-            case Command.AddSelectionToCommitMessage: return AddSelectionToCommitMessage();
-            case Command.CreateBranch: createBranchToolStripButton_Click(this, EventArgs.Empty); return true;
-            case Command.Refresh: ReloadChanges(); return true;
-            case Command.SelectNext:
-            case Command.SelectNext_AlternativeHotkey1:
-            case Command.SelectNext_AlternativeHotkey2: MoveSelection(backwards: false); return true;
-            case Command.SelectPrevious:
-            case Command.SelectPrevious_AlternativeHotkey1:
-            case Command.SelectPrevious_AlternativeHotkey2: MoveSelection(backwards: true); return true;
-            default: return base.ExecuteCommand(cmd);
-        }
-    }
-
-    public override IScriptOptionsProvider GetScriptOptionsProvider()
-    {
-        return new ScriptOptionsProvider(
-            _currentFilesList,
-            () => SelectedDiff.CurrentFileLine,
-            () => SelectedDiff.CurrentFileColumn);
-    }
-
-    private async Task UpdateBranchNameDisplayAsync()
-    {
-        string currentBranchName = Module.GetSelectedBranch();
-        IGitRef? currentBranch = Module.GetRefs(RefsFilter.Heads).FirstOrDefault(branch => branch.LocalName == currentBranchName);
-        string pushTo;
-        if (currentBranch is null)
-        {
-            pushTo = string.Empty;
-        }
-        else if (string.IsNullOrEmpty(currentBranch.TrackingRemote))
-        {
-            string? defaultRemote = Module.GetRemoteNames().FirstOrDefault(remote => remote == "origin")
-                ?? Module.GetRemoteNames().OrderBy(remote => remote).FirstOrDefault();
-            pushTo = defaultRemote is null
-                ? _statusBarBranchWithoutRemote.Text
-                : $"{defaultRemote}/{currentBranchName} {_untrackedRemote.Text}";
-        }
-        else
-        {
-            pushTo = $"{currentBranch.TrackingRemote}/{currentBranch.MergeWith}";
-        }
-
-        await this.SwitchToMainThreadAsync();
-        branchNameLabel.Text = string.IsNullOrEmpty(pushTo) ? currentBranchName : $"{currentBranchName} {char.ConvertFromUtf32(0x2192)}";
-        remoteNameLabel.Content = pushTo;
-        Title = string.Format(_formTitle.Text, currentBranchName, PathUtil.GetDisplayPath(Module.WorkingDir));
-    }
-
     private static bool CanStage(GitItemStatus item)
         => !item.IsAssumeUnchanged && !item.IsSkipWorktree;
 
@@ -1010,14 +1014,18 @@ public sealed partial class FormCommit : GitModuleForm
         ExecuteCommitCommand();
     }
 
-    private void ExecuteCommitCommand()
-    {
-        CheckForStagedAndCommit(push: false);
-    }
-
     private void CheckForStagedAndCommit(bool push)
     {
         this.InvokeAndForget(() => CheckForStagedAndCommitAsync(push));
+    }
+
+    private void RescanChanges()
+    {
+        if (_shouldRescanChanges)
+        {
+            Initialize();
+            Message.RefreshAutoCompleteWords();
+        }
     }
 
     private void RunIndexOperation(IReadOnlyList<GitItemStatus> items, bool stage)
@@ -1149,16 +1157,6 @@ public sealed partial class FormCommit : GitModuleForm
         CommitAndPush.Content = AvaloniaTranslationUtils.ToAvaloniaMnemonics(commitAndPushText);
     }
 
-    private void UpdateButtonStates()
-    {
-        btnResetAllChanges.IsEnabled = Unstaged.AllItems.Any() || Staged.AllItems.Any();
-        bool pushOnly = !btnResetAllChanges.IsEnabled && Amend.IsChecked != true;
-        string text = PushForced
-            ? _commitAndForcePush.Text
-            : pushOnly ? TranslatedStrings.ButtonPush : _commitAndPush.Text;
-        CommitAndPush.Content = AvaloniaTranslationUtils.ToAvaloniaMnemonics(text);
-    }
-
     private void Unstaged_Enter(object? sender, EnterEventArgs e)
     {
         _currentFilesList = Unstaged;
@@ -1209,7 +1207,10 @@ public sealed partial class FormCommit : GitModuleForm
             return;
         }
 
+        // Staged.SelectedGitItems is needed only once, so we can safely retain the list here
         IReadOnlyList<GitItemStatus> items = Staged.SelectedGitItems;
+
+        // We can optimize a little bit here by querying only once for staged count
         if (canUseUnstageAll && items.Count > 10 && items.Count == Staged.GitItemStatuses.Count)
         {
             UnstageAllFiles();
@@ -1217,6 +1218,17 @@ public sealed partial class FormCommit : GitModuleForm
         }
 
         UnstageItems(items);
+    }
+
+    private (GitRevision? headRev, GitRevision indexRev, GitRevision workTreeRev) GetHeadRevisions()
+    {
+        ObjectId headId = Module.GetCurrentCheckout();
+        GitRevision? headRevision = headId.IsZero ? null : new GitRevision(headId);
+        GitRevision indexRevision = headId.IsZero
+            ? new GitRevision(ObjectId.IndexId)
+            : new GitRevision(ObjectId.IndexId) { ParentIds = [headId] };
+        GitRevision workTreeRevision = new(ObjectId.WorkTreeId) { ParentIds = [ObjectId.IndexId] };
+        return (headRevision, indexRevision, workTreeRevision);
     }
 
     private void UnstageItems(IReadOnlyList<GitItemStatus> items)
@@ -1274,14 +1286,17 @@ public sealed partial class FormCommit : GitModuleForm
             ToolTip.SetTip(selectionFilter, string.Format(_selectionFilterErrorToolTip.Text, exception.Message));
         }
 
+        // Item is not already in the list
         if (matchCount > 0 && filterText.Length > 0 && !_selectionFilterHistory.Contains(filterText))
         {
             const int SelectionFilterMaxLength = 10;
             while (_selectionFilterHistory.Count >= SelectionFilterMaxLength)
             {
+                // Remove the last item
                 _selectionFilterHistory.RemoveAt(SelectionFilterMaxLength - 1);
             }
 
+            // Insert the next term at the start of the filter control
             _selectionFilterHistory.Insert(0, filterText);
         }
     }
@@ -1381,6 +1396,55 @@ public sealed partial class FormCommit : GitModuleForm
         {
             ReloadChanges();
         }
+    }
+
+    private void CommitMessageToolStripMenuItemDropDownOpening(object? sender, EventArgs e)
+    {
+        string authorPattern = string.Empty;
+        if (ShowOnlyMyMessagesToolStripMenuItem.IsChecked == true)
+        {
+            string userName = Module.GetEffectiveSetting(SettingKeyString.UserName);
+            string userEmail = Module.GetEffectiveSetting(SettingKeyString.UserEmail);
+            authorPattern = $"^{Regex.Escape(userName)} <{Regex.Escape(userEmail)}>$";
+        }
+
+        int maxCount = AppSettings.CommitDialogNumberOfPreviousMessages;
+        List<string> messages = [.. Module.GetPreviousCommitMessages(maxCount, "HEAD", authorPattern)
+            .WhereNotNull()
+            .Select(message => message.TrimEnd('\n'))
+            .Where(message => !string.IsNullOrWhiteSpace(message))];
+        string lastMessage = AppSettings.LastCommitMessage;
+        if (!string.IsNullOrWhiteSpace(lastMessage) && !messages.Contains(lastMessage))
+        {
+            // If the list is already full
+            if (messages.Count == maxCount && maxCount > 0)
+            {
+                // Remove the last item
+                messages.RemoveAt(maxCount - 1);
+            }
+
+            // Insert the last commit message as the first entry
+            messages.Insert(0, lastMessage);
+        }
+
+        MenuFlyout flyout = (MenuFlyout)commitMessageToolStripMenuItem.Flyout!;
+        flyout.Items.Clear();
+        foreach (string commitMessage in messages)
+        {
+            string label = commitMessage.Split('\n')[0].ShortenTo(72);
+            MenuItem item = new() { Header = label, Tag = commitMessage };
+            item.Click += (_, _) => ReplaceMessage((string)item.Tag!);
+            flyout.Items.Add(item);
+        }
+
+        if (messages.Count > 0)
+        {
+            flyout.Items.Add(new Separator());
+        }
+
+        flyout.Items.Add(generateListOfChangesInSubmodulesChangesToolStripMenuItem);
+        flyout.Items.Add(new Separator());
+        flyout.Items.Add(ShowOnlyMyMessagesToolStripMenuItem);
     }
 
     private void generateListOfChangesInSubmodulesChangesToolStripMenuItem_Click(object? sender, EventArgs e)
@@ -1545,6 +1609,7 @@ public sealed partial class FormCommit : GitModuleForm
 
         async Task UpdateAuthorInfoAsync()
         {
+            // Do not cache results in order to update the info on FormActivate
             string userName = Module.GetEffectiveSetting(SettingKeyString.UserName, defaultValue: string.Empty);
             string userEmail = Module.GetEffectiveSetting(SettingKeyString.UserEmail, defaultValue: string.Empty);
             string committer = $"{_commitCommitterInfo.Text} {userName} <{userEmail}>";
@@ -1555,42 +1620,9 @@ public sealed partial class FormCommit : GitModuleForm
         }
     }
 
-    private void Message_ContextMenuPopulating(object? sender, ContextMenuStrip menu)
+    private void ExecuteCommitCommand()
     {
-        if (menu.ItemsSource is not IList<object> items)
-        {
-            return;
-        }
-
-        object? firstSeparator = items.OfType<Separator>().FirstOrDefault();
-        int insertAt = firstSeparator is null ? 0 : items.IndexOf(firstSeparator);
-        MenuItem wordWrap = new() { Header = AvaloniaTranslationUtils.ToAvaloniaMnemonics(_wordWrapCommitMessageBody.Text) };
-        wordWrap.Click += (_, _) => WordWrapCommitMessageBody();
-        items.Insert(insertAt, wordWrap);
-
-        return;
-
-        void WordWrapCommitMessageBody()
-        {
-            const int DefaultBodyLineLimit = 72;
-            int lineLimit = AppSettings.CommitValidationMaxCntCharsPerLine > 0
-                ? AppSettings.CommitValidationMaxCntCharsPerLine
-                : DefaultBodyLineLimit;
-
-            for (int line = 1; line < Message.LineCount(); line++)
-            {
-                WordWrapCommitMessageLineIfNecessary(line, lineLimit);
-            }
-        }
-    }
-
-    private void Message_KeyDown(object? sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter && e.KeyModifiers.HasFlag(KeyModifiers.Control))
-        {
-            e.Handled = true;
-            ExecuteCommitCommand();
-        }
+        CheckForStagedAndCommit(push: false);
     }
 
     private async Task CheckForStagedAndCommitAsync(bool push)
@@ -1604,6 +1636,8 @@ public sealed partial class FormCommit : GitModuleForm
         bool allowEmpty = createAmendCommit;
         bool pushForced = PushForced;
 
+        // This is an amend commit.  Confirm the user understands the implications.  We don't want to prompt for an empty
+        // commit, because amend may be used just to change the commit message or timestamp.
         if (createAmendCommit
             && !MessageBoxes.ConfirmSuppressible(this, _amendCommit.Text, _amendCommitCaption.Text, AppSettings.DontConfirmAmend, icon: TaskDialogIcon.Warning))
         {
@@ -1614,6 +1648,8 @@ public sealed partial class FormCommit : GitModuleForm
         {
             if (_isMergeCommit)
             {
+                // it is a merge commit, so user can commit just for merging two branches even the changeset is empty,
+                // but also user may forget to add files, so only ask for confirmation that user really wants to commit an empty changeset
                 if (MessageBoxes.Show(this, _noFilesStagedAndConfirmAnEmptyMergeCommit.Text, _noStagedChanges.Text, WinFormsShims.MessageBoxButtons.YesNo, WinFormsShims.MessageBoxIcon.Question) != WinFormsShims.DialogResult.Yes)
                 {
                     return;
@@ -1633,6 +1669,8 @@ public sealed partial class FormCommit : GitModuleForm
                     SizeToContent = true,
                 };
                 page.Buttons.Add(TaskDialogButton.Cancel);
+
+                // Option 1: there are no staged files, but there are unstaged files. Most probably user forgot to stage them.
                 if (Unstaged.GitItemFilteredStatuses.Any(CanStage))
                 {
                     string stageText = Unstaged.IsFilterActive
@@ -1643,6 +1681,7 @@ public sealed partial class FormCommit : GitModuleForm
                     page.Buttons.Add(stageButton);
                 }
 
+                // Option 2: the user just wants to make an empty commit
                 page.Buttons.Add(new TaskDialogCommandLinkButton(_noFilesStagedMakeEmptyCommitOption.Text));
                 if (TaskDialog.ShowDialog(this, page) == TaskDialogButton.Cancel)
                 {
@@ -1661,6 +1700,8 @@ public sealed partial class FormCommit : GitModuleForm
                     if (!success)
                     {
                         FormStatus.ShowErrorDialog(this, UICommands, Text ?? string.Empty, output);
+
+                        // if staging failed (i.e. line endings conflict), user already got error message, don't try to commit empty changeset.
                         ReloadChanges();
                         return;
                     }
@@ -1702,6 +1743,7 @@ public sealed partial class FormCommit : GitModuleForm
         {
             if (AppSettings.UseFormCommitMessage)
             {
+                // Save last commit message in settings. This way it can be used in multiple repositories.
                 AppSettings.LastCommitMessage = message;
                 await _commitMessageManager.WriteCommitMessageToFileAsync(
                     message,
@@ -1732,8 +1774,11 @@ public sealed partial class FormCommit : GitModuleForm
                 return;
             }
 
+            CommitCreated?.Invoke(this, EventArgs.Empty);
+
             ScriptsRunner.RunEventScripts(ScriptEvent.AfterCommit, this);
 
+            // Message.Text has been used and stored
             await _commitMessageManager.ResetCommitMessageAsync();
             _commitTemplate = null;
             CommitKind = CommitKind.Normal;
@@ -1930,6 +1975,44 @@ public sealed partial class FormCommit : GitModuleForm
         }
     }
 
+    private void Message_ContextMenuPopulating(object? sender, ContextMenuStrip menu)
+    {
+        if (menu.ItemsSource is not IList<object> items)
+        {
+            return;
+        }
+
+        object? firstSeparator = items.OfType<Separator>().FirstOrDefault();
+        int insertAt = firstSeparator is null ? 0 : items.IndexOf(firstSeparator);
+        MenuItem wordWrap = new() { Header = AvaloniaTranslationUtils.ToAvaloniaMnemonics(_wordWrapCommitMessageBody.Text) };
+        wordWrap.Click += (_, _) => WordWrapCommitMessageBody();
+        items.Insert(insertAt, wordWrap);
+
+        return;
+
+        void WordWrapCommitMessageBody()
+        {
+            const int DefaultBodyLineLimit = 72;
+            int lineLimit = AppSettings.CommitValidationMaxCntCharsPerLine > 0
+                ? AppSettings.CommitValidationMaxCntCharsPerLine
+                : DefaultBodyLineLimit;
+
+            for (int line = 1; line < Message.LineCount(); line++)
+            {
+                WordWrapCommitMessageLineIfNecessary(line, lineLimit);
+            }
+        }
+    }
+
+    private void Message_KeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            e.Handled = true;
+            ExecuteCommitCommand();
+        }
+    }
+
     private void OpenConventionalCommitMenu(bool insertScope)
     {
         _insertScopeParentheses = insertScope;
@@ -2053,50 +2136,132 @@ public sealed partial class FormCommit : GitModuleForm
 
     private void Message_SelectionChanged(object? sender, EventArgs e) => UpdateCursorPosition();
 
-    private void CommitMessageToolStripMenuItemDropDownOpening(object? sender, EventArgs e)
+    private void closeDialogAfterEachCommitToolStripMenuItem_Click(object? sender, EventArgs e)
     {
-        string authorPattern = string.Empty;
-        if (ShowOnlyMyMessagesToolStripMenuItem.IsChecked == true)
+        if (_skipUpdate)
         {
-            string userName = Module.GetEffectiveSetting(SettingKeyString.UserName);
-            string userEmail = Module.GetEffectiveSetting(SettingKeyString.UserEmail);
-            authorPattern = $"^{Regex.Escape(userName)} <{Regex.Escape(userEmail)}>$";
+            return;
         }
 
-        int maxCount = AppSettings.CommitDialogNumberOfPreviousMessages;
-        List<string> messages = [.. Module.GetPreviousCommitMessages(maxCount, "HEAD", authorPattern)
-            .WhereNotNull()
-            .Select(message => message.TrimEnd('\n'))
-            .Where(message => !string.IsNullOrWhiteSpace(message))];
-        string lastMessage = AppSettings.LastCommitMessage;
-        if (!string.IsNullOrWhiteSpace(lastMessage) && !messages.Contains(lastMessage))
+        AppSettings.CloseCommitDialogAfterCommit = closeDialogAfterEachCommitToolStripMenuItem.IsChecked == true;
+    }
+
+    /// <summary>
+    /// replace the Message.Text in an undo-able way.
+    /// </summary>
+    /// <param name="message">the new message.</param>
+    private void ReplaceMessage(string message)
+    {
+        if (Message.Text != message)
         {
-            if (messages.Count == maxCount && maxCount > 0)
+            Message.SelectAll();
+            Message.SelectedText = message;
+        }
+    }
+
+    /// <summary>
+    /// replace the Message.Text in an undo-able way.
+    /// </summary>
+    /// <param name="message">the new message.</param>
+    /// <param name="regexEnabled">regex replace is enabled</param>
+    private void ReplaceMessage(string message, bool regexEnabled)
+    {
+        if (regexEnabled)
+        {
+            try
             {
-                messages.RemoveAt(maxCount - 1);
+                foreach (Match match in ReplaceMessageRegex().Matches(message))
+                {
+                    int groupIndex = int.TryParse(match.Groups["index"].Value, out int parsedIndex) ? parsedIndex : 1;
+                    Match branchMatch = Regex.Match(Module.GetSelectedBranch(), match.Groups["pattern"].Value);
+                    string replacement = branchMatch.Success && branchMatch.Groups.Count > groupIndex
+                        ? branchMatch.Groups[groupIndex].Value
+                        : string.Empty;
+                    message = message.Replace(match.Value, replacement, StringComparison.Ordinal);
+                }
             }
-
-            messages.Insert(0, lastMessage);
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"ReplaceMessage with regex replace exception: {ex}");
+            }
         }
 
-        MenuFlyout flyout = (MenuFlyout)commitMessageToolStripMenuItem.Flyout!;
-        flyout.Items.Clear();
-        foreach (string commitMessage in messages)
+        ReplaceMessage(message);
+    }
+
+    private void closeDialogAfterAllFilesCommittedToolStripMenuItem_Click(object? sender, EventArgs e)
+    {
+        if (_skipUpdate)
         {
-            string label = commitMessage.Split('\n')[0].ShortenTo(72);
-            MenuItem item = new() { Header = label, Tag = commitMessage };
-            item.Click += (_, _) => ReplaceMessage((string)item.Tag!);
-            flyout.Items.Add(item);
+            return;
         }
 
-        if (messages.Count > 0)
+        AppSettings.CloseCommitDialogAfterLastCommit = closeDialogAfterAllFilesCommittedToolStripMenuItem.IsChecked == true;
+    }
+
+    private void refreshDialogOnFormFocusToolStripMenuItem_Click(object? sender, EventArgs e)
+    {
+        if (_skipUpdate)
         {
-            flyout.Items.Add(new Separator());
+            return;
         }
 
-        flyout.Items.Add(generateListOfChangesInSubmodulesChangesToolStripMenuItem);
-        flyout.Items.Add(new Separator());
-        flyout.Items.Add(ShowOnlyMyMessagesToolStripMenuItem);
+        AppSettings.RefreshArtificialCommitOnApplicationActivated = refreshDialogOnFormFocusToolStripMenuItem.IsChecked == true;
+    }
+
+    private void signOffToolStripMenuItem_Click(object? sender, EventArgs e)
+    {
+    }
+
+    private void toolAuthor_TextChanged(object? sender, EventArgs e)
+    {
+        bool hasAuthor = !string.IsNullOrEmpty(toolAuthor.Text);
+        toolAuthorLabelItem.IsEnabled = hasAuthor;
+        toolAuthorLabelItem.IsChecked = hasAuthor;
+        UpdateAuthorInfo();
+    }
+
+    private void toolAuthorLabelItem_Click(object? sender, EventArgs e)
+    {
+        toolAuthor.Text = string.Empty;
+        toolAuthorLabelItem.IsEnabled = false;
+        toolAuthorLabelItem.IsChecked = false;
+        UpdateAuthorInfo();
+    }
+
+    private void gpgSignCommitChanged(object? sender, EventArgs e)
+    {
+        toolStripGpgKeyTextBox.IsVisible = gpgSignCommitToolStripComboBox.SelectedIndex == 3;
+
+        // Change the icon for commit button
+        Commit.Icon = gpgSignCommitToolStripComboBox.SelectedIndex >= 2
+            ? Properties.Images.Key
+            : Properties.Images.RepoStateClean;
+    }
+
+    private void SetVisibilityOfSelectionFilter(bool visible)
+    {
+        toolbarSelectionFilter.IsVisible = visible;
+    }
+
+    private void OnSelectionFilterTextChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        if (e.Property != ComboBox.TextProperty)
+        {
+            return;
+        }
+
+        _selectionFilterSubject.OnNext(selectionFilter.Text ?? string.Empty);
+    }
+
+    private void OnSelectionFilterIndexChanged(object? sender, EventArgs e)
+    {
+        if (selectionFilter.SelectedItem is string selected)
+        {
+            selectionFilter.Text = selected;
+        }
+
+        Unstaged.SetSelectionFilter(selectionFilter.Text ?? string.Empty);
     }
 
     private void commitTemplatesToolStripMenuItem_DropDownOpening(object? sender, EventArgs e)
@@ -2111,8 +2276,13 @@ public sealed partial class FormCommit : GitModuleForm
         _alreadyLoadedTemplatesCount = registeredTemplatesCount;
         MenuFlyout flyout = (MenuFlyout)commitTemplatesToolStripMenuItem.Flyout!;
         flyout.Items.Clear();
+
+        // Add registered templates
         bool addedTemplate = false;
-        foreach (CommitTemplateItem template in _commitTemplateManager.RegisteredTemplates.Concat(CommitTemplateItem.LoadFromSettings() ?? []))
+        foreach (CommitTemplateItem template in _commitTemplateManager.RegisteredTemplates
+
+            // Add templates from settings
+            .Concat(CommitTemplateItem.LoadFromSettings() ?? []))
         {
             if (string.IsNullOrEmpty(template.Name))
             {
@@ -2214,6 +2384,7 @@ public sealed partial class FormCommit : GitModuleForm
         int titlePosition = keyword.Length + (scope.Length / 2) + 2;
         string currentTitle = string.IsNullOrWhiteSpace(Message.Text) ? string.Empty : Message.Line(0);
 
+        // Replacing current keyword
         foreach (string key in _headerCommitTypes)
         {
             if (!currentTitle.StartsWith(key, StringComparison.Ordinal))
@@ -2251,101 +2422,8 @@ public sealed partial class FormCommit : GitModuleForm
             }
         }
 
+        // Append current keyword
         return ($"{keyword}{scope}: {currentTitle}", _insertScopeParentheses ? scopePosition : titlePosition + currentPosition);
-    }
-
-    /// <summary>
-    /// replace the Message.Text in an undo-able way.
-    /// </summary>
-    /// <param name="message">the new message.</param>
-    private void ReplaceMessage(string message)
-    {
-        if (Message.Text != message)
-        {
-            Message.SelectAll();
-            Message.SelectedText = message;
-        }
-    }
-
-    /// <summary>
-    /// replace the Message.Text in an undo-able way.
-    /// </summary>
-    /// <param name="message">the new message.</param>
-    /// <param name="regexEnabled">regex replace is enabled</param>
-    private void ReplaceMessage(string message, bool regexEnabled)
-    {
-        if (regexEnabled)
-        {
-            try
-            {
-                foreach (Match match in ReplaceMessageRegex().Matches(message))
-                {
-                    int groupIndex = int.TryParse(match.Groups["index"].Value, out int parsedIndex) ? parsedIndex : 1;
-                    Match branchMatch = Regex.Match(Module.GetSelectedBranch(), match.Groups["pattern"].Value);
-                    string replacement = branchMatch.Success && branchMatch.Groups.Count > groupIndex
-                        ? branchMatch.Groups[groupIndex].Value
-                        : string.Empty;
-                    message = message.Replace(match.Value, replacement, StringComparison.Ordinal);
-                }
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"ReplaceMessage with regex replace exception: {ex}");
-            }
-        }
-
-        ReplaceMessage(message);
-    }
-
-    private void toolAuthor_TextChanged(object? sender, EventArgs e)
-    {
-        bool hasAuthor = !string.IsNullOrEmpty(toolAuthor.Text);
-        toolAuthorLabelItem.IsEnabled = hasAuthor;
-        toolAuthorLabelItem.IsChecked = hasAuthor;
-        UpdateAuthorInfo();
-    }
-
-    private void toolAuthorLabelItem_Click(object? sender, EventArgs e)
-    {
-        toolAuthor.Text = string.Empty;
-        toolAuthorLabelItem.IsEnabled = false;
-        toolAuthorLabelItem.IsChecked = false;
-        UpdateAuthorInfo();
-    }
-
-    private void gpgSignCommitChanged(object? sender, EventArgs e)
-    {
-        toolStripGpgKeyTextBox.IsVisible = gpgSignCommitToolStripComboBox.SelectedIndex == 3;
-
-        // Change the icon for commit button
-        Commit.Icon = gpgSignCommitToolStripComboBox.SelectedIndex >= 2
-            ? Properties.Images.Key
-            : Properties.Images.RepoStateClean;
-    }
-
-    private void SetVisibilityOfSelectionFilter(bool visible)
-    {
-        toolbarSelectionFilter.IsVisible = visible;
-    }
-
-    private void OnSelectionFilterTextChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
-    {
-        if (e.Property != ComboBox.TextProperty)
-        {
-            return;
-        }
-
-        _selectionFilterSubject.OnNext(selectionFilter.Text ?? string.Empty);
-    }
-
-    private void OnSelectionFilterIndexChanged(object? sender, EventArgs e)
-    {
-        if (selectionFilter.SelectedItem is string selected)
-        {
-            selectionFilter.Text = selected;
-        }
-
-        Unstaged.SetSelectionFilter(selectionFilter.Text ?? string.Empty);
     }
 
     private void Amend_CheckedChanged(object? sender, EventArgs e)
@@ -2365,7 +2443,7 @@ public sealed partial class FormCommit : GitModuleForm
         ResetSoft.IsEnabled = amend && !Module.RevParse(_resetSoftRevision).IsZero;
         UpdateStageButtons();
 
-        if (AppSettings.CommitDialogSelectStagedOnEnterMessage.Value)
+        if (AppSettings.CommitDialogSelectStagedOnEnterMessage)
         {
             SelectStaged();
         }
@@ -2394,67 +2472,28 @@ public sealed partial class FormCommit : GitModuleForm
         }
     }
 
-    private void closeDialogAfterEachCommitToolStripMenuItem_Click(object? sender, EventArgs e)
-    {
-        if (_skipUpdate)
-        {
-            return;
-        }
-
-        AppSettings.CloseCommitDialogAfterCommit = closeDialogAfterEachCommitToolStripMenuItem.IsChecked == true;
-    }
-
-    private void closeDialogAfterAllFilesCommittedToolStripMenuItem_Click(object? sender, EventArgs e)
-    {
-        if (_skipUpdate)
-        {
-            return;
-        }
-
-        AppSettings.CloseCommitDialogAfterLastCommit = closeDialogAfterAllFilesCommittedToolStripMenuItem.IsChecked == true;
-    }
-
-    private void refreshDialogOnFormFocusToolStripMenuItem_Click(object? sender, EventArgs e)
-    {
-        if (_skipUpdate)
-        {
-            return;
-        }
-
-        AppSettings.RefreshArtificialCommitOnApplicationActivated = refreshDialogOnFormFocusToolStripMenuItem.IsChecked == true;
-    }
-
-    private void signOffToolStripMenuItem_Click(object? sender, EventArgs e)
-    {
-    }
-
-    private void tsmiSelectStagedOnEnterMessage_Click(object? sender, EventArgs e)
-    {
-        if (_skipUpdate)
-        {
-            return;
-        }
-
-        AppSettings.CommitDialogSelectStagedOnEnterMessage.Value = tsmiSelectStagedOnEnterMessage.IsChecked == true;
-    }
-
     private void Message_Enter(object? sender, EventArgs e)
     {
-        if (AppSettings.CommitDialogSelectStagedOnEnterMessage.Value)
+        if (AppSettings.CommitDialogSelectStagedOnEnterMessage)
         {
             SelectStaged();
         }
-    }
-
-    private void ShowOnlyMyMessagesToolStripMenuItem_CheckedChanged(object? sender, EventArgs e)
-    {
-        AppSettings.CommitDialogShowOnlyMyMessages = ShowOnlyMyMessagesToolStripMenuItem.IsChecked == true;
     }
 
     private void modifyCommitMessageButton_Click(object? sender, EventArgs e)
     {
         CommitKind = CommitKind.Normal;
         Message.Focus();
+    }
+
+    private void UpdateButtonStates()
+    {
+        btnResetAllChanges.IsEnabled = Unstaged.AllItems.Any() || Staged.AllItems.Any();
+        bool pushOnly = !btnResetAllChanges.IsEnabled && Amend.IsChecked != true;
+        string text = PushForced
+            ? _commitAndForcePush.Text
+            : pushOnly ? TranslatedStrings.ButtonPush : _commitAndPush.Text;
+        CommitAndPush.Content = AvaloniaTranslationUtils.ToAvaloniaMnemonics(text);
     }
 
     private void UICommands_PostRepositoryChanged(object? sender, GitUIEventArgs e)
@@ -2465,16 +2504,15 @@ public sealed partial class FormCommit : GitModuleForm
         }
     }
 
-    private void RescanChanges()
-    {
-        if (_shouldRescanChanges)
-        {
-            Initialize();
-            Message.RefreshAutoCompleteWords();
-        }
-    }
-
     internal TestAccessor GetTestAccessor() => new(this);
+
+    private void Options_DropDownOpening(object? sender, EventArgs e)
+    {
+        _skipUpdate = true;
+        refreshDialogOnFormFocusToolStripMenuItem.IsChecked = AppSettings.RefreshArtificialCommitOnApplicationActivated;
+        tsmiSelectStagedOnEnterMessage.IsChecked = AppSettings.CommitDialogSelectStagedOnEnterMessage;
+        _skipUpdate = false;
+    }
 
     protected override void OnClosed(EventArgs e)
     {
@@ -2494,6 +2532,9 @@ public sealed partial class FormCommit : GitModuleForm
         _interactiveAddSequence.Dispose();
         _commitSequence.Dispose();
         _unstagedLoader.Dispose();
+
+        // Stop the throttled filtering: a pending callback would otherwise run after the form was
+        // closed and access the detached list view.
         _selectionFilterSubscription?.Dispose();
         _selectionFilterSubject.Dispose();
         _splitterManager.SaveSplitters();
@@ -2504,6 +2545,8 @@ public sealed partial class FormCommit : GitModuleForm
             return true;
         });
 
+        // Do not remember commit message of fixup or squash commits, since they have
+        // a special meaning, and can be dangerous if used inappropriately.
         if (!_messageConsumed
             && !_commitInProgress
             && _commitMessageManager is not null
@@ -2511,6 +2554,8 @@ public sealed partial class FormCommit : GitModuleForm
         {
             string message = Message.Text ?? string.Empty;
             bool amend = Amend.IsChecked == true;
+
+            // Run async as we're closing the form
             _closePersistenceTask = PersistCommitMessageAsync();
 #pragma warning disable VSTHRD003 // The persistence task is created immediately above on this context and retained until it completes.
             ThreadHelper.FileAndForget(() => _closePersistenceTask);
@@ -2550,12 +2595,14 @@ public sealed partial class FormCommit : GitModuleForm
         UpdateStageButtons();
     }
 
-    private void Options_DropDownOpening(object? sender, EventArgs e)
+    private void tsmiSelectStagedOnEnterMessage_Click(object? sender, EventArgs e)
     {
-        _skipUpdate = true;
-        refreshDialogOnFormFocusToolStripMenuItem.IsChecked = AppSettings.RefreshArtificialCommitOnApplicationActivated;
-        tsmiSelectStagedOnEnterMessage.IsChecked = AppSettings.CommitDialogSelectStagedOnEnterMessage.Value;
-        _skipUpdate = false;
+        if (_skipUpdate)
+        {
+            return;
+        }
+
+        AppSettings.CommitDialogSelectStagedOnEnterMessage.Value = tsmiSelectStagedOnEnterMessage.IsChecked == true;
     }
 
     private bool WordWrapCommitMessageLineIfNecessary(int line, int lineLimit)

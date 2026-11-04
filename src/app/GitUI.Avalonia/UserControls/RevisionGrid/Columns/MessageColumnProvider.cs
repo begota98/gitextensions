@@ -16,8 +16,11 @@ using GitCommands.Git;
 using GitExtensions.Extensibility;
 using GitExtensions.Extensibility.Extensions;
 using GitExtensions.Extensibility.Git;
+using GitExtUtils.GitUI.Theming;
 using GitUI.CommandsDialogs;
+using GitUI.Compat;
 using GitUI.Properties;
+using GitUI.Theming;
 using GitUI.UserControls.RevisionGrid;
 using GitUIPluginInterfaces;
 
@@ -58,6 +61,12 @@ internal sealed class MessageColumnProvider : ColumnProvider
 
     // Caches the configured push prefix per remote name to avoid repeated git-config reads during painting.
     private readonly Dictionary<string, string> _remotePrefixCache = [];
+
+    // Caches whether the label color of a remote is unique among all remotes.
+    private readonly Dictionary<string, bool> _remoteColorIsUniqueCache = [];
+
+    // Caches the names of the configured remotes to avoid repeated git-config reads during painting.
+    private IReadOnlyList<string>? _remoteNames;
     private IReadOnlyDictionary<string, AheadBehindData>? _aheadBehindDataByLocalBranch;
     private IReadOnlyDictionary<string, AheadBehindData>? _aheadBehindDataByRemoteBranch;
     private IAheadBehindDataProvider? _aheadBehindDataProvider;
@@ -96,13 +105,13 @@ internal sealed class MessageColumnProvider : ColumnProvider
         Column.IsVisible = true;
         _settings = new Settings(
             AppSettings.FillRefLabels,
-            AppSettings.ShowGitNotesColumn.Value,
+            AppSettings.ShowGitNotesColumn,
             AppSettings.ShowAnnotatedTagsMessages,
             AppSettings.ShowCommitBodyInRevisionGrid,
             AppSettings.ShowGitNotes,
             AppSettings.ShowRemoteBranches,
             AppSettings.ShowGitStatusForArtificialCommits,
-            AppSettings.ShowRevisionGridTooltips.Value,
+            AppSettings.ShowRevisionGridTooltips,
             AppSettings.ShowTags);
     }
 
@@ -110,7 +119,6 @@ internal sealed class MessageColumnProvider : ColumnProvider
     {
         MessageCell panel = new(this)
         {
-            Margin = new Thickness(ColumnLeftMargin, 0, 2, 0),
             ClipToBounds = true,
         };
         panel.Classes.Add("revision-message-cell");
@@ -221,6 +229,10 @@ internal sealed class MessageColumnProvider : ColumnProvider
             }
 
             DrawRef(panel, label);
+            foreach (RevisionGridRefRenderer.RefLabelControl remoteLabel in label.GetSelfAndVisualDescendants().OfType<RevisionGridRefRenderer.RefLabelControl>())
+            {
+                TryReplaceRemoteNameWithIcon(remoteLabel);
+            }
         }
 
         (string Label, string? HighlightedLabel) GetLabel(IGitRef gitRef)
@@ -307,7 +319,7 @@ internal sealed class MessageColumnProvider : ColumnProvider
 
     public override void OnCellFormatting(Control control, GitRevision revision)
     {
-        // Set the grid cell's accessibility text.
+        // Set the grid cell's accessibility text
         AutomationProperties.SetName(control, revision.Subject.Trim());
     }
 
@@ -376,7 +388,18 @@ internal sealed class MessageColumnProvider : ColumnProvider
         if (highlightRef is not null)
         {
             toolTip = GetRefToolTip(highlightRef);
-            return toolTip is not null;
+            if (toolTip is null)
+            {
+                return false;
+            }
+
+            if (_settings.ShowRevisionGridTooltips && TryGetToolTip(revision, out string? summary))
+            {
+                // The source appends the ordinary commit summary after its ref details.
+                toolTip += Environment.NewLine + Environment.NewLine + summary;
+            }
+
+            return true;
         }
 
         return base.TryGetToolTip(revision, highlightRef, out toolTip);
@@ -408,6 +431,7 @@ internal sealed class MessageColumnProvider : ColumnProvider
 
     private IReadOnlyList<Control> CreateArtificialStatusControls(ObjectId objectId)
     {
+        // Summary of changes
         if (!_settings.ShowGitStatusForArtificialCommits
             || _grid.GetChangeCount(objectId) is not ArtificialCommitChangeCount changeCount)
         {
@@ -567,7 +591,7 @@ internal sealed class MessageColumnProvider : ColumnProvider
             Source = image,
             Width = 16,
             Height = 16,
-            Margin = new Thickness(0, 0, 5, 0),
+            Margin = new Thickness(0, 0, 4, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
         marker.Classes.Add("revision-bisect-marker");
@@ -584,6 +608,7 @@ internal sealed class MessageColumnProvider : ColumnProvider
                 || commitTitle.StartsWith(CommitKind.Squash.GetPrefix(), StringComparison.Ordinal)
                 || commitTitle.StartsWith(CommitKind.Amend.GetPrefix(), StringComparison.Ordinal));
         panel.Subject.Text = revision.IsAutostash ? string.Empty : commitTitle;
+        panel.MessagePanel.HasCommitMessage = lines.Length > 0;
         panel.Body.Text = !revision.IsAutostash && lines.Length > 1 && _settings.ShowCommitBodyInRevisionGrid
             ? string.Concat(lines.Skip(1).Select(line => " " + line))
             : string.Empty;
@@ -704,10 +729,66 @@ internal sealed class MessageColumnProvider : ColumnProvider
         return prefix;
     }
 
+    private static System.Drawing.Color GetRefColor(IGitRef gitRef, IReadOnlyDictionary<string, System.Drawing.Color> remoteColors)
+        => remoteColors.TryGetValue(gitRef.Remote, out System.Drawing.Color color) ? color : RevisionGridRefRenderer.GetHeadColor(gitRef);
+
+    private IReadOnlyList<string> GetRemoteNames(IGitModule module)
+    {
+        return _remoteNames ??= module.GetAllLocalSettings()
+            .Where(s => s.Setting.StartsWith(SettingKeyString.RemoteKeyPrefix, StringComparison.Ordinal) && s.Setting.EndsWith(SettingKeyString.RemoteUrlSuffix, StringComparison.Ordinal))
+            .Select(s => s.Setting[SettingKeyString.RemoteKeyPrefix.Length..^SettingKeyString.RemoteUrlSuffix.Length])
+            .Distinct()
+            .ToList();
+    }
+
+    // The remote name can be replaced with an icon without ambiguity only if the label color identifies the remote.
+    private bool IsRemoteColorUnique(IGitRef remoteRef)
+    {
+        if (!_remoteColorIsUniqueCache.TryGetValue(remoteRef.Remote, out bool isUnique))
+        {
+            System.Drawing.Color defaultColor = RevisionGridRefRenderer.GetHeadColor(remoteRef);
+            IReadOnlyDictionary<string, System.Drawing.Color> colors = remoteRef.Module.GetRemoteColors();
+            System.Drawing.Color remoteColor = GetRefColor(remoteRef, colors);
+            isUnique = GetRemoteNames(remoteRef.Module)
+                .Count(remote => (colors.TryGetValue(remote, out System.Drawing.Color color) ? color : defaultColor) == remoteColor) == 1;
+            _remoteColorIsUniqueCache[remoteRef.Remote] = isUnique;
+        }
+
+        return isUnique;
+    }
+
+    // The icon is used only if it does not take more space than the remote name, so that the label does not shrink when highlighted.
+    private bool TryReplaceRemoteNameWithIcon(RevisionGridRefRenderer.RefLabelControl label)
+    {
+        if (label.GitRef is not { IsRemote: true } remoteRef || remoteRef is NestledVirtualRef || label.Icon != RefLabelIcon.None)
+        {
+            return false;
+        }
+
+        string name = label.Label;
+        string remote = remoteRef.Remote;
+        if (!name.StartsWith(remote, StringComparison.Ordinal)
+            || (name.Length > remote.Length && name[remote.Length] != '/')
+            || !IsRemoteColorUnique(remoteRef))
+        {
+            return false;
+        }
+
+        string shortName = name.Length == remote.Length ? "" : name[(remote.Length + 1)..];
+        if (RevisionGridRefRenderer.GetContentWidth(label, shortName, RefLabelIcon.RemoteForced)
+            > RevisionGridRefRenderer.GetContentWidth(label, name, RefLabelIcon.None))
+        {
+            return false;
+        }
+
+        label.ReplaceRemoteNameWithIcon(shortName);
+        return true;
+    }
+
     /// <summary>
     ///  Performs a hit test to find which ref label (if any) contains the given point in the specified row.
     /// </summary>
-    /// <returns>The matching retained ref label, or <see langword="null"/> if no ref label was hit.</returns>
+    /// <returns>The matching <see cref="RevisionGridRefRenderer.RefLabelControl"/>, or <see langword="null"/> if no ref label was hit.</returns>
     public RevisionGridRefRenderer.RefLabelControl? HitTest(int rowIndex, Avalonia.Point gridClientPoint)
     {
         if (!_refLabelHitInfoByRow.TryGetValue(rowIndex, out WeakReference<MessageCell>? reference)
@@ -784,6 +865,8 @@ internal sealed class MessageColumnProvider : ColumnProvider
         _aheadBehindDataByLocalBranch = null;
         _aheadBehindDataByRemoteBranch = null;
         _remotePrefixCache.Clear();
+        _remoteNames = null;
+        _remoteColorIsUniqueCache.Clear();
         _refLabelHitInfoByRow.Clear();
     }
 
@@ -995,7 +1078,25 @@ internal sealed class MessageColumnProvider : ColumnProvider
             {
                 double remainingWidth = Math.Max(0, finalSize.Width - offset);
                 double advance = GetAdvance(child, remainingWidth);
-                child.Arrange(new Rect(offset, 0, Math.Min(remainingWidth, advance), finalSize.Height));
+
+                // DrawImage may fit its pixels while its trailing advance extends
+                // beyond the cell. Do not subtract that margin from a fitted image.
+                double allocation = child is Image && advance > 0
+                    ? advance
+                    : Math.Min(remainingWidth, advance);
+                if (child is Image image)
+                {
+                    // DrawImage uses integer division; framework centering would
+                    // introduce half-DIP origins for odd-height cells.
+                    image.Arrange(new Rect(offset,
+                        ((int)finalSize.Height - (int)image.Height) / 2,
+                        allocation, image.Height));
+                }
+                else
+                {
+                    child.Arrange(new Rect(offset, 0, allocation, finalSize.Height));
+                }
+
                 offset += advance;
             }
 
@@ -1011,6 +1112,8 @@ internal sealed class MessageColumnProvider : ColumnProvider
             {
                 RevisionGridRefRenderer.RefLabelControl label => GetRefAdvance(label, remainingWidth),
                 RevisionGridRefRenderer.NestledRefLabelPanel pair => GetPairAdvance(pair, remainingWidth),
+                Image image => GetImageAdvance(image, remainingWidth),
+                MessageTextPanel => remainingWidth,
                 _ => child.DesiredSize.Width,
             };
 
@@ -1019,8 +1122,18 @@ internal sealed class MessageColumnProvider : ColumnProvider
             return Math.Max(advance, _minimumAdvances.GetValueOrDefault(child));
         }
 
+        private static double GetImageAdvance(Image image, double remainingWidth)
+        {
+            // DrawImage requires a strict fit and leaves the original four-pixel
+            // advance only when the image was actually painted.
+            bool fits = image.Width < remainingWidth;
+            image.Clip = fits ? null : new RectangleGeometry(default(Rect));
+            return fits ? image.Width + image.Margin.Right : 0;
+        }
+
         private static double GetRefAdvance(RevisionGridRefRenderer.RefLabelControl label, double remainingWidth)
         {
+            // Stop drawing refs if we run out of room
             int width = label.GetCapsuleWidth(remainingWidth);
             return width > 0 ? width + RefMarginRight : 0;
         }
@@ -1043,6 +1156,104 @@ internal sealed class MessageColumnProvider : ColumnProvider
         }
     }
 
+    private sealed class MessageTextPanel : Panel
+    {
+        private readonly Image _marker;
+        private readonly TextBlock _subject;
+        private readonly TextBlock _body;
+
+        public MessageTextPanel(Image marker, TextBlock subject, TextBlock body)
+        {
+            _marker = marker;
+            _subject = subject;
+            _body = body;
+            Children.Add(marker);
+            Children.Add(subject);
+            Children.Add(body);
+        }
+
+        public bool HasCommitMessage { get; set; }
+
+        public bool CanRenderIndicator { get; private set; }
+
+        protected override Avalonia.Size MeasureOverride(Avalonia.Size availableSize)
+        {
+            double offset = GetMarkerAdvance(availableSize.Width);
+            double height = 0;
+            foreach (TextBlock text in new[] { _subject, _body })
+            {
+                double remainingWidth = Math.Max(0, availableSize.Width - offset);
+                Avalonia.Size textConstraint = new(remainingWidth, availableSize.Height);
+
+                // First measurement applies the inherited/style typography before
+                // the native literal advance is read from this retained control.
+                text.Measure(textConstraint);
+                int advance = GetTextAdvance(text);
+
+                // EndEllipsis is decided by the source literal measurement, not
+                // a different portable glyph advance for an otherwise fitting title.
+                TextTrimming trimming = advance <= remainingWidth
+                    ? TextTrimming.None
+                    : TextTrimming.CharacterEllipsis;
+                if (text.TextTrimming != trimming)
+                {
+                    text.TextTrimming = trimming;
+                    text.Measure(textConstraint);
+                }
+
+                offset += advance;
+                height = Math.Max(height, text.DesiredSize.Height);
+            }
+
+            if (_marker.IsVisible)
+            {
+                _marker.Measure(availableSize);
+                height = Math.Max(height, _marker.DesiredSize.Height);
+            }
+
+            return new Avalonia.Size(offset, height);
+        }
+
+        protected override Avalonia.Size ArrangeOverride(Avalonia.Size finalSize)
+        {
+            double offset = GetMarkerAdvance(finalSize.Width);
+            if (_marker.IsVisible)
+            {
+                _marker.Clip = offset > 0 ? null : new RectangleGeometry(default(Rect));
+
+                // DrawImage centers the original bitmap with integer division,
+                // including truncation toward zero when the cell is shorter.
+                _marker.Arrange(new Rect(0, ((int)finalSize.Height - (int)_marker.Height) / 2,
+                    _marker.Width + _marker.Margin.Right, _marker.Height));
+            }
+
+            double subjectAdvance = GetTextAdvance(_subject);
+
+            // The source paints into the entire remaining rectangle. Its returned
+            // literal width advances the next painter; it does not clip this one.
+            _subject.Arrange(new Rect(offset, 0,
+                Math.Max(0, finalSize.Width - offset), finalSize.Height));
+            offset += subjectAdvance;
+
+            // DrawCommitMessage returns after an overlong title. Its indicator
+            // remains reserved by MultilineIndicator, but is not painted.
+            CanRenderIndicator = HasCommitMessage && offset <= finalSize.Width;
+            _body.Arrange(new Rect(offset, 0,
+                string.IsNullOrEmpty(_body.Text) ? 0 : Math.Max(0, finalSize.Width - offset), finalSize.Height));
+            return finalSize;
+        }
+
+        private double GetMarkerAdvance(double availableWidth)
+            => _marker.IsVisible && _marker.Width < availableWidth
+                ? _marker.Width + _marker.Margin.Right
+                : 0;
+
+        // The source advances by NoPrefix/SingleLine/NoPadding measurement,
+        // independently of the finite EndEllipsis allocation used to paint.
+        private static int GetTextAdvance(TextBlock text)
+            => (int)Math.Ceiling(WinFormsTextMeasurer.MeasureSize(text, text.Text ?? string.Empty).Width);
+    }
+
     private sealed class MessageCell : DockPanel
     {
         private readonly MessageColumnProvider _provider;
@@ -1059,25 +1270,20 @@ internal sealed class MessageColumnProvider : ColumnProvider
             Subject.Classes.Add("revision-subject");
             Subject.Margin = default;
             Body.Classes.Add("revision-body");
-            MessagePanel.Children.Add(FixupAndSquashMarker);
-            MessagePanel.Children.Add(Subject);
-            MessagePanel.Children.Add(Body);
+            MessagePanel = new MessageTextPanel(FixupAndSquashMarker, Subject, Body);
+            ContentPanel.Margin = new Thickness(provider.ColumnLeftMargin, 0, 0, 0);
             ContentPanel.Children.Add(MessagePanel);
             SetDock(Indicator, Dock.Right);
             Children.Add(Indicator);
             Children.Add(ContentPanel);
             PointerMoved += OnPointerMoved;
             PointerExited += provider._grid.OnGridViewCellMouseLeave;
-            PointerExited += (_, _) =>
-            {
-                ToolTip.SetTip(this, _provider._settings.ShowRevisionGridTooltips ? Revision?.Subject : null);
-            };
             DoubleTapped += OnDoubleTapped;
         }
 
         public MessageContentPanel ContentPanel { get; } = new();
 
-        public StackPanel MessagePanel { get; } = new() { Orientation = Orientation.Horizontal };
+        public MessageTextPanel MessagePanel { get; }
 
         public Image FixupAndSquashMarker { get; } = new()
         {
@@ -1096,10 +1302,28 @@ internal sealed class MessageColumnProvider : ColumnProvider
 
         public GitRevision? Revision { get; set; }
 
+        protected override Avalonia.Size MeasureOverride(Avalonia.Size availableSize)
+        {
+            Indicator.UpdateAvailableWidth(availableSize.Width);
+            return base.MeasureOverride(availableSize);
+        }
+
         protected override Avalonia.Size ArrangeOverride(Avalonia.Size finalSize)
         {
             Indicator.UpdateAvailableWidth(finalSize.Width);
-            return base.ArrangeOverride(finalSize);
+            Avalonia.Size result = base.ArrangeOverride(finalSize);
+            if (Indicator.IsVisible)
+            {
+                // The source centers with integer division rather than the
+                // framework's potentially half-DIP vertical alignment.
+                Indicator.Arrange(new Rect(finalSize.Width - Indicator.Width,
+                    ((int)finalSize.Height - (int)Indicator.Height) / 2,
+                    Indicator.Width, Indicator.Height));
+            }
+
+            Indicator.UpdatePaintVisibility(Revision is { IsArtificial: false, IsAutostash: false }
+                && MessagePanel.CanRenderIndicator);
+            return result;
         }
 
         public void ClearHighlight()
@@ -1121,16 +1345,9 @@ internal sealed class MessageColumnProvider : ColumnProvider
 
         private void OnPointerMoved(object? sender, PointerEventArgs e)
         {
+            // Keep hover/cursor state here; the central provider owns truncated-cell tooltip text.
             RevisionGridRefRenderer.RefLabelControl? label = HitTest(e.GetPosition);
             _provider.SetHighlight(this, label);
-
-            string? toolTip = null;
-            if (Revision is not null)
-            {
-                _provider.TryGetToolTip(Revision, label?.GitRef, out toolTip);
-            }
-
-            ToolTip.SetTip(this, toolTip);
         }
 
         private void OnDoubleTapped(object? sender, TappedEventArgs e)

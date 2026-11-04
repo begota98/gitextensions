@@ -1,10 +1,12 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Reflection;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
+using Avalonia.Data;
+using Avalonia.Diagnostics;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.LogicalTree;
@@ -15,6 +17,7 @@ using GitExtensions.Extensibility.Plugins;
 using GitExtensions.ParityCapture;
 using GitUI;
 using GitUI.AutoCompletion;
+using GitUI.CommandsDialogs;
 using GitUI.Compat;
 using GitUI.UserControls.RevisionGrid.Columns;
 using SearchControl = GitUI.CommandsDialogs.SearchControl;
@@ -30,10 +33,13 @@ internal sealed class AvaloniaControlTreeReader
     private readonly bool _usesDesignerLayoutMetadata;
     private readonly double _renderScale;
     private readonly Control _root;
+    private readonly Control? _popupFocusOwner;
 
-    public AvaloniaControlTreeReader(Control root, double renderScale, PixelPoint? primaryScreenOrigin = null)
+    public AvaloniaControlTreeReader(Control root, double renderScale, PixelPoint? primaryScreenOrigin = null,
+        Control? popupFocusOwner = null)
     {
         _root = root;
+        _popupFocusOwner = popupFocusOwner;
         _renderScale = renderScale;
         _primaryScreenOrigin = primaryScreenOrigin ?? default;
         string rootType = GetMetadataTypeName(root.GetType());
@@ -266,10 +272,13 @@ internal sealed class AvaloniaControlTreeReader
                 ?? (comboBox.SelectedItem as ComboBoxItem)?.Content as string;
         }
 
+        // RefreshWorkingDirectory converts dynamic branch captions for AccessText without
+        // opting the non-translated field into the translation converter. Undo that storage
+        // conversion just as for translated captions; the native field contains one underscore.
         string value = text is null
             ? string.Empty
-            : (control is MenuItem or Button or Label || control.Name == "btnRemoteColor")
-              && TranslationCompat.GetConvertMnemonics(control)
+            : (control is MenuItem or Button or SplitButton or Label || control.Name == "btnRemoteColor")
+              && (TranslationCompat.GetConvertMnemonics(control) || control.Name == "branchSelect")
                 ? ToWinFormsMnemonics(text)
                 : text;
         return value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
@@ -747,10 +756,10 @@ internal sealed class AvaloniaControlTreeReader
         bool isFormBrowseToolStripContainer = sourceOwnerType == "GitUI.CommandsDialogs.FormBrowse"
             && control.Name == "toolPanel";
         bool isFormBrowseSurface = _root.GetType().FullName == "GitUI.CommandsDialogs.FormBrowse";
-        // WinForms ToolStripItem.Selected is the hovered item, and the source reader
-        // reports that same value for both Selected and Focused.
-        bool isBrowseHoveredToolStripItem = isFormBrowseSurface && isToolStripItem
-            && control.IsPointerOver && (control is not MenuItem menu || !menu.IsSubMenuOpen);
+        // ToolStrip selection is a native owner role, not Avalonia keyboard focus.
+        // Main-menu owners retain it while open, whereas toolbar flyout owners release it.
+        bool isBrowseSelectedToolStripItem = isFormBrowseSurface && isToolStripItem
+            && IsBrowseToolStripItemSelected(control);
         // The selected commit's outer content viewport ends at its live vertical scrollbar;
         // the inner RichTextBox twin retains its own full client width.
         double browseRevisionInfoScrollBarWidth = isFormBrowseSurface
@@ -937,7 +946,10 @@ internal sealed class AvaloniaControlTreeReader
 
         if (isFormBrowseToolStripPanel && semanticName == "_topPanel")
         {
-            bounds = new Rect(0, 0, (control.Parent as Control)?.Bounds.Width ?? bounds.Width, 27);
+            // The original AutoSize panel follows the current toolbars' preferred heights.
+            // Its native-shaped parent already arranges that live rectangle; a fixed height
+            // would conceal font/visibility changes and disagree with its content sibling.
+            bounds = new Rect(0, 0, (control.Parent as Control)?.Bounds.Width ?? bounds.Width, control.Bounds.Height);
         }
 
         if (rootMetadataType is "GitUI.CommandsDialogs.FormGitAttributes" or "GitUI.CommandsDialogs.FormMailMap"
@@ -1268,11 +1280,13 @@ internal sealed class AvaloniaControlTreeReader
                         "GitExtensionsControlBackgroundBrush",
                         ResolveResourceArgb("GitExtensionsKnownColorControlTextBrush"))
                 : isPopupRoot && _root.GetType().FullName == "GitUI.CommandsDialogs.FormBrowse"
-                    ? ReadColors(control) with
-                    {
-                        Foreground = ResolveResourceArgb("GitExtensionsKnownColorControlTextBrush")
-                                     ?? ResolveResourceArgb("GitExtensionsMenuForegroundBrush")
-                    }
+                    // ToolStrip.BackColor is the ambient raw property, not the background
+                    // independently painted by its Professional/System renderer.
+                    ? ReadSourceBackgroundColors(
+                        control,
+                        "GitExtensionsKnownColorControlBrush",
+                        ResolveResourceArgb("GitExtensionsKnownColorControlTextBrush")
+                        ?? ResolveResourceArgb("GitExtensionsMenuForegroundBrush"))
                 : isPopupRoot && _root is RevisionGridControl
                     ? ReadSourceBackgroundColors(
                         control,
@@ -1779,15 +1793,13 @@ internal sealed class AvaloniaControlTreeReader
                 : isFormCommitSurface && semanticName is "Ok" or "Cancel"
                     ? true
                 : semanticVisible,
-            Focused = isBrowseHoveredToolStripItem
+            Focused = isBrowseSelectedToolStripItem
                 ? true
                 : isFormBrowseMenuStrip
                 ? false
                 : isNativeTabPage
                     ? false
-                : sourceOwnerType == "GitUI.CommandsDialogs.FormBrowse"
-                    && semanticName == "_gridView"
-                    && _root.GetLogicalDescendants().OfType<MenuItem>().Any(item => item.IsSubMenuOpen)
+                : isFormBrowseSurface && IsNativePopupFocusOwner(semanticStateControl)
                 ? true
                 : IsRepositoryHostSourceFocusedState(control, isPopupRoot)
                 ? true
@@ -1839,13 +1851,13 @@ internal sealed class AvaloniaControlTreeReader
                 : isSourceList && control is ListBox sourceList
                     ? sourceList.SelectedIndex >= 0
                 : isFormBrowseMenuStrip && control is MenuItem
-                    ? isBrowseHoveredToolStripItem
+                    ? isBrowseSelectedToolStripItem
                 : isFormBrowseSurface && semanticName == "listBoxSearchResult"
                     ? false
                 : isSpellCheckAutoComplete && control is ListBox spellCheckAutoComplete
                 ? spellCheckAutoComplete.SelectedIndex >= 0
                 : (isSemanticToolStripItem && control is not Separator) || isWatermarkComboBox
-                ? isBrowseHoveredToolStripItem
+                ? isBrowseSelectedToolStripItem
                 : GetSelected(control),
             Expanded = IsSourceTreeControl(sourceType) && control is TreeView treeView
                 ? treeView.GetVisualDescendants().OfType<TreeViewItem>().Any(item => item.IsExpanded)
@@ -4446,6 +4458,18 @@ internal sealed class AvaloniaControlTreeReader
             return new Rect(34, 3, control.Bounds.Width, control.Bounds.Height);
         }
 
+        if (control is MenuItem or Separator
+            && control.GetVisualAncestors().OfType<NativeFilterToolStripDropDownPanel>().Any())
+        {
+            Control? filterPresenter = control.GetVisualAncestors().OfType<Control>().FirstOrDefault(IsPopupPresenter);
+
+            // This opted-in renderer already arranges the native dropdown canvas.
+            // Retain its actual row bounds instead of projecting generic menu slots.
+            return filterPresenter is not null && control.TranslatePoint(default, filterPresenter) is Point filterOrigin
+                ? new Rect(filterOrigin, control.Bounds.Size)
+                : control.Bounds;
+        }
+
         Control? popupOwner = semanticParent is not null && IsOverlayPopupHost(semanticParent)
             ? semanticParent
             : control.GetVisualAncestors().OfType<Control>().FirstOrDefault(IsOverlayPopupHost);
@@ -4970,15 +4994,19 @@ internal sealed class AvaloniaControlTreeReader
             string? foreground = control is Separator
                 ? ResolveResourceArgb("GitExtensionsKnownColorControlDarkBrush")
                   ?? ResolveResourceArgb("GitExtensionsControlBorderBrush")
-                : ResolveResourceArgb("GitExtensionsControlForegroundBrush")
+                : ReadLocalItemForeground(control)
+                  ?? ResolveResourceArgb("GitExtensionsControlForegroundBrush")
                   ?? BrushToArgb(GetPropertyValue(control, "Foreground"));
-            string? background = ResolveResourceArgb("GitExtensionsControlBackgroundBrush")
+            string? background = ReadLocalItemBackground(control)
+                                 ?? ResolveResourceArgb("GitExtensionsControlBackgroundBrush")
                                  ?? BrushToArgb(GetPropertyValue(control, "Background"));
             return new CaptureColors
             {
                 Foreground = foreground,
                 Background = background,
-                Border = BrushToArgb(GetPropertyValue(control, "BorderBrush")),
+                // ToolStripItem has no raw Border property. Native menu selection chrome
+                // is renderer-owned; Avalonia's unused inherited brush is not that role.
+                Border = null,
                 SelectionForeground = ResolveResourceArgb("GitExtensionsKnownColorHighlightTextBrush")
                                       ?? ResolveResourceArgb("GitExtensionsHighlightForegroundBrush"),
                 SelectionBackground = ResolveResourceArgb("GitExtensionsKnownColorHighlightBrush")
@@ -5565,6 +5593,55 @@ internal sealed class AvaloniaControlTreeReader
         };
     }
 
+    private static string? ReadLocalItemForeground(Control control)
+        => control is TemplatedControl
+           && control.GetDiagnostic(TemplatedControl.ForegroundProperty) is { Priority: BindingPriority.LocalValue } diagnostic
+            ? BrushToArgb(diagnostic.Value)
+            : null;
+
+    private string? ReadLocalItemBackground(Control control)
+    {
+        AvaloniaProperty? property = control switch
+        {
+            TemplatedControl => TemplatedControl.BackgroundProperty,
+            Border => Border.BackgroundProperty,
+            Panel => Panel.BackgroundProperty,
+            _ => null,
+        };
+
+        // The native raw BackColor honors an explicit authored assignment. A styled
+        // renderer background or hover setter is paint, not that ambient property.
+        if (property is null || control.GetDiagnostic(property) is not { Priority: BindingPriority.LocalValue } diagnostic)
+        {
+            return null;
+        }
+
+        string? fieldName = GetFieldNames(control).FirstOrDefault() ?? control.Name;
+        bool isMappedItem = IsSourceToolStripItem(GetSourceType(control, fieldName)) || IsSemanticToolStripItem(control);
+        bool hasNoAuthoredBackground = GetDesignerLayout(control, fieldName) is { HasExplicitBackground: false }
+            || (GetSourceOwnerType(control), fieldName) is
+                ("GitUI.CommandsDialogs.FormBrowse", "toolStripSplitStash") or ("GitUI.FileStatusList", "sepRefresh");
+        if (isMappedItem && hasNoAuthoredBackground)
+        {
+            // These source-mapped items use shared AXAML brushes solely to paint
+            // transparent strips or Window-backed content. With no original authored
+            // BackColor, keep the existing source owner/visibility role instead of
+            // treating that renderer default as an explicit raw property assignment.
+            // The two ToolStripItem defaults above lack layout metadata; a source
+            // regression explicitly checks their original Designer assignments.
+            foreach (string resourceKey in new[] { "GitExtensionsTransparentBrush", "GitExtensionsWindowBackgroundBrush" })
+            {
+                if (_root.TryFindResource(resourceKey, _root.ActualThemeVariant, out object? paintDefault)
+                    && ReferenceEquals(diagnostic.Value, paintDefault))
+                {
+                    return null;
+                }
+            }
+        }
+
+        return BrushToArgb(diagnostic.Value);
+    }
+
     private string? ResolveResourceArgb(string key)
         => _root.TryFindResource(key, _root.ActualThemeVariant, out object? resource)
             ? BrushToArgb(resource)
@@ -5626,9 +5703,10 @@ internal sealed class AvaloniaControlTreeReader
             && (control.Name is "_NO_TRANSLATE_WorkingDir" or "branchSelect" or "menuCommitInfoPosition"
                or "RefreshButton" or "toggleLeftPanel" or "toggleSplitViewLayout"
                or "toolStripButtonLevelUp" or "toolStripButtonPull" or "toolStripSeparator0"
-               or "toolStripSeparator1" or "toolStripSeparator17"
+               or "toolStripSeparator1" or "toolStripSeparator17" or "toolStripSeparator19"
                or "toolStripWorktrees"
-               or "tsddbtnRevisionFilter"
+               or "tsddbtnRevisionFilter" or "tsddbtnBranchFilter"
+               or "tslblRevisionFilter" or "tsmiShowOnlyFirstParent"
                || control.Name is "toolStripFileExplorer" or "userShell" or "EditSettings"
                || (control.Name is "toolStripSplitStash" or "toolStripSeparator2"
                    && IsInsideClippedAncestors(control))
@@ -5701,7 +5779,7 @@ internal sealed class AvaloniaControlTreeReader
                && IsSemanticToolStripItem(control))
            || (_root.GetType().FullName == "GitUI.CommandsDialogs.FormBrowse"
            && (control.Name is "toolStripLabel1" or "tsbShowReflog" or "tsbtnAdvancedFilter"
-                or "tsddbtnBranchFilter" or "tslblRevisionFilter" or "tsmiShowOnlyFirstParent"
+                or "tsddbtnBranchFilter" or "tsddbtnRevisionFilter" or "tslblRevisionFilter" or "tsmiShowOnlyFirstParent"
                 or "tssbtnShowBranches"
                 or "toolStripButtonPush" or "toolStripButtonCommit"
                 || control.Name is "toolStripFileExplorer" or "userShell" or "EditSettings"
@@ -6170,7 +6248,8 @@ internal sealed class AvaloniaControlTreeReader
             && (IsFileStatusToolbar(control)
                 || IsFileStatusToolbarItem(control)
                 || IsFileStatusToolbarProductItem(control));
-        string? background = transparentBackground
+        string? background = isItem ? ReadLocalItemBackground(control) : null;
+        background ??= transparentBackground
             ? "#00FFFFFF"
             : isFormCommitFileStatus
                 ? control.Name == "btnRefresh"
@@ -6183,10 +6262,13 @@ internal sealed class AvaloniaControlTreeReader
                 ? ResolveResourceArgb("GitExtensionsWindowBackgroundBrush")
                 : ResolveResourceArgb("GitExtensionsKnownColorControlBrush")
                   ?? ResolveResourceArgb("GitExtensionsControlBackgroundBrush");
+        // Filter item ForeColor is an ambient control property. The native dropdown arrow
+        // separately paints SystemColors.ControlText; do not report its color as the item text.
         string? foreground = isSeparator
             ? ResolveResourceArgb("GitExtensionsKnownColorControlDarkBrush")
               ?? ResolveResourceArgb("GitExtensionsControlBorderBrush")
             : control.Name is "btnUnequalChange" or "btnOnlyB" or "btnOnlyA" or "btnSameChange"
+                or "tsddbtnBranchFilter" or "tslblRevisionFilter" or "tsmiShowOnlyFirstParent"
                 ? BrushToArgb(GetPropertyValue(control, "Foreground"))
             : control.Name == "encodingToolStripComboBox"
                 ? ResolveResourceArgb("GitExtensionsMenuForegroundBrush")
@@ -7429,11 +7511,13 @@ internal sealed class AvaloniaControlTreeReader
 
         if (IsRevisionGridView(control))
         {
-            // parity-scaffolding: Avalonia moves keyboard focus into an owned ContextMenu, while
-            // WinForms keeps the owning grid focused; emit the equivalent owner-focused state.
+            // Native ToolStrip retains the pre-popup HWND. A captured owner is required
+            // for Browse: opening any menu must not invent grid focus after another editor owned it.
             return control.IsKeyboardFocusWithin
-                   || control.ContextMenu?.IsOpen == true
-                   || _root.GetLogicalDescendants().OfType<ContextMenu>().Any(menu => menu.IsOpen);
+                   || (_root is FormBrowse
+                       ? IsNativePopupFocusOwner(control)
+                       : control.ContextMenu?.IsOpen == true
+                         || _root.GetLogicalDescendants().OfType<ContextMenu>().Any(menu => menu.IsOpen));
         }
 
         if (control is FileStatusList)
@@ -7448,6 +7532,34 @@ internal sealed class AvaloniaControlTreeReader
         }
 
         return control.IsFocused;
+    }
+
+    private bool IsNativePopupFocusOwner(Control control)
+        => _popupFocusOwner is not null
+           && (ReferenceEquals(control, _popupFocusOwner)
+               || ((control is ComboBox or ListBox or TreeView or NumericUpDown
+                    || IsNativeListView(control))
+                   && (_popupFocusOwner.GetVisualAncestors().Contains(control)
+                       || _popupFocusOwner.GetLogicalAncestors().Contains(control))))
+           && _root.GetLogicalDescendants().Any(candidate =>
+               candidate is MenuItem { IsSubMenuOpen: true }
+               || (candidate is Control owner
+                   && (owner.ContextMenu?.IsOpen == true
+                       || GetPropertyValue(owner, "Flyout") is FlyoutBase { IsOpen: true })));
+
+    private static bool IsBrowseToolStripItemSelected(Control control)
+    {
+        if (control is MenuItem { Parent: Menu, IsSubMenuOpen: true })
+        {
+            return control.IsPointerOver;
+        }
+
+        if (GetPropertyValue(control, "Flyout") is FlyoutBase { IsOpen: true })
+        {
+            return false;
+        }
+
+        return control.IsPointerOver && (control is not MenuItem menu || !menu.IsSubMenuOpen);
     }
 
     private static bool IsOverlayPopupHost(Control control) =>

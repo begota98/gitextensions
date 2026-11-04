@@ -1,4 +1,5 @@
 using System.Collections.Specialized;
+using System.Diagnostics;
 using Avalonia;
 using Avalonia.Collections;
 using Avalonia.Controls;
@@ -7,11 +8,13 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
 using Avalonia.Markup.Xaml.MarkupExtensions;
 using Avalonia.Media;
 using Avalonia.Metadata;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Color = Avalonia.Media.Color;
 using Size = Avalonia.Size;
 
 namespace GitUI.Compat;
@@ -31,19 +34,28 @@ public sealed class NativeToolStrip : Control, IDisposable
     private const int DefaultWidth = 100;
     private const int OverflowWidth = 16;
     private const int VisualStyleGripWidth = 5;
+    private const int ItemImageSize = 16;
+    private const int ItemBorderSize = 2;
+    private const int StandardButtonWidth = 23;
     private const int DefaultMenuFontSize = 12;
     private static readonly FontFamily DefaultMenuFontFamily = new("Segoe UI");
     private static readonly Thickness ControlHostMainMargin = new(1, 0, 1, 0);
     private static readonly Thickness ControlHostOverflowMargin = new(2);
+
+    // Effective REBAR/GRIPPER part paint, verified independently over black and
+    // white by the native renderer. These are composite roles, not DDB alpha.
+    private static readonly IBrush SystemGripLight = new SolidColorBrush(Color.FromArgb(178, 255, 255, 255));
+    private static readonly IBrush SystemGripMiddle = new SolidColorBrush(Color.FromArgb(197, 220, 220, 220));
+    private static readonly IBrush SystemGripShadow = new SolidColorBrush(Color.FromArgb(60, 0, 0, 0));
     private readonly NativeToolStripPresenter _mainPresenter;
     private readonly NativeToolStripOverflowPresenter _overflowPresenter;
     private readonly Popup _popup;
     private readonly Dictionary<Control, Size> _preferredSizes = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<Control, NativeToolStripItemPlacement> _placements = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<Control, IDisposable?[]> _autoSizeValues = new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<Control, Thickness> _controlHostMainMargins = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<Control, (bool Overflow, IDisposable? Value)> _controlHostMarginValues = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<Control> _pendingControlHostMargins = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<Control, ToolTipHoverState> _toolTipHover = new(ReferenceEqualityComparer.Instance);
     private IDisposable?[] _overflowValues = [];
     private Button _overflowButton;
     private bool _measuring;
@@ -56,6 +68,14 @@ public sealed class NativeToolStrip : Control, IDisposable
     public static readonly StyledProperty<IBrush?> ForegroundProperty = TextElement.ForegroundProperty.AddOwner<NativeToolStrip>();
     public static readonly StyledProperty<IBrush?> BackgroundProperty = Border.BackgroundProperty.AddOwner<NativeToolStrip>();
     public static readonly StyledProperty<Thickness> PaddingProperty = Border.PaddingProperty.AddOwner<NativeToolStrip>();
+    public static readonly StyledProperty<bool> UseSystemVisualStyleProperty =
+        AvaloniaProperty.Register<NativeToolStrip, bool>(nameof(UseSystemVisualStyle), true);
+    public static readonly StyledProperty<bool> GripVisibleProperty =
+        AvaloniaProperty.Register<NativeToolStrip, bool>(nameof(GripVisible), true);
+    public static readonly StyledProperty<IBrush?> GripDarkBrushProperty =
+        AvaloniaProperty.Register<NativeToolStrip, IBrush?>(nameof(GripDarkBrush));
+    public static readonly StyledProperty<IBrush?> GripLightBrushProperty =
+        AvaloniaProperty.Register<NativeToolStrip, IBrush?>(nameof(GripLightBrush));
     public static readonly AttachedProperty<bool> ItemAutoSizeProperty =
         AvaloniaProperty.RegisterAttached<NativeToolStrip, Control, bool>("ItemAutoSize", true);
     public static readonly AttachedProperty<double> ItemHeightProperty =
@@ -68,10 +88,16 @@ public sealed class NativeToolStrip : Control, IDisposable
         AvaloniaProperty.RegisterAttached<NativeToolStrip, Control, bool>("ItemIsControlHost");
     public static readonly AttachedProperty<bool> ItemIsSeparatorProperty =
         AvaloniaProperty.RegisterAttached<NativeToolStrip, Control, bool>("ItemIsSeparator");
+    public static readonly AttachedProperty<bool> ItemUseNativeButtonSizeProperty =
+        AvaloniaProperty.RegisterAttached<NativeToolStrip, Control, bool>("ItemUseNativeButtonSize");
+    public static readonly AttachedProperty<bool> FreezeDropDownOwnerPaintProperty =
+        AvaloniaProperty.RegisterAttached<NativeToolStrip, Control, bool>("FreezeDropDownOwnerPaint");
 
     static NativeToolStrip()
     {
-        AffectsRender<NativeToolStrip>(BackgroundProperty);
+        AffectsRender<NativeToolStrip>(BackgroundProperty, UseSystemVisualStyleProperty,
+            GripVisibleProperty, GripDarkBrushProperty, GripLightBrushProperty, FlowDirectionProperty);
+        InputElement.PointerPressedEvent.AddClassHandler<ToolTip>(ToolTipPointerPressed, RoutingStrategies.Tunnel);
     }
 
     public NativeToolStrip()
@@ -92,6 +118,10 @@ public sealed class NativeToolStrip : Control, IDisposable
             Child = _overflowPresenter,
             Placement = PlacementMode.BottomEdgeAlignedRight,
             IsLightDismissEnabled = true,
+
+            // The source closes its overflow and child menu without swallowing
+            // the outside control's original click.
+            OverlayDismissEventPassThrough = true,
         };
 
         // PopupRoot receives its control theme through the Popup's logical owner.
@@ -169,6 +199,26 @@ public sealed class NativeToolStrip : Control, IDisposable
     ///  Gets or sets the source owner's display padding.
     /// </summary>
     public Thickness Padding { get => GetValue(PaddingProperty); set => SetValue(PaddingProperty, value); }
+
+    /// <summary>
+    ///  Gets or sets the original ToolStrip renderer selection.
+    /// </summary>
+    public bool UseSystemVisualStyle { get => GetValue(UseSystemVisualStyleProperty); set => SetValue(UseSystemVisualStyleProperty, value); }
+
+    /// <summary>
+    ///  Gets or sets whether the source grip is painted and reserves display space.
+    /// </summary>
+    public bool GripVisible { get => GetValue(GripVisibleProperty); set => SetValue(GripVisibleProperty, value); }
+
+    /// <summary>
+    ///  Gets or sets the Professional renderer's raw SystemColors.ControlText grip role.
+    /// </summary>
+    public IBrush? GripDarkBrush { get => GetValue(GripDarkBrushProperty); set => SetValue(GripDarkBrushProperty, value); }
+
+    /// <summary>
+    ///  Gets or sets the Professional renderer's ColorTable.GripLight role.
+    /// </summary>
+    public IBrush? GripLightBrush { get => GetValue(GripLightBrushProperty); set => SetValue(GripLightBrushProperty, value); }
 
     /// <summary>
     ///  Gets or sets the source ToolStrip translation text.
@@ -286,6 +336,26 @@ public sealed class NativeToolStrip : Control, IDisposable
     public static void SetItemIsSeparator(Control control, bool value) => control.SetValue(ItemIsSeparatorProperty, value);
 
     /// <summary>
+    ///  Gets whether an autosized source ToolStripButton uses its native image/text preferred size.
+    /// </summary>
+    public static bool GetItemUseNativeButtonSize(Control control) => control.GetValue(ItemUseNativeButtonSizeProperty);
+
+    /// <summary>
+    ///  Sets native preferred sizing for a source-owned ToolStripButton without changing generic buttons.
+    /// </summary>
+    public static void SetItemUseNativeButtonSize(Control control, bool value) => control.SetValue(ItemUseNativeButtonSizeProperty, value);
+
+    /// <summary>
+    ///  Gets whether the source ToolStripEx retains its pre-opening owner state paint.
+    /// </summary>
+    public static bool GetFreezeDropDownOwnerPaint(Control control) => control.GetValue(FreezeDropDownOwnerPaintProperty);
+
+    /// <summary>
+    ///  Sets the source ToolStripEx dropdown owner's pre-opening state-paint contract.
+    /// </summary>
+    public static void SetFreezeDropDownOwnerPaint(Control control, bool value) => control.SetValue(FreezeDropDownOwnerPaintProperty, value);
+
+    /// <summary>
     ///  Gets the current source split-stack placement without changing item visibility.
     /// </summary>
     public NativeToolStripItemPlacement GetItemPlacement(Control control)
@@ -301,6 +371,21 @@ public sealed class NativeToolStrip : Control, IDisposable
             NativeToolStripItemPlacement.Overflow => _overflowPresenter,
             _ => null,
         };
+
+    internal TimeSpan GetOverflowToolTipDelay(Control control)
+    {
+        _toolTipHover.TryGetValue(control, out ToolTipHoverState? hover);
+        if (Avalonia.Controls.ToolTip.GetIsOpen(control) || hover?.HasActiveHint == true)
+        {
+            return TimeSpan.Zero;
+        }
+
+        TimeSpan elapsed = hover is not null ? Stopwatch.GetElapsedTime(hover.EnteredAt) : TimeSpan.Zero;
+        return TimeSpan.FromMilliseconds(Math.Max(0, Avalonia.Controls.ToolTip.GetShowDelay(control) - elapsed.TotalMilliseconds));
+    }
+
+    internal long GetToolTipHoverEpoch(Control control)
+        => _toolTipHover.GetValueOrDefault(control)?.EnteredAt ?? 0;
 
     /// <summary>
     ///  Opens the wrapped overflow with the same item instances.
@@ -353,7 +438,52 @@ public sealed class NativeToolStrip : Control, IDisposable
     public override void Render(DrawingContext context)
     {
         context.FillRectangle(Background ?? Brushes.Transparent, new Rect(Bounds.Size));
+        RenderGrip(context);
         base.Render(context);
+    }
+
+    private void RenderGrip(DrawingContext context)
+    {
+        if (!GripVisible)
+        {
+            return;
+        }
+
+        // GripEnabled=false in ToolStripEx disables dragging, not painting. Keep
+        // the existing source reserve and paint directly, without an input child.
+        int height = (int)Pixel(Bounds.Height);
+        bool rightToLeft = FlowDirection == FlowDirection.RightToLeft;
+        double left = rightToLeft ? Math.Max(0, Pixel(Bounds.Width) - VisualStyleGripWidth) : 0;
+        using (context.PushClip(new Rect(left, 0, VisualStyleGripWidth, height)))
+        {
+            if (UseSystemVisualStyle)
+            {
+                // ToolStripSystemRenderer rounds its vertical part height to4.
+                // Native REBAR/GRIPPER metadata specifies a5x4 tile, no margins.
+                int renderedHeight = Math.Max(0, ((height - 2) / 4) * 4);
+                int top = Math.Max(0, (height - renderedHeight - 2) / 2);
+                for (int y = top; y < top + renderedHeight; y += 4)
+                {
+                    context.FillRectangle(SystemGripLight, new Rect(left + 1, y, 2, 1));
+                    context.FillRectangle(SystemGripLight, new Rect(left + 1, y + 1, 1, 1));
+                    context.FillRectangle(SystemGripMiddle, new Rect(left + 2, y + 1, 1, 1));
+                    context.FillRectangle(SystemGripShadow, new Rect(left + 3, y + 1, 1, 1));
+                }
+
+                return;
+            }
+
+            // ToolStripProfessionalRenderer: GripPadding=4, two-pixel dots every4.
+            int count = Math.Max(0, (height - 8) / 4);
+            int lightX = (VisualStyleGripWidth / 2) - (rightToLeft ? 1 : 0);
+            int darkX = lightX + (rightToLeft ? 1 : -1);
+            for (int index = 0; index < count; index++)
+            {
+                int y = 5 + (index * 4);
+                context.FillRectangle(GripLightBrush ?? Brushes.Transparent, new Rect(left + lightX, y, 2, 2));
+                context.FillRectangle(GripDarkBrush ?? Brushes.Transparent, new Rect(left + darkX, y - 1, 2, 2));
+            }
+        }
     }
 
     protected override bool BypassFlowDirectionPolicies => true;
@@ -384,6 +514,21 @@ public sealed class NativeToolStrip : Control, IDisposable
                     _preferredSizes[item] = new Size(Pixel(measured.Width + label.Padding.Left + label.Padding.Right),
                         Pixel(double.IsNaN(preferredHeight) ? measured.Height + label.Padding.Top + label.Padding.Bottom : preferredHeight));
                 }
+
+                if (GetItemAutoSize(item) && GetItemUseNativeButtonSize(item) && item is IconButton button)
+                {
+                    // ToolStripButton's image/text layout has its own border allowance,
+                    // independent of the generic Avalonia button template's preferred size.
+                    string text = button.Classes.Contains("gitextensions-icon-only") ? string.Empty : button.Content as string ?? string.Empty;
+                    string display = TranslationCompat.GetConvertMnemonics(button)
+                        ? AvaloniaTranslationUtils.RemoveAvaloniaMnemonics(text) : text;
+                    string measuredCaption = OperatingSystem.IsWindows() ? display.Replace("&", "&&", StringComparison.Ordinal) : display;
+                    Size measured = display.Length == 0 ? default
+                        : WinFormsTextMeasurer.MeasureTextRenderer(button, measuredCaption);
+                    double imageSize = button.Icon is null ? 0 : ItemImageSize;
+                    _preferredSizes[item] = new Size(Math.Max(StandardButtonWidth, Pixel(measured.Width + imageSize + (2 * ItemBorderSize))),
+                        Pixel(Math.Max(measured.Height, imageSize) + (2 * ItemBorderSize)));
+                }
             }
         }
         finally
@@ -392,22 +537,27 @@ public sealed class NativeToolStrip : Control, IDisposable
         }
 
         Control[] participating = Items.Where(item => item.IsVisible).ToArray();
-        double width = participating.Length == 0 ? DefaultWidth : 0;
+        double width = participating.Length == 0 ? Math.Max(0, DefaultWidth - Padding.Left - Padding.Right) : 0;
         double height = DefaultHeight - Padding.Top - Padding.Bottom;
         foreach (Control item in participating.Where(item => GetItemOverflow(item) != NativeToolStripItemOverflow.Always))
         {
             Size itemSize = _preferredSizes[item];
-            Thickness margin = GetMainMargin(item);
+
+            // GetPreferredSizeHorizontal uses the item's current parent margin. A hosted
+            // ComboBox in the overflow therefore contributes its popup margin even while
+            // that popup is closed; the owner row follows those actual preferred dimensions.
+            Thickness margin = item.Margin;
             width += itemSize.Width + margin.Left + margin.Right;
             height = Math.Max(height, itemSize.Height + margin.Top + margin.Bottom);
         }
 
         width += participating.Any(item => GetItemOverflow(item) == NativeToolStripItemOverflow.Always) ? OverflowWidth : 2;
-        Size preferred = new(width + VisualStyleGripWidth + Padding.Left + Padding.Right,
+        Size preferred = new(width + (GripVisible ? VisualStyleGripWidth : 0) + Padding.Left + Padding.Right,
             Math.Max(0, height) + Padding.Top + Padding.Bottom);
         if (PreferredSize != preferred)
         {
             PreferredSize = preferred;
+            InvalidateArrange();
             PreferredSizeChanged?.Invoke(this, EventArgs.Empty);
         }
 
@@ -420,21 +570,30 @@ public sealed class NativeToolStrip : Control, IDisposable
         double width = Pixel(finalSize.Width);
         double height = Pixel(finalSize.Height);
         bool rightToLeft = FlowDirection == FlowDirection.RightToLeft;
-        Rect display = new(Padding.Left + (rightToLeft ? 0 : VisualStyleGripWidth), Padding.Top,
-            Math.Max(0, width - Padding.Left - Padding.Right - VisualStyleGripWidth),
+        double gripWidth = GripVisible ? VisualStyleGripWidth : 0;
+        Rect display = new(Padding.Left + (rightToLeft ? 0 : gripWidth), Padding.Top,
+            Math.Max(0, width - Padding.Left - Padding.Right - gripWidth),
             Math.Max(0, height - Padding.Top - Padding.Bottom));
         CalculatePlacements(display.Width);
+        bool currentParentMarginChanged = false;
         _measuring = true;
         try
         {
             foreach (Control item in Items)
             {
-                ApplyControlHostMargin(item, GetItemPlacement(item) == NativeToolStripItemPlacement.Overflow);
+                currentParentMarginChanged |= ApplyControlHostMargin(item, GetItemPlacement(item) == NativeToolStripItemPlacement.Overflow);
             }
         }
         finally
         {
             _measuring = false;
+        }
+
+        if (currentParentMarginChanged)
+        {
+            // Closed overflow items have no visual parent to propagate Margin's measure
+            // invalidation. The source owner still recalculates its current preferred size.
+            InvalidateMeasure();
         }
 
         Control[] main = Items.Where(item => item.IsVisible && GetItemPlacement(item) == NativeToolStripItemPlacement.Main).ToArray();
@@ -480,7 +639,8 @@ public sealed class NativeToolStrip : Control, IDisposable
 
         if (change.Property == FontFamilyProperty || change.Property == FontSizeProperty
             || change.Property == FontStyleProperty || change.Property == FontWeightProperty
-            || change.Property == FlowDirectionProperty || change.Property == PaddingProperty)
+            || change.Property == FlowDirectionProperty || change.Property == PaddingProperty
+            || change.Property == GripVisibleProperty)
         {
             if (change.Property == FontFamilyProperty || change.Property == FontSizeProperty
                 || change.Property == FontStyleProperty || change.Property == FontWeightProperty)
@@ -500,6 +660,7 @@ public sealed class NativeToolStrip : Control, IDisposable
             }
 
             InvalidateMeasure();
+            InvalidateArrange();
         }
     }
 
@@ -512,6 +673,17 @@ public sealed class NativeToolStrip : Control, IDisposable
     internal Size GetItemPreferredSize(Control item) => _preferredSizes.GetValueOrDefault(item);
 
     private static double Pixel(double value) => Math.Max(0, Math.Ceiling(value));
+
+    private static void ToolTipPointerPressed(ToolTip tip, PointerPressedEventArgs e)
+    {
+        if (e.GetCurrentPoint(tip).Properties.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed
+            && tip.GetLogicalAncestors().OfType<NativeToolStrip>().FirstOrDefault() is { IsOverflowOpen: true } strip)
+        {
+            // A native hint-covered press dismisses both menus without invoking the
+            // obscured command. Keep the actual hint hit and its event untouched.
+            strip.CloseOverflow();
+        }
+    }
 
     private void AttachOverflowButton(Button button)
     {
@@ -588,6 +760,7 @@ public sealed class NativeToolStrip : Control, IDisposable
         }
 
         InvalidateMeasure();
+        InvalidateArrange();
     }
 
     private void DetachItem(Control item)
@@ -601,6 +774,7 @@ public sealed class NativeToolStrip : Control, IDisposable
         _preferredSizes.Remove(item);
         _placements.Remove(item);
         _pendingControlHostMargins.Remove(item);
+        _toolTipHover.Remove(item);
         ReleaseAutoSize(item);
         ReleaseControlHostMargin(item);
     }
@@ -619,6 +793,13 @@ public sealed class NativeToolStrip : Control, IDisposable
             item.SetValue(VerticalAlignmentProperty, Avalonia.Layout.VerticalAlignment.Stretch, BindingPriority.StyleTrigger),
             item.SetValue(HorizontalAlignmentProperty, Avalonia.Layout.HorizontalAlignment.Stretch, BindingPriority.StyleTrigger),
         ];
+        if (item is NativeToolStripSplitButton or IconDropDownButton)
+        {
+            // ToolStripEx disables its HWND redraw during DropDownOpening. Retain the
+            // owner's pre-opening state paint, without introducing a bitmap snapshot.
+            values.Add(item.SetValue(FreezeDropDownOwnerPaintProperty, true, BindingPriority.StyleTrigger));
+        }
+
         if (item is TemplatedControl control)
         {
             // The source item inherits ToolStrip.Font, not the application's generic
@@ -645,45 +826,70 @@ public sealed class NativeToolStrip : Control, IDisposable
         }
     }
 
-    private void ApplyControlHostMargin(Control item, bool overflow)
+    private bool ApplyControlHostMargin(Control item, bool overflow)
     {
         if (!GetItemIsControlHost(item))
         {
-            return;
+            return false;
         }
 
         if (!_controlHostMarginValues.TryGetValue(item, out (bool Overflow, IDisposable? Value) current))
         {
             current = (false, item.SetValue(MarginProperty, ControlHostMainMargin, BindingPriority.StyleTrigger));
-            _controlHostMainMargins[item] = item.Margin;
             _controlHostMarginValues[item] = current;
         }
 
         if (current.Overflow == overflow)
         {
-            return;
+            return false;
         }
 
-        // Source CurrentParent changes even before the overflow is shown. Keep its
-        // public margin current without feeding that popup margin back into owner sizing.
+        // Source CurrentParent changes even before the overflow is shown. Its public
+        // margin also contributes to the owner's next preferred-size measurement.
+        Thickness previousMargin = item.Margin;
         current.Value?.Dispose();
         _controlHostMarginValues[item] = (overflow,
             item.SetValue(MarginProperty, overflow ? ControlHostOverflowMargin : ControlHostMainMargin, BindingPriority.StyleTrigger));
+        return previousMargin != item.Margin;
     }
 
     private void ReleaseControlHostMargin(Control item)
     {
-        _controlHostMainMargins.Remove(item);
         if (_controlHostMarginValues.Remove(item, out (bool Overflow, IDisposable? Value) current))
         {
             current.Value?.Dispose();
         }
     }
 
-    private Thickness GetMainMargin(Control item) => _controlHostMainMargins.GetValueOrDefault(item, item.Margin);
-
     private void Item_PropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
     {
+        if (sender is Control owner && (owner is NativeToolStripSplitButton or IconDropDownButton))
+        {
+            if (e.Property == IsPointerOverProperty)
+            {
+                if (owner.IsPointerOver)
+                {
+                    _toolTipHover[owner] = new ToolTipHoverState(Stopwatch.GetTimestamp());
+                }
+                else
+                {
+                    _toolTipHover.Remove(owner);
+                }
+            }
+            else if (e.Property == Avalonia.Controls.ToolTip.IsOpenProperty && owner.IsPointerOver && Avalonia.Controls.ToolTip.GetIsOpen(owner))
+            {
+                if (!_toolTipHover.TryGetValue(owner, out ToolTipHoverState? hover))
+                {
+                    hover = new ToolTipHoverState(Stopwatch.GetTimestamp());
+                    _toolTipHover.Add(owner, hover);
+                }
+
+                // Native ToolStrip retains its active tooltip item until mouse leave,
+                // including after the window auto-pops or an explicit Hide request.
+                hover.HasActiveHint = true;
+            }
+        }
+
         if (_measuring || sender is not Control item || e.Property == BoundsProperty)
         {
             return;
@@ -714,6 +920,7 @@ public sealed class NativeToolStrip : Control, IDisposable
         if (e.Property != IsPointerOverProperty && e.Property != IsFocusedProperty)
         {
             InvalidateMeasure();
+            InvalidateArrange();
         }
     }
 
@@ -845,8 +1052,15 @@ public sealed class NativeToolStrip : Control, IDisposable
 
     private double ItemWidth(Control item)
     {
-        Thickness margin = GetMainMargin(item);
+        Thickness margin = item.Margin;
         return _preferredSizes[item].Width + margin.Left + margin.Right;
+    }
+
+    private sealed class ToolTipHoverState(long enteredAt)
+    {
+        internal long EnteredAt { get; } = enteredAt;
+
+        internal bool HasActiveHint { get; set; }
     }
 }
 
@@ -930,7 +1144,16 @@ internal class NativeToolStripPresenter : Control
         _bounds.Remove(item);
     }
 
-    public void SetBounds(Control item, Rect bounds) => _bounds[item] = bounds;
+    public void SetBounds(Control item, Rect bounds)
+    {
+        if (!_bounds.TryGetValue(item, out Rect previous) || previous != bounds)
+        {
+            _bounds[item] = bounds;
+
+            // Item rectangles can change while this presenter's own arranged size stays unchanged.
+            InvalidateArrange();
+        }
+    }
 
     protected override Size MeasureOverride(Size availableSize) => default;
 

@@ -1,4 +1,4 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 
 namespace GitExtensions.ParityInventory;
 
@@ -169,7 +169,7 @@ internal sealed record CommentAdaptation
     public required string TwinText { get; init; }
 }
 
-// parity-scaffolding: Records one source fact represented by framework-generated AXAML/lifecycle code.
+// parity-scaffolding: Retains exact reviewed source differences, including accepted absent or relocated comments.
 internal sealed record AcceptedFrameworkDeviation
 {
     public required string Category { get; init; }
@@ -189,6 +189,21 @@ internal sealed record AcceptedFrameworkDeviation
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? TwinValue { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Reason { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TargetMember { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TargetText { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TargetTypeName { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? TargetCommentOrder { get; init; }
 }
 
 // parity-scaffolding: Carries both parity gaps and legitimate comment adaptations.
@@ -222,6 +237,9 @@ internal sealed record InventorySummary
 // parity-scaffolding: Describes one concrete functional gap between original and twin.
 internal sealed record FunctionalFinding
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TwinPart { get; init; }
+
     public required string Category { get; init; }
 
     public required string Code { get; init; }

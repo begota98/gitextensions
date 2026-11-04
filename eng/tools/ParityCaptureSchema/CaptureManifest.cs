@@ -1,4 +1,6 @@
-﻿namespace GitExtensions.ParityCapture;
+﻿using System.Text.Json.Serialization;
+
+namespace GitExtensions.ParityCapture;
 
 /// <summary>
 ///  Maps a capture request matrix to its emitted artifacts.
@@ -8,6 +10,24 @@ public sealed record CaptureSetManifest
     public required int SchemaVersion { get; init; }
 
     public required DateTime CreatedAtUtc { get; init; }
+
+    /// <summary>
+    ///  Gets the optional UTC fixture clock, independently of the actual acquisition timestamp.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTime? FixtureNowUtc
+    {
+        get;
+        init
+        {
+            if (value is { Kind: not DateTimeKind.Utc })
+            {
+                throw new InvalidDataException("The capture fixture clock must be UTC.");
+            }
+
+            field = value;
+        }
+    }
 
     public required string ToolVersion { get; init; }
 
@@ -40,4 +60,18 @@ public sealed record CaptureManifestEntry
     public string? ImageFile { get; init; }
 
     public string? TreeFile { get; init; }
+
+    /// <summary>
+    ///  Gets optional live factory-bracket observations, independently of the fixture formatter clock.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CaptureConstructionObservation? ConstructionObservation
+    {
+        get;
+        init
+        {
+            value?.Validate();
+            field = value;
+        }
+    }
 }

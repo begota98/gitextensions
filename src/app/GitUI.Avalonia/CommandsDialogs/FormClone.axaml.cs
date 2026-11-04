@@ -111,6 +111,23 @@ public sealed partial class FormClone : GitExtensionsDialog
 
         base.OnRuntimeLoad(e);
 
+        // The banner always renders two lines of text. Its designer height fits two lines of the
+        // default font only - the Windows "Text size" accessibility setting enlarges the font
+        // without raising the DPI, so the designer values are never scaled and the second line is
+        // cut off. Take the height from the font that is actually in use.
+        double fontHeight = WinFormsTextMeasurer.MeasureSize(Info.FontFamily, Info.FontStyle, Info.FontWeight,
+            Info.FontSize, " ", singleLine: true, useTextRendererPadding: false).Height;
+        Info.Height = Math.Ceiling((fontHeight * 2) + 12);
+
+        // The dialog is resizable in width only; its height is the height the content needs.
+        // Both constraints have to be derived from the laid out content rather than from the
+        // designer values, which assume the default font size.
+        MainPanel.Measure(new Avalonia.Size(Width, double.PositiveInfinity));
+        ControlsPanel.Measure(new Avalonia.Size(Width, double.PositiveInfinity));
+        double preferredHeight = MainPanel.DesiredSize.Height + ControlsPanel.DesiredSize.Height;
+        MinHeight = preferredHeight;
+        MaxHeight = preferredHeight;
+
         IList<Repository> repositoryHistory = ThreadHelper.JoinableTaskFactory.Run(RepositoryHistoryManager.Remotes.LoadRecentHistoryAsync);
         _NO_TRANSLATE_From.ItemsSource = repositoryHistory.Select(repository => repository.Path).ToArray();
 
@@ -215,6 +232,9 @@ public sealed partial class FormClone : GitExtensionsDialog
         LoadSSHKey.IsVisible = OperatingSystem.IsWindows() && GitSshHelpers.IsPlink;
     }
 
+    /// <summary>
+    /// Clean up any resources being used.
+    /// </summary>
     protected override void OnClosed(EventArgs e)
     {
         Cursor = null;

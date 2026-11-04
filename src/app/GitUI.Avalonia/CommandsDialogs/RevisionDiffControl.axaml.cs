@@ -180,6 +180,14 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
 
     internal IScriptOptionsProvider ScriptOptionsProvider => GetScriptOptionsProvider();
 
+    protected override IScriptOptionsProvider GetScriptOptionsProvider()
+    {
+        return new ScriptOptionsProvider(
+            DiffFiles,
+            () => BlameControl.IsVisible ? BlameControl.CurrentFileLine : DiffText.CurrentFileLine,
+            () => BlameControl.IsVisible ? BlameControl.CurrentFileColumn : DiffText.CurrentFileColumn);
+    }
+
     public void ReloadHotkeys()
     {
         LoadHotkeys(HotkeySettingsName);
@@ -188,8 +196,6 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
     }
 
     public void LoadCustomDifftools() => DiffFiles.LoadCustomDifftools();
-
-    public void CancelLoadCustomDifftools() => DiffFiles.CancelLoadCustomDifftools();
 
     public bool ExecuteCommand(Command cmd)
         => ExecuteCommand((int)cmd);
@@ -254,23 +260,7 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
         }
     }
 
-    public override bool ProcessHotkey(Keys keyData)
-    {
-        // The Avalonia file list owns the shared BrowseDiff hotkey table.
-        return DiffFiles.ProcessHotkey(keyData)
-            || base.ProcessHotkey(keyData)
-            || (!ResourceManager.GitExtensionsControl.IsTextEditKey(keyData)
-                && ((DiffText.IsEffectivelyVisible && DiffText.ProcessHotkey(keyData))
-                    || (BlameControl.IsEffectivelyVisible && BlameControl.ProcessHotkey(keyData))));
-    }
-
-    protected override IScriptOptionsProvider GetScriptOptionsProvider()
-    {
-        return new ScriptOptionsProvider(
-            DiffFiles,
-            () => BlameControl.IsVisible ? BlameControl.CurrentFileLine : DiffText.CurrentFileLine,
-            () => BlameControl.IsVisible ? BlameControl.CurrentFileColumn : DiffText.CurrentFileColumn);
-    }
+    public void CancelLoadCustomDifftools() => DiffFiles.CancelLoadCustomDifftools();
 
     public void DisplayDiffTab(IReadOnlyList<GitRevision> revisions)
     {
@@ -279,12 +269,61 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
         {
             await SetDiffsAsync(revisions);
             await _taskManager.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+            // Select something by default
             if (!DiffFiles.SelectedItems.Any())
             {
                 DiffFiles.SelectFirstVisibleItem();
             }
         });
     }
+
+    /// <summary>
+    ///  Selects the file or folder matching the passed relative path.
+    /// </summary>
+    /// <param name="relativePath">The relative POSIX path to the item or folder.</param>
+    public void SelectFileOrFolder(Action focusView, RelativePath relativePath, int? line = null, bool? requestBlame = null)
+    {
+        if (requestBlame.HasValue)
+        {
+            _showBlame = requestBlame.Value;
+            DiffFiles.tsmiBlame.IsChecked = _showBlame;
+        }
+
+        bool found = DiffFiles.SelectFileOrFolder(relativePath, notify: false);
+        _lastExplicitlySelectedItem = relativePath;
+        _lastExplicitlySelectedItemLine = line;
+
+        // Switch to view (and load file tree if not already done)
+        focusView();
+        if (found)
+        {
+            ShowSelectedFile(line: line);
+            _lastExplicitlySelectedItemLine = null;
+        }
+    }
+
+    /// <summary>
+    /// Gets or sets the file in the list to select initially.
+    /// When switching commits, the last selected file is "followed" if available in the new commit,
+    /// this file is used as a fallback.
+    /// </summary>
+    public RelativePath? FallbackFollowedFile
+    {
+        get => _fallbackFollowedFile;
+        set
+        {
+            _fallbackFollowedFile = value;
+            _lastExplicitlySelectedItem = null;
+            _lastExplicitlySelectedItemLine = null;
+        }
+    }
+
+    /// <summary>
+    ///  Gets whether this control is showing the file tree in contrast to showing diffs.
+    /// </summary>
+    // The RevisionDiff has a companion RevisionFileTree, but the latter has none.
+    private bool IsFileTreeMode => _revisionFileTree is null;
 
     private async Task SetDiffsAsync(IReadOnlyList<GitRevision> revisions)
     {
@@ -346,7 +385,9 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
             DiffFiles.SetDiffs(groups, IsFileTreeMode);
             DisplayedRevision = revisions[0];
 
-            // First try the last item explicitly selected.
+            // Warning: Do not directly *show* a file here by means of "notify: false" and ShowSelectedFile()!
+            // Reason: There is a pending throttled SelectedIndexChanged notification (from clearing the selection in SetDiffsAsync) which will update a second time and can discard the line number.
+            // First try the last item explicitly selected
             if (_lastExplicitlySelectedItem is not null
                 && DiffFiles.SelectFileOrFolder(_lastExplicitlySelectedItem, firstGroupOnly: true, notify: true))
             {
@@ -355,14 +396,14 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
                 return;
             }
 
-            // Second go back to the filtered file.
+            // Second go back to the filtered file
             if (FallbackFollowedFile is not null
                 && DiffFiles.SelectFileOrFolder(FallbackFollowedFile, firstGroupOnly: true, notify: true))
             {
                 return;
             }
 
-            // Third try to restore the previous item.
+            // Third try to restore the previous item
             if (_prevDiffItem is not null
                 && DiffFiles.SelectFileOrFolder(_prevDiffItem, firstGroupOnly: true, notify: true))
             {
@@ -373,49 +414,11 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
         {
             _taskManager.FileAndForget(async () =>
             {
-                // Selection notifications are throttled; retain the implicit marker until they drain.
+                // DiffFiles_SelectedIndexChanged is called asynchronously with throttling. _isImplicitListSelection must not be reset before.
                 await Task.Delay(FileStatusList.SelectedIndexChangeThrottleDuration + TimeSpan.FromSeconds(1), cancellationToken);
                 await _taskManager.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
                 _isImplicitListSelection = false;
             });
-        }
-    }
-
-    /// <summary>
-    /// Selects a repository file or folder and then focuses this view.
-    /// </summary>
-    public void SelectFileOrFolder(Action focusView, RelativePath relativePath, int? line = null, bool? requestBlame = null)
-    {
-        if (requestBlame.HasValue)
-        {
-            _showBlame = requestBlame.Value;
-            DiffFiles.tsmiBlame.IsChecked = _showBlame;
-        }
-
-        bool found = DiffFiles.SelectFileOrFolder(relativePath, notify: false);
-        _lastExplicitlySelectedItem = relativePath;
-        _lastExplicitlySelectedItemLine = line;
-
-        // Switch to view (and load file tree if not already done)
-        focusView();
-        if (found)
-        {
-            ShowSelectedFile(line: line);
-            _lastExplicitlySelectedItemLine = null;
-        }
-    }
-
-    /// <summary>
-    /// Gets or sets the file selected when the previously followed file is unavailable.
-    /// </summary>
-    public RelativePath? FallbackFollowedFile
-    {
-        get => _fallbackFollowedFile;
-        set
-        {
-            _fallbackFollowedFile = value;
-            _lastExplicitlySelectedItem = null;
-            _lastExplicitlySelectedItemLine = null;
         }
     }
 
@@ -436,12 +439,6 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
         BlameControl.CancelBackgroundTasks();
         _taskManager.JoinPendingOperations();
     }
-
-    /// <summary>
-    ///  Gets whether this control is showing the file tree in contrast to showing diffs.
-    /// </summary>
-    // The RevisionDiff has a companion RevisionFileTree, but the latter has none.
-    private bool IsFileTreeMode => _revisionFileTree is null;
 
     public void Bind(
         IRevisionGridInfo revisionGridInfo,
@@ -557,7 +554,7 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
         BlameControl.IsVisible = true;
         DiffText.IsVisible = false;
 
-        // Avoid that focus is switched to the file filter after changing visibility.
+        // Avoid that focus is switched to the file filter after changing visibility
         if (ensureNoSwitchToFilter && (DiffFiles.FilterFilesByNameRegexFocused || DiffFiles.FindInCommitFilesGitGrepFocused))
         {
             BlameControl.Focus();
@@ -579,8 +576,8 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
     }
 
     /// <summary>
-    /// Show selected item as a file diff.
-    /// Activate diffviewer if Blame is visible.
+    /// Show selected item as a file diff
+    /// Activate diffviewer if Blame is visible
     /// </summary>
     /// <returns>a task</returns>
     private async Task ShowSelectedFileDiffAsync(bool ensureNoSwitchToFilter, int? line)
@@ -588,7 +585,7 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
         BlameControl.IsVisible = false;
         DiffText.IsVisible = true;
 
-        // Avoid that focus is switched to the file filter after changing visibility.
+        // Avoid that focus is switched to the file filter after changing visibility
         if (ensureNoSwitchToFilter && (DiffFiles.FilterFilesByNameRegexFocused || DiffFiles.FindInCommitFilesGitGrepFocused))
         {
             DiffText.FocusViewer();
@@ -611,7 +608,7 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
     }
 
     /// <summary>
-    /// Show selected item as diff or blame.
+    /// Show selected item as diff or blame
     /// </summary>
     private void ShowSelectedFile(bool ensureNoSwitchToFilter = false, int? line = null)
     {
@@ -682,8 +679,8 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
             DiffFiles.tsmiBlame.IsChecked = false;
         }
 
-        // If this is not occurring after a revision change (implicit selection),
-        // save the selected item so it can be the preferred selection.
+        // If this is not occurring after a revision change (implicit selection)
+        // save the selected item so it can be the "preferred" selection
         if (!_isImplicitListSelection)
         {
             _lastExplicitlySelectedItem = DiffFiles.SelectedFolder
@@ -748,7 +745,7 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
             return;
         }
 
-        if (IsFileTreeMode || AppSettings.UseDiffViewerForBlame.Value)
+        if (IsFileTreeMode || AppSettings.UseDiffViewerForBlame)
         {
             int line = BlameControl.IsVisible ? BlameControl.CurrentFileLine : DiffText.CurrentFileLine;
             _showBlame = !_showBlame;
@@ -803,6 +800,20 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
         {
             DiffFiles.Focus();
         }
+    }
+
+    public override bool ProcessHotkey(Keys keyData)
+    {
+        // The Avalonia file list owns the shared BrowseDiff hotkey table.
+        return DiffFiles.ProcessHotkey(keyData)
+
+            // generic handling of this controls's hotkeys (upstream)
+            || base.ProcessHotkey(keyData)
+
+            // downstream (without keys for quick search and filter)
+            || (!ResourceManager.GitExtensionsControl.IsTextEditKey(keyData)
+                && ((DiffText.IsEffectivelyVisible && DiffText.ProcessHotkey(keyData))
+                    || (BlameControl.IsEffectivelyVisible && BlameControl.ProcessHotkey(keyData))));
     }
 
     internal void RegisterGitHostingPluginInBlameControl()

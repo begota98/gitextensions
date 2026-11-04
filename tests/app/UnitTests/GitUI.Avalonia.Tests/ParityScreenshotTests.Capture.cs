@@ -38,6 +38,7 @@ using GitUI.SpellChecker;
 using GitUI.UserControls;
 using GitUIPluginInterfaces;
 using Microsoft.VisualStudio.Threading;
+using PortableDateColumnProvider = GitUI.UserControls.RevisionGrid.Columns.DateColumnProvider;
 using WinFormsFont = GitExtensions.Shims.WinForms.Font;
 
 namespace GitExtensionsTests;
@@ -780,6 +781,70 @@ public sealed partial class ParityScreenshotTests
 
     [AvaloniaTest]
     [Category(P02Category)]
+    [TestCase(false)]
+    [TestCase(true)]
+    public void Avalonia_state_driver_should_allow_actual_DropDown_population_and_restore_genuinely_empty_popups(bool populateOnOpening)
+    {
+        ComboBox comboBox = new() { Name = "cbxLazy", Width = 220 };
+        Window window = new() { Width = 320, Height = 180, Content = comboBox };
+        int openingCount = 0;
+        comboBox.DropDownOpened += (_, _) =>
+        {
+            openingCount++;
+            if (populateOnOpening)
+            {
+                comboBox.ItemsSource = new[] { "feature/filter", "main" };
+            }
+        };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            comboBox.ItemCount.Should().Be(0);
+            comboBox.IsDropDownOpen.Should().BeFalse();
+            CaptureStatePlan state = new()
+            {
+                Id = "lazy-combo.open",
+                Kind = CaptureStateKind.MenuOpen,
+                TargetField = comboBox.Name,
+            };
+            if (populateOnOpening)
+            {
+                using (AvaloniaControlStateDriver driver = AvaloniaControlStateDriver.Apply(window, state))
+                {
+                    comboBox.IsDropDownOpen.Should().BeTrue();
+                    comboBox.Items.Cast<string>().Should().Equal("feature/filter", "main");
+                    Control popupRoot = driver.PopupSurfaceRoots.Should().ContainSingle().Subject;
+                    popupRoot.IsEffectivelyVisible.Should().BeTrue();
+                    popupRoot.Bounds.Width.Should().BeGreaterThan(0);
+                    popupRoot.Bounds.Height.Should().BeGreaterThan(0);
+                    using WriteableBitmap? frame = window.CaptureRenderedFrame();
+                    frame.Should().NotBeNull();
+                }
+
+                comboBox.IsDropDownOpen.Should().BeFalse();
+            }
+            else
+            {
+                Action capture = () => AvaloniaControlStateDriver.Apply(window, state);
+                capture.Should().Throw<AvaloniaCaptureStateUnsupportedException>()
+                    .WithMessage("*remained unpopulated after opening*");
+                comboBox.ItemCount.Should().Be(0);
+                comboBox.IsDropDownOpen.Should().BeFalse();
+            }
+
+            openingCount.Should().Be(1,
+                "the driver must observe the real DropDownOpened event before deciding whether a lazy list is supported");
+        }
+        finally
+        {
+            comboBox.IsDropDownOpen = false;
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    [Category(P02Category)]
     public void Avalonia_state_driver_should_preserve_the_reference_context_menu_capture_point()
     {
         ContextMenuCaptureHost host = new();
@@ -1248,10 +1313,6 @@ public sealed partial class ParityScreenshotTests
         ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
         GitExtensions.Shims.WinForms.ShimHost.MessageBoxHost = new StubMessageBoxHost();
         GitExtensions.Shims.WinForms.ShimHost.Clipboard = new CaptureClipboard();
-        // parity-scaffolding: The application entry point normally creates the aggregate MEF
-        // catalog before FormBrowse opens. The capture host is the entry point here, so create
-        // the same empty base catalog before the form starts its background plugin scan.
-        ManagedExtensibility.Initialise();
 
         CapturePlan plan = CapturePlan.Load(GetCapturePlanPath());
         string? viewFilter = Environment.GetEnvironmentVariable(CaptureViewEnvironmentVariable);
@@ -1313,6 +1374,7 @@ public sealed partial class ParityScreenshotTests
                                 theme,
                                 scalePercent,
                                 state,
+                                plan.FixtureNowUtc,
                                 outputDirectory));
                         }
                     }
@@ -1328,6 +1390,7 @@ public sealed partial class ParityScreenshotTests
         {
             SchemaVersion = CaptureDocument.CurrentSchemaVersion,
             CreatedAtUtc = DateTime.UtcNow,
+            FixtureNowUtc = plan.FixtureNowUtc,
             ToolVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0",
             Repository = context.WorkingDirectory,
             Captures = entries
@@ -1353,9 +1416,47 @@ public sealed partial class ParityScreenshotTests
         CaptureThemePlan theme,
         int scalePercent,
         CaptureStatePlan state,
+        DateTime? fixtureNowUtc,
         string outputRoot)
     {
-        Control view = CreateView(context, descriptor.ViewType, state);
+        // parity-scaffolding: A factory-attempt bracket does not intercept the constructor's private clock.
+        CaptureConstructionClockSample beforeFactory = SampleConstructionClock();
+        Control view;
+        try
+        {
+            view = CreateView(context, descriptor.ViewType, state);
+        }
+        catch (Exception exception)
+        {
+            CaptureConstructionClockSample afterAttempt = SampleConstructionClock();
+            CaptureConstructionObservation failedConstructionObservation = CaptureConstructionClock.Create(
+                beforeFactory, afterAttempt, [], []);
+            if (exception is AvaloniaCaptureStateUnsupportedException)
+            {
+                return Unsupported(component.TypeName, theme.Id, scalePercent, state.Id, exception.Message)
+                    with { ConstructionObservation = failedConstructionObservation };
+            }
+
+            return new CaptureManifestEntry
+            {
+                ComponentType = component.TypeName,
+                ThemeId = theme.Id,
+                ScalePercent = scalePercent,
+                State = state.Id,
+                Status = CaptureStateStatus.Failed,
+                Note = exception.ToString(),
+                DpiMode = CaptureDpiMode.HeadlessRenderScale,
+                CaptureMethod = CaptureMethod.Unsupported,
+                ConstructionObservation = failedConstructionObservation,
+                ImageFile = null,
+                TreeFile = null,
+            };
+        }
+
+        CaptureConstructionClockSample afterFactory = SampleConstructionClock();
+        IReadOnlyList<CaptureConstructionDateColumn> afterFactoryDateColumns = ReadConstructionDateColumns(view);
+        CaptureConstructionObservation constructionObservation = CaptureConstructionClock.Create(
+            beforeFactory, afterFactory, afterFactoryDateColumns, []);
         Control captureHost = view;
         bool cropToComponent = false;
         bool captureSourceClient = view is Dashboard;
@@ -1406,6 +1507,10 @@ public sealed partial class ParityScreenshotTests
 
         try
         {
+            // Install the declared input before preparation or Show can settle the first
+            // queued revision header. Keep acquisition inside the window-close lifetime.
+            using CaptureFixtureClock fixtureClock = CaptureFixtureClock.Apply(
+                new[] { view }.Concat(view.GetLogicalDescendants().OfType<Control>()), fixtureNowUtc);
             await PrepareViewAsync(captureHost, context);
             window.Show();
             // parity-scaffolding: The real application activates FormBrowse before its async
@@ -1617,6 +1722,8 @@ public sealed partial class ParityScreenshotTests
             // unobscured primary and popup pixels separately, then compose them at the state
             // driver's requested screen bounds without scaling either bitmap.
             bool separateOverlaySurfaces = ReferenceEquals(view, window) && popupSurfaceRoots.Length > 0;
+            constructionObservation = CaptureConstructionClock.Create(
+                beforeFactory, afterFactory, afterFactoryDateColumns, ReadConstructionDateColumns(view));
             using WriteableBitmap primaryFrame = separateOverlaySurfaces
                 ? CaptureWithoutOverlaySurfaces(window, popupSurfaceRoots)
                 : CaptureRenderedFrame(window);
@@ -1724,7 +1831,7 @@ public sealed partial class ParityScreenshotTests
                     image.Save(stream, PngBitmapEncoderOptions.Default);
                 }
 
-                AvaloniaControlTreeReader reader = new(view, renderScale, primarySurfaceBounds.Position);
+                AvaloniaControlTreeReader reader = new(view, renderScale, primarySurfaceBounds.Position, driver.PopupFocusOwner);
                 List<CaptureSurface> surfaces = capturedFrames
                     .Select((capturedFrame, index) => reader.ReadSurface(
                         capturedFrame.TreeRoot,
@@ -1759,6 +1866,7 @@ public sealed partial class ParityScreenshotTests
                     Note = null,
                     DpiMode = CaptureDpiMode.HeadlessRenderScale,
                     CaptureMethod = captureMethod,
+                    ConstructionObservation = constructionObservation,
                     ImageFile = Path.GetRelativePath(outputRoot, imagePath).Replace('\\', '/'),
                     TreeFile = Path.GetRelativePath(outputRoot, treePath).Replace('\\', '/')
                 };
@@ -1778,7 +1886,8 @@ public sealed partial class ParityScreenshotTests
         }
         catch (AvaloniaCaptureStateUnsupportedException exception)
         {
-            return Unsupported(component.TypeName, theme.Id, scalePercent, state.Id, exception.Message);
+            return Unsupported(component.TypeName, theme.Id, scalePercent, state.Id, exception.Message)
+                with { ConstructionObservation = constructionObservation };
         }
         catch (Exception exception)
         {
@@ -1792,6 +1901,7 @@ public sealed partial class ParityScreenshotTests
                 Note = exception.ToString(),
                 DpiMode = CaptureDpiMode.HeadlessRenderScale,
                 CaptureMethod = CaptureMethod.Unsupported,
+                ConstructionObservation = constructionObservation,
                 ImageFile = null,
                 TreeFile = null
             };
@@ -1808,6 +1918,74 @@ public sealed partial class ParityScreenshotTests
 
             Dispatcher.UIThread.RunJobs();
         }
+    }
+
+    internal static CaptureConstructionClockSample SampleConstructionClock()
+    {
+        // parity-scaffolding: Retain configured source inputs without replacing any production clock or font.
+        WinFormsFont font = AppSettings.Font;
+        return CaptureConstructionClock.Sample(new CaptureConstructionFont
+        {
+            Family = font.Name,
+            SizePoints = font.Size,
+            Bold = font.Bold,
+            Italic = font.Italic,
+            Underline = font.Style.HasFlag(GitExtensions.Shims.WinForms.FontStyle.Underline),
+            Strikeout = font.Style.HasFlag(GitExtensions.Shims.WinForms.FontStyle.Strikeout),
+        }, AppSettings.RelativeDate);
+    }
+
+    internal static IReadOnlyList<CaptureConstructionDateColumn> ReadConstructionDateColumns(Control root)
+        // parity-scaffolding: Observe capture-owned actual widths without converting or reassigning them.
+        => new[] { root }.Concat(root.GetLogicalDescendants().OfType<Control>())
+            .OfType<RevisionGridControl>()
+            .SelectMany(grid => grid.ColumnProviders.OfType<PortableDateColumnProvider>().Select(provider =>
+            {
+                if (!provider.Column.Width.IsAbsolute)
+                {
+                    throw new InvalidOperationException("The captured Date column must retain an absolute source width.");
+                }
+
+                double renderScale = TopLevel.GetTopLevel(grid)?.RenderScaling ?? 1;
+                int dpi = checked((int)Math.Round(96 * renderScale, MidpointRounding.AwayFromZero));
+                return new CaptureConstructionDateColumn
+                {
+                    Owner = ReferenceEquals(root, grid)
+                        ? "$"
+                        : !string.IsNullOrWhiteSpace(grid.Name) ? grid.Name : grid.GetType().FullName ?? grid.GetType().Name,
+                    Provider = provider.GetType().FullName ?? provider.GetType().Name,
+                    ColumnIndex = provider.Index,
+                    Width = provider.Column.Width.Value,
+                    Unit = CaptureConstructionWidthUnit.DeviceIndependentPixel,
+                    Dpi = new CaptureDpi { X = dpi, Y = dpi },
+                    RenderScale = renderScale,
+                };
+            })).ToArray();
+
+    internal static async Task<CaptureSetManifest> CaptureConstructionProbeAsync(
+        CaptureStatePlan state, DateTime fixtureNowUtc, string outputRoot, Type? viewType = null)
+    {
+        // parity-scaffolding: Exercise the actual capture consumer without opening the all-view matrix.
+        using CaptureContext context = new();
+        ViewDescriptor descriptor = viewType is null
+            ? GetViewDescriptors().Single(view => view.ViewType == typeof(RevisionGridControl))
+            : new ViewDescriptor("ConstructionProbe.axaml", "ConstructionProbe", viewType.FullName!, viewType);
+        CaptureComponentPlan component = new() { TypeName = descriptor.ClassName, States = [state] };
+        CaptureThemePlan theme = new() { Id = "light", Kind = "builtin", File = "invariant.css", IsBuiltin = true };
+        CaptureManifestEntry entry = await CapturePlannedStateAsync(
+            context, descriptor, component, theme, scalePercent: 100, state, fixtureNowUtc, outputRoot);
+        CaptureSetManifest manifest = new()
+        {
+            SchemaVersion = CaptureDocument.CurrentSchemaVersion,
+            CreatedAtUtc = DateTime.UtcNow,
+            FixtureNowUtc = fixtureNowUtc,
+            ToolVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0",
+            Repository = context.WorkingDirectory,
+            Captures = [entry],
+        };
+        Directory.CreateDirectory(outputRoot);
+        File.WriteAllText(Path.Combine(outputRoot, "manifest.json"), SerializeManifest(manifest));
+        return manifest;
     }
 
     private static Control? GetStandaloneDefaultFocusedControl(Control view)

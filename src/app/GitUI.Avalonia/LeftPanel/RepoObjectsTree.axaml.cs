@@ -222,6 +222,8 @@ public sealed partial class RepoObjectsTree : GitModuleControl
         }
     }
 
+    // Avalonia's Ctrl-click toggles its caret even in single-selection mode. Native
+    // TreeView keeps that caret independent of the source's underlined logical flags.
     public RepoObjectsTree()
     {
         InitializeComponent();
@@ -242,8 +244,6 @@ public sealed partial class RepoObjectsTree : GitModuleControl
         _explorerNavigationDecorator = new NativeTreeViewExplorerNavigationDecorator(treeMain);
         _explorerNavigationDecorator.AfterSelect += OnNodeSelected;
 
-        // Avalonia's Ctrl-click toggles its caret even in single-selection mode. Native
-        // TreeView keeps that caret independent of the source's underlined logical flags.
         treeMain.AddHandler(InputElement.PointerPressedEvent, OnNodeClick, RoutingStrategies.Tunnel, handledEventsToo: true);
         treeMain.AddHandler(InputElement.DoubleTappedEvent, OnNodeDoubleClick, RoutingStrategies.Bubble, handledEventsToo: true);
         menuMain.Opening += contextMenu_Opening;
@@ -418,8 +418,9 @@ public sealed partial class RepoObjectsTree : GitModuleControl
             _currentWorkingDirectory);
     }
 
+    // Native tree state uses the stable node name/path, not its changing branch/status text.
     internal static string GetNodeIdentity(NodeBase node)
-        => $"{node.GetType().Name}:{node.SearchText}";
+        => $"{node.GetType().Name}:{(node is SubmoduleNode submodule ? submodule.Info.Path : node.SearchText)}";
 
     internal TreeSelectionState CaptureSelectionState(NodeBase root)
     {
@@ -468,6 +469,9 @@ public sealed partial class RepoObjectsTree : GitModuleControl
                 },
                 new NativeTreeTextBlock
                 {
+                    // Live Nodes.FillTreeViewNode updates cache the styled HFONT extent;
+                    // the pre-show native item cache is a separate ambient-font route.
+                    UsesNodeFontForMeasurement = isBold || isItalic,
                     UsesAmbientFont = !isBold && !isItalic,
                     FontFamily = new FontFamily(AppSettings.Font.Name),
                     FontSize = AvaloniaFontSettings.ToDeviceIndependentPixels(AppSettings.Font.Size),
@@ -908,8 +912,20 @@ public sealed partial class RepoObjectsTree : GitModuleControl
             case RepoAction.ResetSubmodule: _submoduleTree.ResetSubmodule(this, (SubmoduleNode)SelectedNode!); break;
             case RepoAction.StashSubmodule: _submoduleTree.StashSubmodule(this, (SubmoduleNode)SelectedNode!); break;
             case RepoAction.CommitSubmodule: _submoduleTree.CommitSubmodule(this, (SubmoduleNode)SelectedNode!); break;
-            case RepoAction.Collapse: SetExpanded(SelectedNode!.TreeViewNode, expanded: false, recursive: true); break;
-            case RepoAction.Expand: SetExpanded(SelectedNode!.TreeViewNode, expanded: true, recursive: true); break;
+            case RepoAction.Collapse:
+                foreach (NodeBase node in GetSelectedNodes().HavingChildren().Collapsible())
+                {
+                    SetExpanded(node.TreeViewNode, expanded: false, recursive: true);
+                }
+
+                break;
+            case RepoAction.Expand:
+                foreach (NodeBase node in GetSelectedNodes().HavingChildren().Expandable())
+                {
+                    SetExpanded(node.TreeViewNode, expanded: true, recursive: true);
+                }
+
+                break;
             case RepoAction.MoveUp: ReorderTreeNode(SelectedNode!.TreeViewNode, up: true); break;
             case RepoAction.MoveDown: ReorderTreeNode(SelectedNode!.TreeViewNode, up: false); break;
             default: throw new ArgumentOutOfRangeException(nameof(action));

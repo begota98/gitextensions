@@ -295,8 +295,10 @@ public sealed class VisualParityTests
                 form.toolStripMainHost.Bounds.Height.Should().Be(25);
                 form.toolStripMainHost.Bounds.Width.Should().Be(toolStripMain.PreferredSize.Width);
                 form.toolStripFiltersHost.Bounds.X.Should().Be(form.toolStripMainHost.Bounds.Right);
-                form.toolStripFiltersHost.Bounds.Right.Should().Be(869);
-                form.toolStripFiltersHost.Bounds.Height.Should().Be(27);
+                NativeToolStrip scriptsToolbar = form.FindControl<NativeToolStrip>("ToolStripScripts")!;
+                scriptsToolbar.Bounds.X.Should().Be(form.toolStripFiltersHost.Bounds.Right);
+                scriptsToolbar.Bounds.Right.Should().BeLessThanOrEqualTo(toolPanel.Bounds.Width - 4);
+                form.toolStripFiltersHost.Bounds.Height.Should().Be(toolStripFilters.Strip.PreferredSize.Height);
                 form.toolStripFiltersOverflow.IsVisible.Should().BeTrue();
                 NativeToolStrip filterItems = toolStripFilters.Strip;
                 Control[] originalFilterItems = filterItems.Items.ToArray();
@@ -564,8 +566,9 @@ public sealed class VisualParityTests
                         .Single();
 
                     input.Bounds.Height.Should().Be(23);
-                    input.Bounds.Y.Should().Be(2,
-                        "the running Browse filter owner is27px, centering its fixed23px hosted combo independently of the standalone25px context");
+                    NativeToolStrip owner = input.GetVisualAncestors().OfType<NativeToolStrip>().First();
+                    input.Bounds.Y.Should().Be(Math.Floor((owner.Bounds.Height - input.Bounds.Height) / 2),
+                        "the fixed hosted combo is centered in its actual AutoSize owner row");
                     textViewport.Bounds.Height.Should().BeGreaterThanOrEqualTo(textPresenter.Bounds.Height);
                     Point presenterPosition = textPresenter.TranslatePoint(default, input)!.Value;
                     double topInset = presenterPosition.Y;
@@ -585,7 +588,8 @@ public sealed class VisualParityTests
                     .Where(button => button.IsVisible
                                      && button.Classes.Contains("gitextensions-toolbar-button"))
                     .ToArray();
-                splitButtons.Should().HaveCount(9);
+                splitButtons.Should().HaveCount(10);
+                splitButtons.Select(button => button.Name).Should().Contain("toolStripWorktrees");
                 splitButtons.Select(button => button.Name).Should().Contain(nameof(form.toolStripButtonLevelUp));
                 splitButtons.Select(button => button.Name).Should().Contain(nameof(form.userShell));
                 foreach (SplitButton splitButton in splitButtons)
@@ -600,9 +604,8 @@ public sealed class VisualParityTests
                         .OfType<PathIcon>()
                         .Single();
 
-                    // The live native filter strip grows to 27px around its editors;
-                    // its split items are 24px, unlike the main strip's 22px items.
-                    int itemHeight = splitButton.FindAncestorOfType<FilterToolBar>() is null ? 22 : 24;
+                    NativeToolStrip owner = splitButton.GetVisualAncestors().OfType<NativeToolStrip>().First();
+                    double itemHeight = owner.Bounds.Height - splitButton.Margin.Top - splitButton.Margin.Bottom;
                     splitButton.Bounds.Height.Should().Be(itemHeight);
                     primaryButton.Bounds.Height.Should().Be(itemHeight);
                     if (splitButton is NativeToolStripSplitButton { UseNativeToolStripLayout: true } nativeSplitButton)
@@ -625,7 +628,8 @@ public sealed class VisualParityTests
                     }
 
                     secondaryButton.Bounds.Height.Should().Be(itemHeight);
-                    arrow.Bounds.Size.Should().Be(new Size(7, 5));
+                    arrow.Bounds.Size.Should().Be(splitButton is NativeToolStripSplitButton { UseNativeToolStripLayout: true }
+                        ? new Size(5, 3) : new Size(7, 5));
                 }
 
                 IconSplitButton branchSelect = form.FindControl<IconSplitButton>("branchSelect")!;
@@ -1359,7 +1363,11 @@ public sealed class VisualParityTests
 
             graphCell.Margin.Left.Should().Be(6);
             revisionRow.ColumnDefinitions[0].Width.Value.Should().Be(22);
-            messageCell.Margin.Left.Should().Be(6);
+            messageCell.Margin.Left.Should().Be(0,
+                "the original hit target is the full cell; ColumnLeftMargin offsets its painters only");
+            Panel messageContent = messageCell.Children.OfType<Panel>().Should().ContainSingle().Which;
+            messageContent.Margin.Left.Should().Be(6);
+            messageContent.TranslatePoint(default, messageCell)!.Value.X.Should().Be(6);
             RevisionGridControl.CalculateGraphColumnWidth(visibleLaneCount: 3).Should().Be(54);
         }
         finally
@@ -1573,6 +1581,8 @@ public sealed class VisualParityTests
         ThemeId originalTheme = AppSettings.ThemeId;
         string[] originalThemeVariations = AppSettings.ThemeVariations;
         ThemeVariant? originalVariant = application.RequestedThemeVariant;
+        System.Drawing.Color firstUseGraphNonRelativeColor = RevisionGraphLaneColor.NonRelativeColor;
+        IBrush firstUseGraphNonRelativeBrush = RevisionGraphLaneColor.NonRelativeBrush;
         try
         {
             AppSettings.ThemeVariations = ThemeVariations.None;
@@ -1587,8 +1597,8 @@ public sealed class VisualParityTests
             GetResourceBrushColor(application, "GitExtensionsSelectionBackgroundBrush", ThemeVariant.Light).Should().Be(Color.Parse("#C3C3FF"));
             AssertPublishedThemeColors(application, ThemeVariant.Light);
             AssertDerivedThemeColors(application, ThemeVariant.Light);
-            RevisionGraphLaneColor.NonRelativeColor.ToArgb().Should().Be(
-                System.Drawing.ColorTranslator.FromHtml("#D3D3D3").ToArgb());
+            RevisionGraphLaneColor.NonRelativeColor.Should().Be(firstUseGraphNonRelativeColor);
+            RevisionGraphLaneColor.NonRelativeBrush.Should().BeSameAs(firstUseGraphNonRelativeBrush);
 
             AppSettings.ThemeId = ThemeId.DefaultDark;
             AvaloniaThemeSettings.ApplyAppSettings();
@@ -1605,8 +1615,9 @@ public sealed class VisualParityTests
             GetResourceBrushColor(application, "GitExtensionsSelectionBackgroundBrush", ThemeVariant.Dark).Should().Be(Color.Parse("#00009B"));
             AssertPublishedThemeColors(application, ThemeVariant.Dark);
             AssertDerivedThemeColors(application, ThemeVariant.Dark);
-            RevisionGraphLaneColor.NonRelativeColor.ToArgb().Should().Be(
-                System.Drawing.ColorTranslator.FromHtml("#707070").ToArgb());
+            RevisionGraphLaneColor.NonRelativeColor.Should().Be(firstUseGraphNonRelativeColor,
+                "the source graph palette is cached at first use even when other theme resources reload");
+            RevisionGraphLaneColor.NonRelativeBrush.Should().BeSameAs(firstUseGraphNonRelativeBrush);
 
             AppSettings.ThemeId = ThemeId.WindowsAppColorModeId;
             AvaloniaThemeSettings.ApplyAppSettings();
@@ -1816,16 +1827,28 @@ public sealed class VisualParityTests
             .Should().BeOfType<TranslateTransform>().Subject;
         gestureOffset.X.Should().Be(-10);
         gestureOffset.Y.Should().Be(-1);
-        TranslateTransform chevronOffset = chevron.RenderTransform
-            .Should().BeOfType<TranslateTransform>().Subject;
-        chevronOffset.X.Should().Be(-7);
-        chevronOffset.Y.Should().Be(0);
-        Avalonia.Controls.Shapes.Path arrow = chevron.Should().BeOfType<Avalonia.Controls.Shapes.Path>().Subject;
-        arrow.Width.Should().Be(4);
-        arrow.Height.Should().Be(8);
-        arrow.StrokeThickness.Should().Be(0);
-        arrow.Fill.Should().Be(item.Foreground);
-        arrow.Data!.Bounds.Should().Be(new Rect(0, 0, 4, 8));
+        NativeToolStripMenuArrow arrow = chevron.Should().BeOfType<NativeToolStripMenuArrow>().Subject;
+        arrow.RenderTransform.Should().BeNull();
+        arrow.Width.Should().Be(10);
+        arrow.Margin.Should().Be(new Thickness(0, 1, 8, 1));
+        arrow.IsVisible.Should().Be(item.HasSubMenu);
+        arrow.IsHitTestVisible.Should().BeFalse();
+        arrow.Focusable.Should().BeFalse();
+        if (item.HasSubMenu)
+        {
+            TopLevel root = TopLevel.GetTopLevel(item)
+                ?? throw new AssertionException("The source arrow must belong to the actual open popup.");
+            Point first = item.TranslatePoint(default, root)
+                ?? throw new AssertionException("The menu item must have an actual popup coordinate.");
+            Point last = item.TranslatePoint(new Point(item.Bounds.Width, 0), root)
+                ?? throw new AssertionException("The complete item width must belong to the popup.");
+            double arrowX = item.FlowDirection == FlowDirection.RightToLeft ? 8 : item.Bounds.Width - 18;
+            arrow.TranslatePoint(default, root).Should().Be(new Point(Math.Min(first.X, last.X) + arrowX, first.Y + 1));
+            arrow.Bounds.Size.Should().Be(new Size(10, 20));
+        }
+
+        arrow.Foreground.Should().Be(GetThemeResource<IBrush>(Application.Current!, item.IsEnabled
+            ? "GitExtensionsNativeToolStripArrowBrush" : "GitExtensionsNativeMenuDisabledArrowBrush"));
     }
 
     [AvaloniaTest]
@@ -1876,12 +1899,15 @@ public sealed class VisualParityTests
     private static void AssertRenderedSeparatorPalette(Separator separator)
     {
         Border[] borders = [.. separator.GetVisualDescendants().OfType<Border>()];
-        borders.Should().HaveCount(2);
+        borders.Should().HaveCount(1);
         borders[0].Background.Should().Be(
             GetThemeResource<IBrush>(Application.Current!, "GitExtensionsMenuRenderedBackgroundBrush"));
-        borders[1].Background.Should().Be(
-            GetThemeResource<IBrush>(Application.Current!, "GitExtensionsMenuRenderedBorderBrush"));
-        borders[1].Margin.Should().Be(new Thickness(28, 0, 1, 0));
+        NativeMenuSeparatorChrome chrome = separator.GetVisualDescendants()
+            .OfType<NativeMenuSeparatorChrome>().Should().ContainSingle().Which;
+        chrome.DarkBrush.Should().Be(
+            GetThemeResource<IBrush>(Application.Current!, "GitExtensionsToolStripSeparatorDarkBrush"));
+        chrome.Margin.Should().Be(new Thickness(28, 0, 1, 0));
+        chrome.Bounds.Height.Should().Be(6);
     }
 
     private static void AssertRefLabelRendering(
@@ -2066,7 +2092,7 @@ public sealed class VisualParityTests
                 settings,
                 System.Drawing.KnownColor.HighlightText)));
         GetResourceBrushColor(application, "GitExtensionsToolStripCheckedBackgroundBrush", themeVariant)
-            .Should().Be(Color.Parse(isDark ? "#28445B" : "#CCE8FF"));
+            .Should().Be(settings.UseSystemVisualStyle ? Color.Parse("#CCE8FF") : Color.Parse("#00000000"));
         GetResourceBrushColor(application, "GitExtensionsNativeTabBorderBrush", themeVariant)
             .Should().Be(Color.Parse(isDark ? "#3B3B3B" : "#E5E5E5"));
         GetResourceBrushColor(application, "GitExtensionsBrowseTabUnselectedBackgroundBrush", themeVariant)

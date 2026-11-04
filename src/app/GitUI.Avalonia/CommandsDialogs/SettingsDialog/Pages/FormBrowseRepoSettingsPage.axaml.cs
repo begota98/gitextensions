@@ -33,6 +33,7 @@ public partial class FormBrowseRepoSettingsPage : SettingsPageWithHeader
     public FormBrowseRepoSettingsPage(IServiceProvider serviceProvider)
         : base(serviceProvider)
     {
+        // align 1st columns across all tables
         InitializeComponent();
         cboTerminal.SelectionChanged += cboTerminal_SelectionChangeCommitted;
         cboTerminal.GotFocus += cboTerminal_Enter;
@@ -53,9 +54,6 @@ public partial class FormBrowseRepoSettingsPage : SettingsPageWithHeader
     protected override void OnRuntimeLoad()
     {
         base.OnRuntimeLoad();
-
-        // Avalonia Grid shares the first-column definition across every row in each table.
-        // The two grids use the same Auto-sized label/control vocabulary and need no imperative width adjustment.
     }
 
     protected override void PageToSettings()
@@ -68,7 +66,7 @@ public partial class FormBrowseRepoSettingsPage : SettingsPageWithHeader
         AppSettings.ShowRevisionGridTooltips.Value = chkShowRevisionGridTooltip.Checked;
 
         int outputHistoryDepth = (int)(_NO_TRANSLATE_OutputHistoryDepth.Value ?? 0);
-        bool changed = AppSettings.ShowOutputHistoryAsTab.Value != chkShowOutputHistoryAsTab.Checked || AppSettings.OutputHistoryDepth.Value != outputHistoryDepth;
+        bool changed = AppSettings.ShowOutputHistoryAsTab != chkShowOutputHistoryAsTab.Checked || AppSettings.OutputHistoryDepth != outputHistoryDepth;
         if (changed)
         {
             AppSettings.ShowOutputHistoryAsTab.Value = chkShowOutputHistoryAsTab.Checked;
@@ -83,21 +81,21 @@ public partial class FormBrowseRepoSettingsPage : SettingsPageWithHeader
 
     protected override void SettingsToPage()
     {
-        chkShowConsoleTab.Checked = AppSettings.ShowConEmuTab.Value;
-        chkUseBrowseForFileHistory.Checked = AppSettings.UseBrowseForFileHistory.Value;
-        chkUseDiffViewerForBlame.Checked = AppSettings.UseDiffViewerForBlame.Value;
-        chkShowGpgInformation.Checked = AppSettings.ShowGpgInformation.Value;
-        chkShowFindInCommitFilesGitGrep.Checked = AppSettings.ShowFindInCommitFilesGitGrep.Value;
-        chkShowRevisionGridTooltip.Checked = AppSettings.ShowRevisionGridTooltips.Value;
-        chkShowOutputHistoryAsTab.Checked = AppSettings.ShowOutputHistoryAsTab.Value;
+        chkShowConsoleTab.Checked = AppSettings.ShowConEmuTab;
+        chkUseBrowseForFileHistory.Checked = AppSettings.UseBrowseForFileHistory;
+        chkUseDiffViewerForBlame.Checked = AppSettings.UseDiffViewerForBlame;
+        chkShowGpgInformation.Checked = AppSettings.ShowGpgInformation;
+        chkShowFindInCommitFilesGitGrep.Checked = AppSettings.ShowFindInCommitFilesGitGrep;
+        chkShowRevisionGridTooltip.Checked = AppSettings.ShowRevisionGridTooltips;
+        chkShowOutputHistoryAsTab.Checked = AppSettings.ShowOutputHistoryAsTab;
         _NO_TRANSLATE_OutputHistoryDepth.Value = Math.Clamp(
-            AppSettings.OutputHistoryDepth.Value,
+            AppSettings.OutputHistoryDepth,
             (int)_NO_TRANSLATE_OutputHistoryDepth.Minimum,
             (int)_NO_TRANSLATE_OutputHistoryDepth.Maximum);
 
         cboTerminal.ItemsSource = _shellProvider.GetShells();
         cboTerminal.SelectedItem = _shellProvider.GetShells().FirstOrDefault(shell =>
-            string.Equals(shell.Name, AppSettings.ConEmuTerminal.Value, StringComparison.InvariantCultureIgnoreCase));
+            string.Equals(shell.Name, AppSettings.ConEmuTerminal, StringComparison.InvariantCultureIgnoreCase));
 
         base.SettingsToPage();
     }

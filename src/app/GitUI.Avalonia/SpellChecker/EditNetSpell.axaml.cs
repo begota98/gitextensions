@@ -141,7 +141,7 @@ public partial class EditNetSpell : GitModuleControl, IDisposable
         AutoComplete.ItemTemplate = new FuncDataTemplate<AutoCompleteWord>((word, _) =>
             new TextBlock { Text = word?.Word ?? string.Empty });
 
-        TextBox.TextWrapping = AppSettings.MessageEditorWordWrap.Value
+        TextBox.TextWrapping = AppSettings.MessageEditorWordWrap
             ? TextWrapping.Wrap
             : TextWrapping.NoWrap;
         TextBox.KeyDown += TextBox_KeyDown;
@@ -160,12 +160,6 @@ public partial class EditNetSpell : GitModuleControl, IDisposable
 
         _customUnderlines.TextBox = TextBox;
         InitializeComplete();
-    }
-
-    public override void AddTranslationItems(GitExtensions.Extensibility.Translations.ITranslation translation)
-    {
-        base.AddTranslationItems(translation);
-        translation.AddTranslationItem(nameof(EditNetSpell), nameof(TextBox), "Text", string.Empty);
     }
 
     [AllowNull]

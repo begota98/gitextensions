@@ -4,6 +4,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using GitCommands;
 using GitExtensions.Extensibility.Git;
+using GitUI.Compat;
 using GitUIPluginInterfaces;
 
 namespace GitUI.UserControls.RevisionGrid.Columns;
@@ -15,7 +16,7 @@ internal abstract class ColumnProvider
 {
     public int ColumnLeftMargin { get; } = 6;
 
-    /// <summary>Gets the layout model for this column.</summary>
+    /// <summary>The column object that models this column.</summary>
     public RevisionGridColumn Column { get; }
 
     /// <summary>The display friendly name of this column.</summary>
@@ -57,7 +58,7 @@ internal abstract class ColumnProvider
     public abstract void OnCellPainting(Control control, GitRevision revision);
 
     /// <summary>Formats the textual representation of a cell in this column.</summary>
-    /// <remarks>Implementations update the native text control before the retained-mode paint pass.</remarks>
+    /// <remarks>Implementations may set the control's text to the required string.</remarks>
     public virtual void OnCellFormatting(Control control, GitRevision revision)
     {
     }
@@ -66,21 +67,22 @@ internal abstract class ColumnProvider
     {
     }
 
-    /// <summary>Attempts to get custom tooltip text for this column.</summary>
+    /// <summary>Attempts to get custom tool tip text for a cell in this column.</summary>
+    /// <remarks>Returning <c>false</c> here will not stop a tool tip being automatically displayed for truncated text.</remarks>
     public virtual bool TryGetToolTip(GitRevision revision, [NotNullWhen(returnValue: true)] out string? toolTip)
     {
         toolTip = null;
         return false;
     }
 
-    /// <summary>Attempts to get custom tooltip text for a highlight in a cell in this column.</summary>
-    /// <remarks>Returning <see langword="false"/> does not suppress the tooltip for truncated text.</remarks>
+    /// <summary>Attempts to get custom tool tip text for a highlight in a cell in this column.</summary>
+    /// <remarks>Returning <c>false</c> here will not stop a tool tip being automatically displayed for truncated text.</remarks>
     public virtual bool TryGetToolTip(
         GitRevision revision,
         IGitRef? highlightRef,
         [NotNullWhen(returnValue: true)] out string? toolTip)
     {
-        if (AppSettings.ShowRevisionGridTooltips.Value)
+        if (AppSettings.ShowRevisionGridTooltips)
         {
             return TryGetToolTip(revision, out toolTip);
         }
@@ -89,12 +91,13 @@ internal abstract class ColumnProvider
         return false;
     }
 
+    // TextRenderer.SingleLine retains CR glyph advances without creating paragraphs.
     protected static TextBlock CreateTextBlock(double leftMargin = 0, double opacity = 1)
-        => new()
+        => new WinFormsSingleLineTextBlock()
         {
             TextTrimming = TextTrimming.CharacterEllipsis,
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Avalonia.Thickness(leftMargin, 0, 2, 0),
+            Margin = new Avalonia.Thickness(leftMargin, 0, 0, 0),
             Opacity = opacity,
         };
 
@@ -102,7 +105,7 @@ internal abstract class ColumnProvider
     {
         ToolTip.SetTip(
             control,
-            AppSettings.ShowRevisionGridTooltips.Value
+            AppSettings.ShowRevisionGridTooltips
                 && TryGetToolTip(revision, out string? toolTip)
                     ? toolTip
                     : null);

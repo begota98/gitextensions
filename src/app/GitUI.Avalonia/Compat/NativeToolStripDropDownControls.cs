@@ -52,26 +52,12 @@ public sealed class NativeToolStripDropDownPresenter : MenuFlyoutPresenter
 }
 
 /// <summary>
-///  Keeps the separator in its source dropdown slot without a second RTL mirror.
-/// </summary>
-public sealed class NativeToolStripDropDownSeparator : Separator
-{
-    public NativeToolStripDropDownSeparator()
-    {
-    }
-
-    protected override Type StyleKeyOverride => typeof(Separator);
-
-    protected override bool BypassFlowDirectionPolicies => true;
-}
-
-/// <summary>
 ///  Keeps MenuItem's interaction implementation while its owned source layout supplies RTL coordinates.
 /// </summary>
 public sealed class NativeToolStripDropDownMenuItem : MenuItem
 {
     public static readonly AttachedProperty<bool> UseSystemVisualStyleProperty =
-        AvaloniaProperty.RegisterAttached<NativeToolStripDropDownMenuItem, MenuItem, bool>("UseSystemVisualStyle");
+        AvaloniaProperty.RegisterAttached<NativeToolStripDropDownMenuItem, Control, bool>("UseSystemVisualStyle");
 
     public NativeToolStripDropDownMenuItem()
     {
@@ -83,9 +69,9 @@ public sealed class NativeToolStripDropDownMenuItem : MenuItem
 
     protected override bool BypassFlowDirectionPolicies => true;
 
-    public static bool GetUseSystemVisualStyle(MenuItem item) => item.GetValue(UseSystemVisualStyleProperty);
+    public static bool GetUseSystemVisualStyle(Control item) => item.GetValue(UseSystemVisualStyleProperty);
 
-    public static void SetUseSystemVisualStyle(MenuItem item, bool value) => item.SetValue(UseSystemVisualStyleProperty, value);
+    public static void SetUseSystemVisualStyle(Control item, bool value) => item.SetValue(UseSystemVisualStyleProperty, value);
 
     protected override void OnAccessKey(RoutedEventArgs e)
     {

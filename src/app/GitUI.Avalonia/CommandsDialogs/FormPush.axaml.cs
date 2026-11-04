@@ -370,6 +370,7 @@ public sealed partial class FormPush : GitModuleForm
             return Commands.PushTag(destination, pushAllTags ? string.Empty : tag, pushAllTags, GetForcePushOption());
         }
 
+        // Push Multiple Branches Tab selected
         List<GitPushAction> pushActions = CreateMultiplePushActions();
         return pushActions.Count == 0 ? "" : Commands.PushMultiple(destination, pushActions);
     }
@@ -420,6 +421,7 @@ public sealed partial class FormPush : GitModuleForm
         }
         else
         {
+            /* PushToRemote.IsChecked */
             if (!CheckIfRemoteExist() || _NO_TRANSLATE_Remotes.SelectedItem is not string selectedRemoteName)
             {
                 ErrorOccurred = true;
@@ -444,6 +446,7 @@ public sealed partial class FormPush : GitModuleForm
             return false;
         }
 
+        // controls can be accessed only from UI thread
         string localBranch = GetSelectedBranchName();
         string remoteBranch = RemoteBranch.Text?.Trim() ?? string.Empty;
         if (TabControlTagBranch.SelectedItem == BranchTab
@@ -536,7 +539,7 @@ public sealed partial class FormPush : GitModuleForm
 
     private ForcePushOptions GetForcePushOption()
     {
-        // tags cannot be pushed using --force-with-lease
+        /* tags cannot be pushed using --force-with-lease */
         if (ForcePushBranches.IsChecked == true
             || (TabControlTagBranch.SelectedItem == TagTab && ForcePushTags.IsChecked == true))
         {
@@ -828,6 +831,14 @@ public sealed partial class FormPush : GitModuleForm
         UpdatePushButton();
     }
 
+    private void FormPushLoad(object sender, EventArgs e)
+    {
+        Title = $"{_pushCaption.Text} ({Module.WorkingDir})";
+        _createPullRequestCB.IsEnabled = PluginRegistry.TryGetGitHosterForModule(Module) is not null
+            || HasAzureDevOpsRemote();
+        _NO_TRANSLATE_Remotes.Focus();
+    }
+
     private void AddRemoteClick(object? sender, EventArgs e)
         => OpenRemotesDialogAndRefreshList(_selectedRemote?.Name);
 
@@ -859,6 +870,22 @@ public sealed partial class FormPush : GitModuleForm
         UpdatePushButton();
     }
 
+    private void ApplySourceAutoSize()
+    {
+        WinFormsAutoSizeContentControl.Attach(PushToRemote, 25, 19);
+        WinFormsAutoSizeContentControl.Attach(PushToUrl, 25, 19);
+        WinFormsAutoSizeContentControl.Attach(labelFrom, 7, 15);
+        WinFormsAutoSizeContentControl.Attach(labelTo, 7, 15);
+        WinFormsAutoSizeContentControl.Attach(ShowOptions, 7, 15);
+        WinFormsAutoSizeContentControl.Attach(label1, 7, 15);
+        WinFormsAutoSizeContentControl.Attach(label2, 7, 15);
+        WinFormsAutoSizeContentControl.Attach(ckForceWithLease, 25, 19);
+        WinFormsAutoSizeContentControl.Attach(ForcePushBranches, 25, 19);
+        WinFormsAutoSizeContentControl.Attach(ReplaceTrackingReference, 25, 19);
+        WinFormsAutoSizeContentControl.Attach(_createPullRequestCB, 25, 19);
+        WinFormsAutoSizeContentControl.Attach(ForcePushTags, 25, 19);
+    }
+
     private void RemotesUpdated(object? sender, EventArgs e)
     {
         string? selectedName = _NO_TRANSLATE_Remotes.SelectedItem as string;
@@ -880,22 +907,6 @@ public sealed partial class FormPush : GitModuleForm
         }
 
         UpdatePushButton();
-    }
-
-    private void ApplySourceAutoSize()
-    {
-        WinFormsAutoSizeContentControl.Attach(PushToRemote, 25, 19);
-        WinFormsAutoSizeContentControl.Attach(PushToUrl, 25, 19);
-        WinFormsAutoSizeContentControl.Attach(labelFrom, 7, 15);
-        WinFormsAutoSizeContentControl.Attach(labelTo, 7, 15);
-        WinFormsAutoSizeContentControl.Attach(ShowOptions, 7, 15);
-        WinFormsAutoSizeContentControl.Attach(label1, 7, 15);
-        WinFormsAutoSizeContentControl.Attach(label2, 7, 15);
-        WinFormsAutoSizeContentControl.Attach(ckForceWithLease, 25, 19);
-        WinFormsAutoSizeContentControl.Attach(ForcePushBranches, 25, 19);
-        WinFormsAutoSizeContentControl.Attach(ReplaceTrackingReference, 25, 19);
-        WinFormsAutoSizeContentControl.Attach(_createPullRequestCB, 25, 19);
-        WinFormsAutoSizeContentControl.Attach(ForcePushTags, 25, 19);
     }
 
     private void EnableLoadSshButton()
@@ -920,34 +931,6 @@ public sealed partial class FormPush : GitModuleForm
     private void RemotesValidated(object sender, EventArgs e)
     {
         EnableLoadSshButton();
-    }
-
-    private void FormPushLoad(object sender, EventArgs e)
-    {
-        Title = $"{_pushCaption.Text} ({Module.WorkingDir})";
-        _createPullRequestCB.IsEnabled = PluginRegistry.TryGetGitHosterForModule(Module) is not null
-            || HasAzureDevOpsRemote();
-        _NO_TRANSLATE_Remotes.Focus();
-    }
-
-    private void ShowOptions_LinkClicked(object sender, EventArgs e)
-    {
-        PushOptionsPanel.IsVisible = true;
-        ShowOptions.IsVisible = false;
-        SetFormSizeToFitAllItems();
-    }
-
-    private void SetFormSizeToFitAllItems()
-    {
-        if (Height < MinHeight + 50)
-        {
-            Height = MinHeight + 50;
-        }
-    }
-
-    private void _NO_TRANSLATE_Branch_SelectedIndexChanged(object sender, EventArgs e)
-    {
-        RemoteBranch.IsEnabled = GetSelectedBranchName() != AllRefs;
     }
 
     private void FillTagDropDown()
@@ -1013,28 +996,13 @@ public sealed partial class FormPush : GitModuleForm
         }
         else
         {
+            // use remote branches from git's local database if there were problems with receiving branches from the remote server
             remoteHeads = [.. Module.GetRemoteBranches().Where(reference => reference.Remote == remote)];
         }
 
         ProcessHeads(remoteHeads, remote);
         BranchGrid.ItemsSource = _branchRows;
         UpdatePushButton();
-    }
-
-    private void unselectAllToolStripMenuItem_Click(object sender, EventArgs e)
-    {
-        SetBranchesPushCheckboxesState(_ => false);
-    }
-
-    private void selectAllToolStripMenuItem_Click(object sender, EventArgs e)
-    {
-        SetBranchesPushCheckboxesState(row => row.CanPush);
-    }
-
-    private void selectTrackedToolStripMenuItem_Click(object sender, EventArgs e)
-    {
-        // Check if the branch is tracked (i.e. not new)
-        SetBranchesPushCheckboxesState(row => row.IsTracked);
     }
 
     private void TabControlTagBranch_Selected(object? sender, EventArgs e)
@@ -1067,21 +1035,24 @@ public sealed partial class FormPush : GitModuleForm
         UpdatePushButton();
     }
 
-    private void ForcePushTagsCheckedChanged(object? sender, EventArgs e)
+    private void ShowOptions_LinkClicked(object sender, EventArgs e)
     {
-        if (_updatingForceOptions)
-        {
-            return;
-        }
+        PushOptionsPanel.IsVisible = true;
+        ShowOptions.IsVisible = false;
+        SetFormSizeToFitAllItems();
+    }
 
-        _updatingForceOptions = true;
-        ckForceWithLease.IsChecked = ForcePushTags.IsChecked;
-        if (ForcePushTags.IsChecked == true)
+    private void SetFormSizeToFitAllItems()
+    {
+        if (Height < MinHeight + 50)
         {
-            ForcePushBranches.IsChecked = false;
+            Height = MinHeight + 50;
         }
+    }
 
-        _updatingForceOptions = false;
+    private void _NO_TRANSLATE_Branch_SelectedIndexChanged(object sender, EventArgs e)
+    {
+        RemoteBranch.IsEnabled = GetSelectedBranchName() != AllRefs;
     }
 
     private void ForceWithLeaseCheckedChanged(object? sender, EventArgs e)
@@ -1103,6 +1074,39 @@ public sealed partial class FormPush : GitModuleForm
         }
 
         _updatingForceOptions = false;
+    }
+
+    private void unselectAllToolStripMenuItem_Click(object sender, EventArgs e)
+    {
+        SetBranchesPushCheckboxesState(_ => false);
+    }
+
+    private void selectAllToolStripMenuItem_Click(object sender, EventArgs e)
+    {
+        SetBranchesPushCheckboxesState(row => row.CanPush);
+    }
+
+    private void ForcePushTagsCheckedChanged(object? sender, EventArgs e)
+    {
+        if (_updatingForceOptions)
+        {
+            return;
+        }
+
+        _updatingForceOptions = true;
+        ckForceWithLease.IsChecked = ForcePushTags.IsChecked;
+        if (ForcePushTags.IsChecked == true)
+        {
+            ForcePushBranches.IsChecked = false;
+        }
+
+        _updatingForceOptions = false;
+    }
+
+    private void selectTrackedToolStripMenuItem_Click(object sender, EventArgs e)
+    {
+        // Check if the branch is tracked (i.e. not new)
+        SetBranchesPushCheckboxesState(row => row.IsTracked);
     }
 
     private static string CleanCommandOutput(string processOutput)
@@ -1451,6 +1455,8 @@ public sealed partial class FormPush : GitModuleForm
             _changed = changed;
             local.TextChanged += (_, _) => LocalBranch = local.Text ?? string.Empty;
             remote.TextChanged += (_, _) => RemoteBranch = remote.Text ?? string.Empty;
+
+            // Push grid checkbox changes immediately into the underlying row.
             push.IsCheckedChanged += (_, _) => SetPush(push.IsChecked == true);
             force.IsCheckedChanged += (_, _) => SetForce(force.IsChecked == true);
             delete.IsCheckedChanged += (_, _) => SetDelete(delete.IsChecked == true);

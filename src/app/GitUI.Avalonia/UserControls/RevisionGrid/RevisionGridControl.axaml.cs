@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
 using Avalonia.Input;
@@ -31,6 +32,7 @@ using GitUI.UserControls.RevisionGrid.Graph;
 using GitUI.UserControls.RevisionGrid.Graph.Rendering;
 using GitUIPluginInterfaces;
 using Microsoft;
+using Microsoft.VisualStudio.Threading;
 using ResourceManager;
 using ResourceManager.Hotkey;
 using DrawingPoint = System.Drawing.Point;
@@ -128,24 +130,31 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
     private readonly TranslationString _rebaseBranch = new("Rebase branch.");
     private readonly TranslationString _rebaseBranchInteractive = new("Rebase branch interactively.");
     private readonly TranslationString _areYouSureRebase = new("Are you sure you want to rebase? This action will rewrite commit history.");
-    private readonly TranslationString _noMergeBaseCommit = new("There is no merge base for the selected revisions.");
-    private readonly TranslationString _invalidDiffContainsFilter = new("The diff contains filter is invalid.");
+    private readonly TranslationString _noMergeBaseCommit = new("There is no common ancestor for the selected commits.");
+    private readonly TranslationString _invalidDiffContainsFilter = new("Filter text '{0}' not valid for \"Diff contains\" filter.");
 
     private readonly IReadOnlyList<(Control Item, bool Advanced)> _contextMenuItems;
     private readonly FilterInfo _filterInfo = new();
+    //// _navigationHistory not disposable
     private readonly NavigationHistory _navigationHistory = new();
     private readonly Control _loadingControlText;
     private readonly Control _loadingControlSpinner;
+    //// _toolTipProvider  not disposable
     private readonly RevisionGridToolTipProvider _toolTipProvider;
+    //// _quickSearchProvider not disposable
     private readonly QuickSearchProvider _quickSearchProvider;
+    //// _parentChildNavigationHistory not disposable
     private readonly ParentChildNavigationHistory _parentChildNavigationHistory;
+    //// _authorHighlighting not disposable
     private readonly AuthorRevisionHighlighting _authorHighlighting;
     private readonly Lazy<IndexWatcher> _indexWatcher;
     private readonly BuildServerWatcher _buildServerWatcher;
     private readonly DispatcherTimer _selectionTimer;
     private readonly RevisionGraphColumnProvider _revisionGraphColumnProvider;
     private readonly MessageColumnProvider _messageColumnProvider;
+    //// _maximizedColumn not owned
     private readonly RevisionGridColumn? _maximizedColumn;
+    //// _lastVisibleResizableColumn not owned
     private RevisionGridColumn? _lastVisibleResizableColumn;
     private readonly ArtificialCommitChangeCount _workTreeChangeCount = new();
     private readonly ArtificialCommitChangeCount _indexChangeCount = new();
@@ -159,11 +168,11 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
     /// The set of ref names that are ambiguous.
     /// Any refs present in this collection should be displayed using their full name.
     /// </summary>
-    private Lazy<IReadOnlyCollection<string>>? _ambiguousRefs;
+    private Lazy<IReadOnlyCollection<string>>? _ambiguousRefs; //// _ambiguousRefs not disposable
     private ILookup<ObjectId, IGitRef>? _refsByObjectId;
     private int _updatingFilters;
     private ObjectId? _headId;
-    private ObjectId _pendingSelectedObjectId;
+    private IReadOnlyList<ObjectId> _pendingSelectedObjectIds = [];
     private bool _headHighlighted;
     private bool _isControlCreated;
     private bool _focusGridWhenShown;
@@ -171,9 +180,11 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
     private string _lastRevisionFilter = "--all";
     private IGitModule? _lastModule;
     private bool _parentsAreRewritten;
+    //// _baseCommitToCompare not disposable
     private GitRevision? _baseCommitToCompare;
     private string? _rebaseOnTopOf;
     private bool _isRefreshingRevisions;
+    //// _superprojectCurrentCheckout not disposable
     private SuperProjectInfo? _superprojectCurrentCheckout;
     private int _latestSelectedRowIndex;
     private Window? _ownerWindow;
@@ -206,17 +217,15 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
     /// <summary>
     /// The last selected commit in the grid (with related CommitInfo in Browse).
     /// </summary>
-    internal ObjectId SelectedId
-    {
-        get => SelectedRevision?.ObjectId ?? _pendingSelectedObjectId;
-        set => _pendingSelectedObjectId = value;
-    }
+    // The portable reload boundary reads the explicit request before the source-shaped load consumes it.
+    internal ObjectId SelectedId { get; set; }
 
     /// <summary>
     /// The first selected, the first commit in a diff.
     /// </summary>
     internal ObjectId FirstId { private get; set; }
 
+    //// MenuCommands not disposable
     internal RevisionGridMenuCommands MenuCommands { get; }
 
     /// <summary>
@@ -294,9 +303,9 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
     }
 
     /// <summary>
-    ///  Gets the revision currently selected in the list, or <see langword="null"/>.
+    ///  Gets the last selected revision in the list, or <see langword="null"/>.
     /// </summary>
-    public GitRevision? SelectedRevision => _gridView.SelectedItem as GitRevision;
+    public GitRevision? SelectedRevision => GetSelectedRevisionOrDefault();
 
     public RevisionGridControl(ICommitDataManager? commitDataManager)
     {
@@ -382,7 +391,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
             .FirstOrDefault(column => column.Resizable && column.Width.IsStar);
 
         _toolTipProvider = new RevisionGridToolTipProvider(this);
-        _toolTipProvider.ShowRevisionGridTooltips = AppSettings.ShowRevisionGridTooltips.Value;
+        _toolTipProvider.ShowRevisionGridTooltips = AppSettings.ShowRevisionGridTooltips;
         _quickSearchProvider = new QuickSearchProvider(_gridView, pnlRevisionGrid, () => Module.WorkingDir);
         _gridView.ItemsSource = _revisions;
         ApplyColumnSettings();
@@ -495,6 +504,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         stopBisectToolStripMenuItem.Click += StopBisectToolStripMenuItemClick;
         tsmiSelectInLeftPanel.Click += SelectInLeftPanel_Click;
         fixupCommitToolStripMenuItem.Click += FixupCommitToolStripMenuItemClick;
+        editCommitWithFixupToolStripMenuItem.Click += EditCommitWithFixupToolStripMenuItemClick;
         squashCommitToolStripMenuItem.Click += SquashCommitToolStripMenuItemClick;
         amendCommitToolStripMenuItem.Click += AmendCommitToolStripMenuItemClick;
         editCommitToolStripMenuItem.Click += editCommitToolStripMenuItem_Click;
@@ -523,6 +533,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         DetachedFromVisualTree += (_, _) =>
         {
             DetachOwnerWindow();
+            //// _selectionTimer stopped when detached
             _selectionTimer.Stop();
             _revisionGraphColumnProvider.Dispose();
             _buildServerWatcher.Dispose();
@@ -600,7 +611,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
             || !_gridView.Focus(NavigationMethod.Tab);
     }
 
-    internal GitRevision? LatestSelectedRevision => SelectedRevision;
+    internal GitRevision? LatestSelectedRevision => IsValidRevisionIndex(_latestSelectedRowIndex) ? _revisions[_latestSelectedRowIndex] : null;
 
     internal bool MultiSelect
     {
@@ -697,7 +708,11 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
     {
         if (_navigationHistory.CanNavigateBackward)
         {
-            SetSelectedRevision(_navigationHistory.NavigateBackward(), updateNavigationHistory: false);
+            ObjectId commitId = _navigationHistory.NavigateBackward();
+            if (!SetSelectedRevision(commitId))
+            {
+                MessageBoxes.RevisionFilteredInGrid(this, commitId);
+            }
         }
     }
 
@@ -705,7 +720,11 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
     {
         if (_navigationHistory.CanNavigateForward)
         {
-            SetSelectedRevision(_navigationHistory.NavigateForward(), updateNavigationHistory: false);
+            ObjectId commitId = _navigationHistory.NavigateForward();
+            if (!SetSelectedRevision(commitId))
+            {
+                MessageBoxes.RevisionFilteredInGrid(this, commitId);
+            }
         }
     }
 
@@ -755,6 +774,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     public void Refresh()
     {
+        // Apply settings early, adapt column widths, etc.
         ApplyColumnSettings();
         _toolTipProvider.Clear();
         RefreshRealizedRows();
@@ -823,6 +843,9 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
     /// <returns><c>true</c> if the required revision was found and selected, otherwise <c>false</c>.</returns>
     public bool SetSelectedRevision(ObjectId commitId, bool toggleSelection = false, bool updateNavigationHistory = true)
     {
+        _pendingSelectedObjectIds = [];
+
+        // Prevent exception when changing of repository because the grid still contains no rows.
         GitRevision? revision = _revisions.FirstOrDefault(r => r.ObjectId == commitId);
         if (revision is null)
         {
@@ -861,7 +884,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
         // Set the first selected row as current.
         // Assigning _gridView.SelectedItem results in a single selection of that row.
-        // So do not reset it when the requested revision was already the sole selection, but make it visible at least.
+        // So do not set row as current but make it visible at least.
         _gridView.ScrollIntoView(revision);
         if (updateNavigationHistory)
         {
@@ -913,7 +936,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
     /// </summary>
     /// <returns>The selected revisions or <see langword="null"/> if none selected.</returns>
     public GitRevision? GetSelectedRevisionOrDefault()
-        => LatestSelectedRevision;
+        => GetSelectedRevisions().FirstOrDefault();
 
     public IReadOnlyList<GitRevision> GetSelectedRevisions()
         => GetSelectedRevisions(direction: null);
@@ -1050,21 +1073,27 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
         string revisionFilter = _lastRevisionFilter;
         string pathFilter = _lastPathFilter;
-        ObjectId selectedObjectId = _pendingSelectedObjectId.IsZero ? SelectedId : _pendingSelectedObjectId;
+        IReadOnlyList<ObjectId> currentlySelectedObjectIds =
+            [.. _gridView.SelectedItems?.OfType<GitRevision>().Select(revision => revision.ObjectId) ?? []];
+        if (currentlySelectedObjectIds.Count == 0)
+        {
+            currentlySelectedObjectIds = _pendingSelectedObjectIds;
+        }
+
         if (revisionFilter == "--all")
         {
             revisionFilter = _filterInfo.GetRevisionFilter(new Lazy<ObjectId>(capturedModule.GetCurrentCheckout)).ToString();
             pathFilter = _filterInfo.PathFilter;
         }
 
-        // Revision info is read in three parallel steps:
+        // Revision info is read in three steps:
         // 1. Read current commit, refs, prepare grid etc.
         // 2. Read stashes (if enabled).
         // 3. Read all revisions with git-log.
         //    Git will provide log information when available (so slower to first revision if sorting).
-        // These operations can take a long time and is done async in parallel.
-        // Step 3. requires that the information in 1 and 2 is available when adding revisions.
-        // The retained observer coordinates those inputs without blocking Avalonia's dispatcher.
+        // These operations can take a long time and is done async in the background.
+        // Step 3. requires that the information in 1 and 2 is available when adding revisions,
+        // and is therefore started after they complete.
         CancellationToken cancellationToken = _refreshRevisionsSequence.Next();
         _isRefreshingRevisions = true;
 
@@ -1072,7 +1101,20 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         MenuCommands.TriggerMenuChanged();
         FilterChanged?.Invoke(this, new FilterChangedEventArgs(_filterInfo));
 
-        _revisions.Clear();
+        _gridView.SelectionChanged -= OnGridViewSelectionChanged;
+        try
+        {
+            _gridView.SelectedItems?.Clear();
+            _revisions.Clear();
+        }
+        finally
+        {
+            _gridView.SelectionChanged += OnGridViewSelectionChanged;
+        }
+
+        // Selected is null: Update to trigger reset the tabs etc.
+        _selectionTimer.Stop();
+        _selectionTimer.Start();
         _toolTipProvider.Clear();
         ResetNavigationHistory();
         _parentChildNavigationHistory.Clear();
@@ -1091,21 +1133,22 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
         // If the current checkout (HEAD) is changed, don't get the currently selected rows,
         // select the new current checkout instead.
-        if (!previousCheckout.IsZero && _headId.Value != previousCheckout && selectedObjectId.IsZero)
+        if (_headId.Value != previousCheckout)
         {
-            selectedObjectId = _headId.Value;
+            currentlySelectedObjectIds = _headId.Value.IsZero ? [] : [_headId.Value];
         }
 
         // A path filter makes git rewrite parents ("history simplification"), so revisions
         // may carry parent ids that are not their real parents.
         _parentsAreRewritten = !string.IsNullOrEmpty(pathFilter);
-        _pendingSelectedObjectId = selectedObjectId;
+        _pendingSelectedObjectIds = GetToBeSelectedRevisions(_headId.Value, currentlySelectedObjectIds);
         _headHighlighted = false;
         lblLoadingStatus.Text = _strLoading.Text;
         _focusGridWhenShown = true;
 
         // Add the spinner controls, removed by SetPage()
         ShowLoading();
+        FocusRevisionGridWhenShown();
 
         // getRefs (refreshing from Browse) is Lazy already, but not from RevGrid (updating filters etc)
         Lazy<IReadOnlyList<IGitRef>> refs = new(() => (getRefs ?? capturedModule.GetRefs)(RefsFilter.NoFilter));
@@ -1138,8 +1181,6 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         // Evaluate GitRefs and current commit
         _taskManager.FileAndForget(() =>
         {
-            // Like the WinForms grid: fetch the refs first so they can be attached to the
-            // revisions as they stream in (ref labels; square graph nodes).
             IReadOnlyList<IGitRef> loadedRefs = refs.Value;
             cancellationToken.ThrowIfCancellationRequested();
             string selectedBranch = capturedModule.GetSelectedBranch(emptyIfDetached: true);
@@ -1153,11 +1194,15 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
                     : loadedRefs)
                 .Where(gitRef => !gitRef.ObjectId.IsZero)
                 .ToLookup(gitRef => gitRef.ObjectId);
+
+            // Wait for refs,CurrentCheckout and stashes as second step
             observer.InitializeStashes(capturedModule, stashes.Value);
 
             RevisionReader reader = new(capturedModule);
-            bool hasNotes = AppSettings.ShowGitNotesColumn.Value || AppSettings.ShowGitNotes;
+            bool hasNotes = AppSettings.ShowGitNotesColumn || AppSettings.ShowGitNotes;
             string effectivePathFilter = BuildPathFilter(pathFilter);
+
+            // Allow add revisions to the grid
             reader.GetLog(observer, revisionFilter, effectivePathFilter, hasNotes, autostashLabel: "autostash", cancellationToken);
         });
 
@@ -1248,6 +1293,41 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
             return path;
         }
 
+#pragma warning disable CS1587 // XML comment is not placed on a valid language element
+        /// <summary>
+        /// Select initial revision(s) in the grid.
+        /// Get the revision(s) currently selected in the grid, to be selected at next refresh.
+        /// If SelectedId is set, select that revision instead.
+        /// The SelectedId is the last selected commit in the grid (with related CommitInfo in Browse).
+        /// The FirstId is first selected, the first commit in a diff.
+        /// </summary>
+        IReadOnlyList<ObjectId> GetToBeSelectedRevisions(ObjectId currentCheckout, IReadOnlyList<ObjectId> currentlySelectedObjectIds)
+#pragma warning restore CS1587 // XML comment is not placed on a valid language element
+        {
+            if (!SelectedId.IsZero)
+            {
+                IReadOnlyList<ObjectId> toBeSelectedObjectIds;
+                if (!FirstId.IsZero)
+                {
+                    toBeSelectedObjectIds = new ObjectId[] { FirstId, SelectedId };
+                    FirstId = default;
+                }
+                else
+                {
+                    toBeSelectedObjectIds = new ObjectId[] { SelectedId };
+                }
+
+                SelectedId = default;
+                return toBeSelectedObjectIds;
+            }
+
+            return currentlySelectedObjectIds.Count > 0
+                ? currentlySelectedObjectIds
+                : currentCheckout.IsZero
+                    ? []
+                    : new ObjectId[] { currentCheckout };
+        }
+
         static void UpdateSelectedRef(IGitModule module, IReadOnlyList<IGitRef> gitRefs, IGitRef? selectedRef)
         {
             if (selectedRef is null)
@@ -1282,6 +1362,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
         GitArgumentBuilder args = new("log")
         {
+            // --name-only will list each filename on a separate line, ending with an empty line
             $"--format=\"{_objectIdPrefix}%H\"",
             "--name-only",
             "--follow",
@@ -1313,11 +1394,13 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         {
             if (string.IsNullOrEmpty(line))
             {
+                // empty line after sha
                 continue;
             }
 
             if (line.StartsWith(_objectIdPrefix))
             {
+                // Parse error, ignore
                 currentObjectId = line.Length >= ObjectId.Sha1CharCount + _objectIdPrefix.Length
                     && ObjectId.TryParse(line, offset: _objectIdPrefix.Length, out ObjectId parsedId)
                         ? parsedId
@@ -1327,9 +1410,11 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
             if (currentObjectId.IsZero)
             {
+                // Parsing has failed, ignore
                 continue;
             }
 
+            // Add only the first file to the dictionary
             cancellationToken.ThrowIfCancellationRequested();
             FilePathByObjectId?.TryAdd(currentObjectId, line);
             yield return line;
@@ -1347,8 +1432,14 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private void OnGridViewSelectionChanged(object? sender, EventArgs e)
     {
-        _latestSelectedRowIndex = _gridView.SelectedIndex;
+        // A real selection supersedes the load's pending restoration, as in RevisionDataGridView.
+        _pendingSelectedObjectIds = [];
         _parentChildNavigationHistory.RevisionsSelectionChanged();
+
+        if (GetSelectedRevisionOrDefault() is GitRevision latestSelectedRevision)
+        {
+            _latestSelectedRowIndex = GetRevisionIndex(latestSelectedRevision);
+        }
 
         (ObjectId first, GitRevision? selected) = GetFirstAndSelected();
         compareToWorkingDirectoryMenuItem.IsEnabled = selected is not null && selected.ObjectId != ObjectId.WorkTreeId;
@@ -1388,7 +1479,8 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         }
 
         // suppress the manual resizing of the last visible column because it will be resized when the maximized column is resized
-        //// LINQ because the original DataGridView GetLastColumn API has no Avalonia equivalent.
+        //// LINQ because the following did not work reliable:
+        //// _lastVisibleResizableColumn = _gridView.Columns.GetLastColumn(DataGridViewElementStates.Visible | DataGridViewElementStates.Resizable, DataGridViewElementStates.None);
         _lastVisibleResizableColumn = _columnProviders
             .Select(provider => provider.Column)
             .Last(column => column.IsVisible && column.Resizable);
@@ -1476,7 +1568,11 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         _lastModule = module;
         _lastRevisionFilter = revisionFilter;
         _lastPathFilter = pathFilter;
-        _pendingSelectedObjectId = selectedObjectId;
+        if (!selectedObjectId.IsZero)
+        {
+            SelectedId = selectedObjectId;
+        }
+
         PerformRefreshRevisions(getRefs!, forceRefresh);
     }
 
@@ -1523,10 +1619,11 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
     {
         if (!SetSelectedRevision(objectId))
         {
-            _pendingSelectedObjectId = objectId;
+            _pendingSelectedObjectIds = [objectId];
         }
     }
 
+    // If clicking while loading, cancel load-select
     private void OnGridViewMouseDown(object? sender, PointerPressedEventArgs e)
     {
         PointerPointProperties properties = e.GetCurrentPoint(_gridView).Properties;
@@ -1540,6 +1637,8 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
             NavigateForward();
             e.Handled = true;
         }
+
+        _pendingSelectedObjectIds = [];
     }
 
     internal bool TryGetSuperProjectInfo([System.Diagnostics.CodeAnalysis.NotNullWhen(returnValue: true)] out SuperProjectInfo? spi)
@@ -1561,6 +1660,10 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private void OnGridViewMouseClick(object? sender, PointerReleasedEventArgs e)
     {
+        // Avalonia supplies the row's visual source instead of DataGridView.HitTest coordinates.
+        ListBoxItem? row = (e.Source as Visual)?.GetSelfAndVisualAncestors().OfType<ListBoxItem>().FirstOrDefault();
+        _latestSelectedRowIndex = row is null ? -1 : _gridView.IndexFromContainer(row);
+
         if (e.KeyModifiers.HasFlag(KeyModifiers.Alt))
         {
             HighlightSelectedBranch();
@@ -1587,7 +1690,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
             IReadOnlyList<GitRevision> selectedRevisions = GetSelectedRevisions();
             if (selectedRevisions.Count > 0)
             {
-                ClipboardUtil.TrySetText(string.Join(Environment.NewLine, selectedRevisions.Select(revision => revision.ObjectId)));
+                ClipboardUtil.TrySetText(string.Join(Environment.NewLine, selectedRevisions.Reverse().Select(revision => revision.ObjectId)));
             }
 
             e.Handled = true;
@@ -1695,6 +1798,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
                     if (gitRef is NestledVirtualRef)
                     {
                         // Let the related ref be added to the selection afterwards in order to simulate standard Ctrl+click behavior.
+                        // For this, let ListBox's native Ctrl+click processing select this revision again first.
                         _gridView.SelectedItems?.Clear();
                         Dispatcher.UIThread.Post(
                             () =>
@@ -1719,8 +1823,9 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
                     return;
                 }
 
-                // The related or the previous revision is now selected. Return early so that the native
-                // Ctrl+click processing adds the clicked row to the selection instead of toggling it off again.
+                // The related or the previous revision is now selected. Return early so that the ListBox's
+                // native Ctrl+click processing adds the clicked row to the selection (instead of
+                // toggling it off again, which would happen if we selected it here first).
                 Dispatcher.UIThread.Post(RestoreScrollOffset, DispatcherPriority.Loaded);
                 return;
 
@@ -1733,11 +1838,24 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
                 }
             }
 
-            if (properties.PointerUpdateKind == PointerUpdateKind.RightButtonPressed)
+            if (properties.PointerUpdateKind == PointerUpdateKind.RightButtonPressed && revision is not null)
             {
+                // DataGridView keeps its current cell on right-click; do not let ListBox move keyboard focus or its caret.
+                e.Handled = true;
                 _rightClickedHitInfo = label;
                 _messageColumnProvider.SetHighlight(messageCell, label);
-                if (revision is not null && _gridView.SelectedItems?.Contains(revision) != true)
+                int rowIndex = GetRevisionIndex(revision);
+                if (_latestSelectedRowIndex == rowIndex
+                    && IsValidRevisionIndex(_latestSelectedRowIndex)
+                    && _gridView.SelectedItems?.Contains(revision) == true)
+                {
+                    return;
+                }
+
+                _latestSelectedRowIndex = rowIndex;
+                _gridView.SelectedItems?.Clear();
+
+                if (IsValidRevisionIndex(_latestSelectedRowIndex))
                 {
                     _gridView.SelectedItem = revision;
                 }
@@ -1779,7 +1897,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private void CreateTagToolStripMenuItemClick(object sender, EventArgs e)
     {
-        if (SelectedRevision is GitRevision revision)
+        if (LatestSelectedRevision is GitRevision revision)
         {
             UICommands.StartCreateTagDialog(GetOwner(), revision);
         }
@@ -1787,7 +1905,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private void ResetCurrentBranchToHereToolStripMenuItemClick(object sender, EventArgs e)
     {
-        if (SelectedRevision is not GitRevision revision)
+        if (LatestSelectedRevision is not GitRevision revision)
         {
             return;
         }
@@ -1804,7 +1922,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         UICommands.StartResetChangesDialog(
             GetOwner(),
             Module.GetWorkTreeFiles(),
-            onlyWorkTree: SelectedRevision?.ObjectId == ObjectId.WorkTreeId);
+            onlyWorkTree: LatestSelectedRevision?.ObjectId == ObjectId.WorkTreeId);
         ArtificialChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -1817,7 +1935,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private void ResetAnotherBranchToHereToolStripMenuItemClick(object sender, EventArgs e)
     {
-        if (SelectedRevision is not GitRevision revision)
+        if (LatestSelectedRevision is not GitRevision revision)
         {
             return;
         }
@@ -1831,7 +1949,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private void CreateNewBranchToolStripMenuItemClick(object sender, EventArgs e)
     {
-        if (SelectedRevision is GitRevision revision)
+        if (LatestSelectedRevision is GitRevision revision)
         {
             UICommands.StartCreateBranchDialog(GetOwner(), revision.ObjectId);
         }
@@ -1859,6 +1977,11 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
     /// <inheritdoc />
     public void ShowAllBranches()
     {
+        if (_filterInfo.IsShowAllBranchesChecked)
+        {
+            return;
+        }
+
         _filterInfo.ByBranchFilter = false;
         _filterInfo.ShowCurrentBranchOnly = false;
         RefreshFilteredRevisions();
@@ -1867,6 +1990,11 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
     /// <inheritdoc />
     public void ShowFilteredBranches()
     {
+        if (_filterInfo.IsShowFilteredBranchesChecked)
+        {
+            return;
+        }
+
         // Must be able to set ByBranchFilter without a filter to edit it
         _filterInfo.ByBranchFilter = true;
         _filterInfo.ShowCurrentBranchOnly = false;
@@ -1876,6 +2004,11 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
     /// <inheritdoc />
     public void ShowCurrentBranchOnly()
     {
+        if (_filterInfo.IsShowCurrentBranchOnlyChecked)
+        {
+            return;
+        }
+
         _filterInfo.ByBranchFilter = false;
         _filterInfo.ShowCurrentBranchOnly = true;
         RefreshFilteredRevisions();
@@ -1901,9 +2034,9 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         }
     }
 
-    private void UpdateContextMenuItems(Func<IEnumerable<IGitRef>, IEnumerable<IGitRef>>? filterRefs = null)
+    private void UpdateContextMenuItems(Func<IEnumerable<IGitRef>, IEnumerable<IGitRef>>? filterRefs = null, Func<IEnumerable<IGitRef>, IEnumerable<IGitRef>>? filterRefsByTracking = null)
     {
-        GitRevision? revision = SelectedRevision;
+        GitRevision? revision = LatestSelectedRevision;
         bool hasCommands = TryGetUICommandsDirect(out IGitUICommands? commands);
         bool isBareRepository = hasCommands && commands!.Module.IsBareRepository();
         bool regularRevision = revision is { IsArtificial: false } && hasCommands && !isBareRepository;
@@ -1915,7 +2048,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         SetVisible(stopBisectToolStripMenuItem, inTheMiddleOfBisect);
         sepBisect.IsVisible = inTheMiddleOfBisect;
         SetVisible(copyToClipboardToolStripMenuItem, revision is { IsArtificial: false });
-        SetVisible(applyStashToolStripMenuItem, regularRevision && revision!.IsAutostash);
+        SetVisible(applyStashToolStripMenuItem, regularRevision && (revision!.IsStash || revision.IsAutostash));
         SetVisible(popStashToolStripMenuItem, regularRevision && revision!.IsStash);
         SetVisible(dropStashToolStripMenuItem, regularRevision && revision!.IsStash);
         sepStash.IsVisible = applyStashToolStripMenuItem.IsVisible
@@ -1932,26 +2065,26 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         tsmiSelectInLeftPanel.Tag = null;
         _rebaseOnTopOf = null;
 
-        if (regularRevision)
+        if (revision is { IsArtificial: false } && hasCommands)
         {
-            PopulateRefMenus(revision!, commands!, filterRefs ?? (refs => refs));
+            PopulateRefMenus(revision!, commands!, filterRefs ?? (refs => refs), filterRefsByTracking ?? filterRefs ?? (refs => refs));
         }
 
-        SetVisible(checkoutBranchToolStripMenuItem, checkoutBranchToolStripMenuItem.Items.Count > 0);
-        SetVisible(tsmiPushBranch, tsmiPushBranch.Items.Count > 0);
-        SetVisible(mergeBranchToolStripMenuItem, mergeBranchToolStripMenuItem.Items.Count > 0);
+        SetVisible(checkoutBranchToolStripMenuItem, regularRevision && checkoutBranchToolStripMenuItem.Items.Count > 0);
+        SetVisible(tsmiPushBranch, regularRevision && tsmiPushBranch.Items.Count > 0);
+        SetVisible(mergeBranchToolStripMenuItem, regularRevision && mergeBranchToolStripMenuItem.Items.Count > 0);
         SetVisible(rebaseOnToolStripMenuItem, regularRevision);
         SetVisible(resetCurrentBranchToHereToolStripMenuItem, regularRevision);
-        SetVisible(tsmiSelectInLeftPanel, regularRevision && SelectInLeftPanel is not null && tsmiSelectInLeftPanel.Tag is string);
+        SetVisible(tsmiSelectInLeftPanel, hasCommands && SelectInLeftPanel is not null && tsmiSelectInLeftPanel.Tag is string);
         SetVisible(resetChangesToolStripMenuItem, revision is { IsArtificial: true } && hasCommands && !isBareRepository);
         SetVisible(commitToolStripMenuItem, revision is { IsArtificial: true } && hasCommands && !isBareRepository);
         SetVisible(createNewBranchToolStripMenuItem, regularRevision);
         SetVisible(resetAnotherBranchToHereToolStripMenuItem, regularRevision);
         SetVisible(renameBranchToolStripMenuItem, renameBranchToolStripMenuItem.Items.Count > 0);
-        bool isHeadOfCurrentBranch = regularRevision
+        bool isHeadOfCurrentBranch = revision is { IsArtificial: false } && hasCommands
             && revision!.Refs.Any(gitRef =>
                 gitRef.CompleteName == GitRefName.RefsHeadsPrefix + commands!.Module.GetSelectedBranch());
-        deleteBranchToolStripMenuItem.IsVisible = deleteBranchToolStripMenuItem.Items.Count > 0 || isHeadOfCurrentBranch;
+        deleteBranchToolStripMenuItem.IsVisible = (!isBareRepository && deleteBranchToolStripMenuItem.Items.Count > 0) || isHeadOfCurrentBranch;
         deleteBranchToolStripMenuItem.IsEnabled = deleteBranchToolStripMenuItem.Items.Count > 0 && !isBareRepository;
         SetVisible(createTagToolStripMenuItem, revision is { IsArtificial: false } && hasCommands);
         SetVisible(deleteTagToolStripMenuItem, deleteTagToolStripMenuItem.Items.Count > 0);
@@ -1978,6 +2111,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         SetVisible(openPullRequestPageStripMenuItem, !string.IsNullOrWhiteSpace(revision?.BuildStatus?.PullRequestUrl));
         SetVisible(manipulateCommitToolStripMenuItem, regularRevision);
         fixupCommitToolStripMenuItem.IsEnabled = regularRevision;
+        editCommitWithFixupToolStripMenuItem.IsEnabled = regularRevision;
         squashCommitToolStripMenuItem.IsEnabled = regularRevision;
         amendCommitToolStripMenuItem.IsEnabled = regularRevision && commands!.Module.GitVersion.SupportAmendCommits;
         editCommitToolStripMenuItem.IsEnabled = regularRevision;
@@ -2034,7 +2168,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         }
     }
 
-    private void PopulateRefMenus(GitRevision revision, IGitUICommands commands, Func<IEnumerable<IGitRef>, IEnumerable<IGitRef>> filterRefs)
+    private void PopulateRefMenus(GitRevision revision, IGitUICommands commands, Func<IEnumerable<IGitRef>, IEnumerable<IGitRef>> filterRefs, Func<IEnumerable<IGitRef>, IEnumerable<IGitRef>> filterRefsByTracking)
     {
         GitRefListsForRevision refLists = new(revision);
         string currentBranchRef = GitRefName.RefsHeadsPrefix + commands.Module.GetSelectedBranch();
@@ -2087,6 +2221,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
                     });
             }
 
+            // skip remote branches - they can not be deleted this way
             if (!branch.IsRemote)
             {
                 AddRefMenuItem(
@@ -2142,7 +2277,9 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         }
 
         bool currentBranchPointsToRevision = allBranches.Any(branch => branch.CompleteName == currentBranchRef);
-        IEnumerable<IGitRef> mergeRefs = filterRefs(refLists.AllTags.Concat(refLists.BranchesWithNoIdenticalRemotes))
+
+        // For now there is no action that could be done on currentBranch
+        IEnumerable<IGitRef> mergeRefs = filterRefs(refLists.AllTags).Concat(filterRefsByTracking(refLists.BranchesWithNoIdenticalRemotes))
             .Where(gitRef => gitRef.CompleteName != currentBranchRef);
         foreach (IGitRef gitRef in mergeRefs)
         {
@@ -2154,6 +2291,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
             _rebaseOnTopOf ??= mergeTarget;
         }
 
+        // if there is no branch to merge, then let user to merge selected commit into current branch
         if (mergeBranchToolStripMenuItem.Items.Count == 0 && !currentBranchPointsToRevision)
         {
             MenuItem mergeCommit = new() { Header = revision.Guid };
@@ -2161,6 +2299,8 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
             mergeBranchToolStripMenuItem.Items.Add(mergeCommit);
             _rebaseOnTopOf = revision.Guid;
         }
+
+        // if there is no branch to rebase on, then allow user to rebase on selected commit
         else if (_rebaseOnTopOf is null && !currentBranchPointsToRevision)
         {
             _rebaseOnTopOf = revision.Guid;
@@ -2188,30 +2328,40 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
                         : Properties.Images.BranchLocal,
             },
         };
-        item.Click += delegate { action(); };
+        item.Click += (_, e) =>
+        {
+            // Native menu children do not bubble a second command through their parent.
+            e.Handled = true;
+            action();
+        };
         parent.Items.Add(item);
     }
 
+    // Avalonia controls have one logical parent; detach both collections before regrouping.
     private void ContextMenuOpening(object sender, CancelEventArgs e)
     {
+        if (LatestSelectedRevision is null)
+        {
+            return;
+        }
+
         // If a ref label was right-clicked, show a focused context menu for that ref
         //   If Shift is pressed or AppSettings.AlwaysShowAdvOpt, show the full context menu directly but filter the dropdowns to the clicked ref
         //   If Control is pressed, override Shift and AlwaysShowAdvOpt, e.g. for debug purposes
         bool focused = _rightClickedHitInfo is not null
             && (_contextMenuModifiers.HasFlag(KeyModifiers.Control)
                 || !(_contextMenuModifiers.HasFlag(KeyModifiers.Shift) || AppSettings.AlwaysShowAdvOpt));
-        IGitRef? clickedRef = _rightClickedHitInfo?.GitRef;
-        string? relatedBranch = clickedRef is NestledVirtualRef
-            ? (clickedRef.IsRemote ? clickedRef.Remote + "/" : "") + clickedRef.MergeWith
-            : null;
+        IGitRef? clickedRef = _rightClickedHitInfo?.GitRef is NestledVirtualRef nestedRef
+            ? nestedRef.TargetRef
+            : _rightClickedHitInfo?.GitRef;
         Func<IEnumerable<IGitRef>, IEnumerable<IGitRef>> filterRefs = clickedRef is null
             ? refs => refs
-            : refs => refs.Where(r => r == clickedRef || r.Name == relatedBranch);
-        copyToClipboardToolStripMenuItem.SetFilterRefsFunc(clickedRef is null
-            ? refNames => refNames
-            : refNames => refNames.Where(r => r == clickedRef.Name || r == relatedBranch));
+            : refs => refs.Where(r => r == clickedRef);
+        Func<IEnumerable<IGitRef>, IEnumerable<IGitRef>> filterRefsByTracking = clickedRef is null
+            ? refs => refs
+            : refs => refs.Where(r => r == clickedRef || r.IsTrackingRemote(clickedRef));
+        copyToClipboardToolStripMenuItem.SetFilterRefsFunc(filterRefs);
 
-        // Avalonia controls have one logical parent; detach both collections before regrouping.
         mainContextMenu.RemoveUserScripts(runScriptToolStripMenuItem);
         tsmiOtherActions.Items.Clear();
         mainContextMenu.Items.Clear();
@@ -2220,7 +2370,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
             (focused && advanced ? tsmiOtherActions.Items : mainContextMenu.Items).Add(item);
         }
 
-        UpdateContextMenuItems(filterRefs);
+        UpdateContextMenuItems(filterRefs, filterRefsByTracking);
         tsmiOtherActions.IsVisible = focused;
         mainContextMenu.InvalidateMeasure();
     }
@@ -2283,7 +2433,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private bool GoToParent(bool firstParent, bool useHistory)
     {
-        if (SelectedRevision is not GitRevision revision)
+        if (LatestSelectedRevision is not GitRevision revision)
         {
             return false;
         }
@@ -2310,7 +2460,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private bool GoToChild()
     {
-        if (SelectedRevision is not GitRevision revision)
+        if (LatestSelectedRevision is not GitRevision revision)
         {
             return false;
         }
@@ -2337,6 +2487,8 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         if (_rebaseOnTopOf is not null)
         {
             IReadOnlyList<GitRevision> selectedRevisions = GetSelectedRevisions();
+
+            // Rebase onto: define the lower boundary of commits range that will be rebased
             string from = selectedRevisions.Count == 2
                 ? selectedRevisions[1].ObjectId.ToShortString()
                 : string.Empty;
@@ -2346,7 +2498,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private void CheckoutRevisionToolStripMenuItemClick(object sender, EventArgs e)
     {
-        if (SelectedRevision is GitRevision revision)
+        if (LatestSelectedRevision is GitRevision revision)
         {
             UICommands.StartCheckoutRevisionDialog(GetOwner(), revision.Guid);
         }
@@ -2448,7 +2600,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private void ApplyStashToolStripMenuItemClick(object sender, EventArgs e)
     {
-        if (SelectedRevision is GitRevision revision)
+        if (LatestSelectedRevision is GitRevision revision)
         {
             UICommands.StashApply(GetOwner(), revision.ObjectId.ToString());
             ReloadCurrentView();
@@ -2457,7 +2609,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private void PopStashToolStripMenuItemClick(object sender, EventArgs e)
     {
-        string? stashName = SelectedRevision?.ReflogSelector;
+        string? stashName = LatestSelectedRevision?.ReflogSelector;
         if (!string.IsNullOrEmpty(stashName))
         {
             UICommands.StashPop(GetOwner(), stashName);
@@ -2467,7 +2619,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private void DropStashToolStripMenuItemClick(object sender, EventArgs e)
     {
-        string? stashName = SelectedRevision?.ReflogSelector;
+        string? stashName = LatestSelectedRevision?.ReflogSelector;
         if (string.IsNullOrEmpty(stashName))
         {
             return;
@@ -2488,7 +2640,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
             TaskDialogButton result = TaskDialog.ShowDialog(GetOwner(), page);
             if (page.Verification.Checked)
             {
-                AppSettings.DontConfirmStashDrop = true;
+                AppSettings.DontConfirmStashDrop.Value = true;
             }
 
             if (result != TaskDialogButton.Yes)
@@ -2503,15 +2655,49 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private void FixupCommitToolStripMenuItemClick(object sender, EventArgs e)
     {
-        if (SelectedRevision is GitRevision revision)
+        if (LatestSelectedRevision is GitRevision revision)
         {
             UICommands.StartFixupCommitDialog(GetOwner(), revision);
         }
     }
 
+    private void EditCommitWithFixupToolStripMenuItemClick(object sender, EventArgs e)
+    {
+        if (LatestSelectedRevision is not { } revision || GetActualRevision(revision)?.FirstParentId is not { IsZero: false } parentRevision)
+        {
+            return;
+        }
+
+        using FormCommit form = new(UICommands, CommitKind.Fixup, revision);
+        form.CommitCreated += OnFixupCommitCreated;
+        form.ShowDialog(GetOwner());
+
+        return;
+
+        void OnFixupCommitCreated(object? sender, EventArgs e)
+        {
+            form.CommitCreated -= OnFixupCommitCreated;
+
+            string rebaseCmd = Commands.Rebase(new Commands.RebaseOptions()
+            {
+                BranchName = parentRevision.ToString(),
+                Interactive = true,
+                AutoSquash = true,
+                AutoStash = true,
+                SupportRebaseMerges = Module.GitVersion.SupportRebaseMerges
+            });
+
+            using FormProcess formProcess = new(UICommands, arguments: rebaseCmd, Module.WorkingDir, input: null, useDialogSettings: true);
+
+            formProcess.ShowDialog(form);
+            PerformRefreshRevisions();
+            ArtificialChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
     private void SquashCommitToolStripMenuItemClick(object sender, EventArgs e)
     {
-        if (SelectedRevision is GitRevision revision)
+        if (LatestSelectedRevision is GitRevision revision)
         {
             UICommands.StartSquashCommitDialog(GetOwner(), revision);
         }
@@ -2519,7 +2705,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private void AmendCommitToolStripMenuItemClick(object sender, EventArgs e)
     {
-        if (SelectedRevision is GitRevision revision)
+        if (LatestSelectedRevision is GitRevision revision)
         {
             UICommands.StartAmendCommitDialog(GetOwner(), revision);
         }
@@ -2596,7 +2782,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private void ContinueBisect(GitBisectOption bisectOption)
     {
-        if (SelectedRevision is not GitRevision revision)
+        if (LatestSelectedRevision is not GitRevision revision)
         {
             return;
         }
@@ -2627,7 +2813,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     internal void ToggleShowGitNotesColumn()
     {
-        AppSettings.ShowGitNotesColumn.Value = !AppSettings.ShowGitNotesColumn.Value;
+        AppSettings.ShowGitNotesColumn.Value = !AppSettings.ShowGitNotesColumn;
         ReloadCurrentView();
     }
 
@@ -2909,6 +3095,10 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
     {
         List<ObjectId> revisions = [.. GetSelectedRevisions().Select(revision => revision.ObjectId).Where(id => !id.IsArtificial)];
         bool hasArtificial = GetSelectedRevisions().Any(revision => revision.IsArtificial);
+
+        // Artificial commits are replaced with HEAD
+        // If only one revision is selected, compare to HEAD
+        // => Fill with HEAD to if less than two normal revisions (it is OK to compare HEAD HEAD)
         ObjectId headId = Module.RevParse("HEAD");
         if (headId.IsZero || (revisions.Count == 0 && !hasArtificial))
         {
@@ -2924,6 +3114,8 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         };
 
         ExecutionResult result = Module.GitExecutable.Execute(args, throwOnErrorExit: false);
+
+        // Not related histories: https://git-scm.com/docs/git-merge-base#Documentation/git-merge-base.txt---is-ancestor
         const int NoCommonAncestorsExitCode = 1;
         if (result.ExitCode == NoCommonAncestorsExitCode)
         {
@@ -2963,7 +3155,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         ShowAuthorDateMenuItem.IsChecked = AppSettings.ShowAuthorDate;
         ShowRelativeDateMenuItem.IsChecked = AppSettings.RelativeDate;
         ShowRevisionGraphColumnMenuItem.IsChecked = AppSettings.ShowRevisionGridGraphColumn;
-        ShowGitNotesColumnMenuItem.IsChecked = AppSettings.ShowGitNotesColumn.Value;
+        ShowGitNotesColumnMenuItem.IsChecked = AppSettings.ShowGitNotesColumn;
         ShowAuthorNameColumnMenuItem.IsChecked = AppSettings.ShowAuthorNameColumn;
         ShowDateColumnMenuItem.IsChecked = AppSettings.ShowDateColumn;
         ShowIdColumnMenuItem.IsChecked = AppSettings.ShowObjectIdColumn;
@@ -3007,9 +3199,10 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     internal bool TryGoToRelatedRef(IGitRef gitRef)
     {
-        ObjectId selectedId = SelectedId;
+        // If a tracking/tracked ref label was clicked in the message column, go to the tracking/tracked branch.
+        ObjectId? selectedId = GetSelectedRevisionOrDefault()?.ObjectId;
         GoToRelatedRef(gitRef);
-        return SelectedId != selectedId;
+        return GetSelectedRevisionOrDefault()?.ObjectId != selectedId;
     }
 
     private void GoToRelatedRef(IGitRef gitRef, Action<string>? handleGone = null, bool toggleSelection = false)
@@ -3172,16 +3365,23 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private void diffSelectedCommitsMenuItem_Click(object? sender, EventArgs e)
     {
-        DiffSelectedCommitsWithDifftool();
+        MenuItem? item = sender as MenuItem;
+        if (item is not null)
+        {
+            // "main menu" clicked, cancel dropdown manually, invoke default difftool
+            item.IsSubMenuOpen = false;
+        }
+
+        string? toolName = item?.Tag as string;
+        DiffSelectedCommitsWithDifftool(toolName);
     }
 
     public void DiffSelectedCommitsWithDifftool(string? customTool = null)
     {
-        IReadOnlyList<GitRevision> selectedRevisions = GetSelectedRevisions();
-        if (selectedRevisions.Count > 0)
+        (ObjectId first, GitRevision? selected) = GetFirstAndSelected();
+        if (selected is not null)
         {
-            string? first = selectedRevisions.Count > 1 ? selectedRevisions[1].ObjectId.ToString() : null;
-            Module.OpenWithDifftoolDirDiff(first, selectedRevisions[0].ObjectId.ToString(), customTool: customTool);
+            Module.OpenWithDifftoolDirDiff(first.IsZero ? null : first.ToString(), selected.ObjectId.ToString(), customTool: customTool);
         }
     }
 
@@ -3236,6 +3436,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         (char code, ObjectId commit) = await module.GetSuperprojectCurrentCheckoutAsync().ConfigureAwait(false);
         if (code == 'U')
         {
+            // return local and remote hashes
             ConflictData conflict = await module.SuperprojectModule.GetConflictAsync(module.SubmodulePath).ConfigureAwait(false);
             superProjectInfo.ConflictBase = conflict.Base.ObjectId;
             superProjectInfo.ConflictLocal = conflict.Local.ObjectId;
@@ -3271,6 +3472,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
                 return;
             }
 
+            // Look up any refs associated with this revision
             if (_refsByObjectId is not null)
             {
                 revision.Refs = [.. _refsByObjectId[revision.ObjectId]];
@@ -3308,7 +3510,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         SelectPendingRevision();
     }
 
-    private void OnLoadingCompleted(CancellationToken cancellationToken)
+    private void OnLoadingCompleted(CancellationToken cancellationToken, ObjectId fallbackSelectionId = default, IReadOnlyList<ObjectId>? fallbackSelectionParents = null)
     {
         if (cancellationToken.IsCancellationRequested)
         {
@@ -3330,32 +3532,55 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
         if (_revisions.Count == 0 && !_filterInfo.HasFilter)
         {
+            // No revisions at all received without any filter
             SetPage(new EmptyRepoControl(_lastModule?.IsBareRepository() == true));
         }
         else
         {
+            // There is a context to show something
             SetPage(_gridView);
             FocusRevisionGridWhenShown();
 
             // The graph rows straightened after the final CacheTo become visible only when the
             // realized row controls render again, so refresh the realized rows once at the end.
+            UpdateVisibleGraphColumnWidth();
             RefreshRealizedRows();
         }
 
         lblLoadingStatus.Text = $"{_revisions.Count} revisions";
-        SelectPendingRevision();
 
-        // Like the WinForms grid, select a row when loading finishes.
+        // All revisions are loaded (but maybe not yet the grid)
+        // objectIds that were not selected after revisions were loaded
+        if (_pendingSelectedObjectIds.Count > 0
+            && _pendingSelectedObjectIds[0] == fallbackSelectionId
+            && !_revisions.Any(revision => _pendingSelectedObjectIds.Contains(revision.ObjectId))
+            && fallbackSelectionParents is not null)
+        {
+            // Try to select the first of the parents
+            foreach (ObjectId parentId in fallbackSelectionParents)
+            {
+                if (_revisions.Any(revision => revision.ObjectId == parentId))
+                {
+                    _pendingSelectedObjectIds = [parentId];
+                    break;
+                }
+            }
+        }
+
+        SelectPendingRevision(loadingCompleted: true);
+
+        // As fallback, select the first shown real commit or the first row (which exists here).
         if (_gridView.SelectedItem is null && _revisions.Count > 0)
         {
-            _gridView.SelectedIndex = 0;
+            _gridView.SelectedItem = _revisions.FirstOrDefault(revision => !revision.IsArtificial) ?? _revisions[0];
         }
     }
 
     private void ApplyFinalRevisionOrder(IReadOnlyList<GitRevision> orderedRevisions)
     {
         bool restoreFocus = _gridView.IsKeyboardFocusWithin;
-        GitRevision? selectedRevision = SelectedRevision;
+        GitRevision? selectedRevision = _gridView.SelectedItem as GitRevision;
+        GitRevision? latestSelectedRevision = LatestSelectedRevision;
         GitRevision[] selectedRevisions = [.. _gridView.SelectedItems?.OfType<GitRevision>() ?? []];
         HashSet<GitRevision> finalRevisions = new(orderedRevisions, ReferenceEqualityComparer.Instance);
         GitRevision? restoredPrimarySelection = selectedRevision is not null && finalRevisions.Contains(selectedRevision)
@@ -3363,23 +3588,39 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
             : null;
 
         // Avalonia resets selection and focus when its items collection is replaced; the WinForms grid retains both.
-        _revisions.Clear();
-        _revisions.AddRange(orderedRevisions);
-
-        if (restoredPrimarySelection is not null)
+        // Suppress transient empty selections so retained details and navigation see only the restored state.
+        _gridView.SelectionChanged -= OnGridViewSelectionChanged;
+        try
         {
-            _gridView.SelectedItem = restoredPrimarySelection;
-        }
+            _revisions.Clear();
+            _revisions.AddRange(orderedRevisions);
+            _latestSelectedRowIndex = latestSelectedRevision is null ? -1 : GetRevisionIndex(latestSelectedRevision);
 
-        if (_gridView.SelectedItems is { } selectedItems)
-        {
-            foreach (GitRevision revision in selectedRevisions.Where(finalRevisions.Contains))
+            if (restoredPrimarySelection is not null)
             {
-                if (!selectedItems.Contains(revision))
+                _gridView.SelectedItem = restoredPrimarySelection;
+            }
+
+            if (_gridView.SelectedItems is { } selectedItems)
+            {
+                foreach (GitRevision revision in selectedRevisions.Where(finalRevisions.Contains))
                 {
-                    selectedItems.Add(revision);
+                    if (!selectedItems.Contains(revision))
+                    {
+                        selectedItems.Add(revision);
+                    }
                 }
             }
+        }
+        finally
+        {
+            _gridView.SelectionChanged += OnGridViewSelectionChanged;
+        }
+
+        if (!ReferenceEquals(selectedRevision, restoredPrimarySelection)
+            || selectedRevisions.Any(revision => !finalRevisions.Contains(revision)))
+        {
+            OnGridViewSelectionChanged(_gridView, EventArgs.Empty);
         }
 
         if (restoredPrimarySelection is not null)
@@ -3390,6 +3631,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         _focusGridWhenShown |= restoreFocus;
     }
 
+    // Add artificial revisions to the graph.
     private IReadOnlyList<GitRevision> CreateArtificialRevisions(CancellationToken cancellationToken)
     {
         if (cancellationToken.IsCancellationRequested
@@ -3435,26 +3677,57 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
         IReadOnlyList<ObjectId> insertionParents = _headId is ObjectId { IsZero: false } currentCheckout
             ? [currentCheckout]
             : [];
+
+        // Insert before insertionParents if they are found, otherwise first.
         _revisionGraph.Insert(artificialRevisions[0], artificialRevisions[1], insertionParents);
     }
 
-    private void SelectPendingRevision()
+    private void SelectPendingRevision(bool loadingCompleted = false)
     {
-        if (!FirstId.IsZero && !_pendingSelectedObjectId.IsZero
-            && SetSelectedRevision(FirstId, updateNavigationHistory: false))
-        {
-            SetSelectedRevision(_pendingSelectedObjectId, toggleSelection: true, updateNavigationHistory: false);
-            FirstId = default;
-            _pendingSelectedObjectId = default;
-            return;
-        }
-
-        if (_pendingSelectedObjectId.IsZero || !SetSelectedRevision(_pendingSelectedObjectId))
+        if (_pendingSelectedObjectIds.Count == 0)
         {
             return;
         }
 
-        _pendingSelectedObjectId = default;
+        GitRevision[] revisions = [.. _pendingSelectedObjectIds
+            .Select(objectId => _revisions.FirstOrDefault(revision => revision.ObjectId == objectId))
+            .OfType<GitRevision>()];
+        if (!loadingCompleted && revisions.Length < _pendingSelectedObjectIds.Count)
+        {
+            return;
+        }
+
+        _pendingSelectedObjectIds = [];
+        if (revisions.Length == 0)
+        {
+            return;
+        }
+
+        // RevisionDataGridView waits for every requested row and selects all matches together.
+        // ListBox selection changes are synchronous, so publish the completed state once.
+        _gridView.SelectionChanged -= OnGridViewSelectionChanged;
+        try
+        {
+            _gridView.SelectedItems?.Clear();
+            _gridView.SelectedItem = revisions[0];
+            if (MultiSelect && _gridView.SelectedItems is { } selectedItems)
+            {
+                foreach (GitRevision revision in revisions.Skip(1).Distinct())
+                {
+                    if (!selectedItems.Contains(revision))
+                    {
+                        selectedItems.Add(revision);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            _gridView.SelectionChanged += OnGridViewSelectionChanged;
+        }
+
+        _gridView.ScrollIntoView(revisions[0]);
+        OnGridViewSelectionChanged(_gridView, EventArgs.Empty);
     }
 
     private void OnLoadingError(Exception exception, CancellationToken cancellationToken)
@@ -3487,10 +3760,18 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
     private void UpdateVisibleGraphColumnWidth()
     {
-        RevisionRowControl[] visibleRows =
+        RevisionRowControl[] realizedRows =
         [
             .. _gridView.GetVisualDescendants().OfType<RevisionRowControl>(),
         ];
+        ScrollContentPresenter? viewport = _gridView.GetVisualDescendants().OfType<ScrollContentPresenter>().FirstOrDefault();
+
+        // Virtualization realizes extra rows beyond the viewport. Like DataGridView.VisibleRowRange,
+        // only intersecting rows (including partially visible endpoints) choose the graph width.
+        RevisionRowControl[] visibleRows = viewport is { Bounds.Height: > 0 }
+            ? [.. realizedRows.Where(row => row.TranslatePoint(default, viewport) is Avalonia.Point origin
+                && origin.Y < viewport.Bounds.Height && origin.Y + row.Bounds.Height > 0)]
+            : realizedRows;
         _revisionGraphColumnProvider.UpdateVisibleRange(
             visibleRows.Select(row => row.DataContext).OfType<GitRevision>());
         int visibleLaneCount = visibleRows
@@ -3501,13 +3782,16 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
             .Max();
         int graphColumnWidth = CalculateGraphColumnWidth(visibleLaneCount);
         GridLength graphColumnGridLength = new(graphColumnWidth);
-        if (_revisionGraphColumnProvider.Column.Width == graphColumnGridLength)
+        if (_revisionGraphColumnProvider.Column.Width == graphColumnGridLength
+            && realizedRows.All(row => row.ColumnDefinitions[_revisionGraphColumnProvider.Index].Width == graphColumnGridLength))
         {
             return;
         }
 
+        // UpdateVisibleRange already publishes the model width; recycled rows still retain
+        // their old Grid allocation until it is applied, otherwise additional lanes are clipped.
         _revisionGraphColumnProvider.Column.Width = graphColumnGridLength;
-        foreach (RevisionRowControl row in visibleRows)
+        foreach (RevisionRowControl row in realizedRows)
         {
             row.ApplyColumnLayout();
         }
@@ -3539,16 +3823,18 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
                 hoverHighlightedIds);
             return true;
         }
-        catch (Exception)
+        catch (Exception exception)
         {
             // The reader can advance the row cache while layout is painting realized rows.
+            // Keep the source painter's diagnostic instead of silently losing every graph node.
+            System.Diagnostics.Trace.WriteLine(exception);
             return false;
         }
     }
 
     private void LaunchRebase(string command)
     {
-        if (SelectedRevision is not GitRevision revision)
+        if (LatestSelectedRevision is not GitRevision revision)
         {
             return;
         }
@@ -3666,6 +3952,12 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
             return [];
         }
 
+        // WinForms SelectedRows reports the last selected row first; Avalonia retains insertion order.
+        if (!direction.HasValue)
+        {
+            return [.. selectedItems.OfType<GitRevision>().Reverse()];
+        }
+
         IReadOnlySet<GitRevision> selectedRevisions = selectedItems.OfType<GitRevision>().ToHashSet();
         IEnumerable<GitRevision> revisions = _revisions.Count > 0
             ? _revisions.Where(selectedRevisions.Contains)
@@ -3761,6 +4053,11 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
         public void OnNext(IReadOnlyList<GitRevision> value)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             IReadOnlyList<GitRevision> revisions = AddStashRevisions(value);
             revisions = AddArtificialRevisionsBeforeHead(revisions);
             owner.AddToGraph(revisions, cancellationToken);
@@ -3769,13 +4066,18 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
         public void OnCompleted()
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             IReadOnlyList<GitRevision> artificialRevisions = _artificialRevisionsAddedToStream
                 ? []
                 : owner.CreateArtificialRevisions(cancellationToken);
             if (artificialRevisions.Count > 0)
             {
-                // HEAD was filtered out (or this is an empty repository), so use the same
-                // fallback insertion path as WinForms.
+                // HEAD where to insert the artificial was not found
+                // (can occur when filtering or limiting number of loaded commits)
                 owner.InsertArtificialRevisions(artificialRevisions);
             }
 
@@ -3788,12 +4090,48 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
             Dispatcher.UIThread.Post(() =>
             {
-                owner.OnLoadingCompleted(cancellationToken);
-                if (!cancellationToken.IsCancellationRequested)
+                if (cancellationToken.IsCancellationRequested)
                 {
-                    owner.RevisionsLoaded?.Invoke(owner, loadEventArgs);
-                    owner.LaunchBuildServerInfoFetchOperation(cancellationToken);
+                    return;
                 }
+
+                // Retain the stream's posted batch order and use the owner's factory for any async fallback.
+                owner._taskManager.FileAndForget(async () =>
+                {
+                    // Snapshot the current request on the owner's UI thread before searching its ancestors.
+                    await owner._taskManager.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+                    ObjectId fallbackSelectionId = owner._pendingSelectedObjectIds.FirstOrDefault();
+
+                    // Ignore if the not selected is artificial, it is likely that the settings was changed
+                    bool searchParents = !fallbackSelectionId.IsZero && !fallbackSelectionId.IsArtificial
+                        && !owner._revisions.Any(revision => owner._pendingSelectedObjectIds.Contains(revision.ObjectId));
+                    IReadOnlyList<ObjectId>? parents = null;
+                    if (searchParents && owner._lastModule is IGitModule module)
+                    {
+                        // Not found, so search for its parents
+                        await TaskScheduler.Default;
+
+                        // Limit the search to decrease command time (this may add seconds in big repos)
+                        // It is only the first that are considered interesting to select.
+                        GitArgumentBuilder args = new("rev-list")
+                        {
+                            "--max-count=50",
+                            fallbackSelectionId,
+                        };
+                        ExecutionResult result = module.GitExecutable.Execute(args, throwOnErrorExit: false, cancellationToken: cancellationToken);
+                        parents = [.. result.StandardOutput.LazySplit('\n')
+                            .Select(line => ObjectId.TryParse(line, out ObjectId parentId) ? parentId : default)
+                            .Where(parentId => !parentId.IsZero)];
+                    }
+
+                    await owner._taskManager.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+                    owner.OnLoadingCompleted(cancellationToken, fallbackSelectionId, parents);
+                    if (!cancellationToken.IsCancellationRequested)
+                    {
+                        owner.RevisionsLoaded?.Invoke(owner, loadEventArgs);
+                        owner.LaunchBuildServerInfoFetchOperation(cancellationToken);
+                    }
+                });
             });
         }
 
@@ -3828,10 +4166,12 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
                 return revisions;
             }
 
-            // Match WinForms insertion timing. Adding the artificial children before HEAD
-            // lets RevisionGraph.Add resolve Commit index -> HEAD when HEAD arrives.
+            // Insert artificial worktree/index just before HEAD (CurrentCheckout)
+            // If grid is filtered and HEAD not visible, insert in OnCompleted()
             List<GitRevision> revisionsWithArtificial = new(revisions.Count + artificialRevisions.Count);
             revisionsWithArtificial.AddRange(revisions.Take(headIndex));
+
+            // Add as normal commits at current position
             revisionsWithArtificial.AddRange(artificialRevisions);
             revisionsWithArtificial.AddRange(revisions.Skip(headIndex));
             _artificialRevisionsAddedToStream = true;
@@ -3851,7 +4191,7 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
             {
                 if (_insertedStashIds.Contains(revision.ObjectId))
                 {
-                    // The --all stream can report refs/stash after its parent batch already inserted it.
+                    // Do not add this again (when the main commit is handled)
                     continue;
                 }
 
@@ -3864,6 +4204,8 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
                 {
                     foreach (GitRevision parentStash in _stashesByParentId[revision.ObjectId])
                     {
+                        // Add if not already added (reflogs etc list before parent commit)
+                        // Remove current stash from list of stashes to display
                         if (stashesById.Remove(parentStash.ObjectId))
                         {
                             revisionsWithStashes.Add(parentStash);
@@ -3889,12 +4231,31 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
     {
         private readonly List<(ColumnProvider Provider, Control Cell)> _cells = [];
         private readonly RevisionGridControl _owner;
+        private ScrollContentPresenter? _viewport;
 
         public RevisionRowControl(RevisionGridControl owner)
         {
             _owner = owner;
             Classes.Add("revision-row");
-            AttachedToVisualTree += (_, _) => UpdateColorClasses();
+            AttachedToVisualTree += (_, _) =>
+            {
+                _viewport = this.FindAncestorOfType<ScrollContentPresenter>();
+                if (_viewport is not null)
+                {
+                    _viewport.SizeChanged += OnViewportSizeChanged;
+                }
+
+                InvalidateMeasure();
+                UpdateColorClasses();
+            };
+            DetachedFromVisualTree += (_, _) =>
+            {
+                if (_viewport is not null)
+                {
+                    _viewport.SizeChanged -= OnViewportSizeChanged;
+                    _viewport = null;
+                }
+            };
 
             foreach (ColumnProvider provider in owner._columnProviders)
             {
@@ -3926,8 +4287,26 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
                 }
             }
 
-            Avalonia.Size measured = base.MeasureOverride(availableSize);
-            return new Avalonia.Size(measured.Width, rowHeight);
+            // DataGridView fills only the visible viewport; horizontal overflow starts at
+            // fixed column widths plus the fill column's minimum, never its caption width.
+            // ScrollViewer measures its horizontal extent with an unbounded constraint.
+            double minimumWidth = ColumnDefinitions.Sum(column => column.Width.IsAbsolute
+                ? Math.Max(column.Width.Value, column.MinWidth)
+                : column.MinWidth);
+            double viewportWidth = double.IsFinite(availableSize.Width)
+                ? availableSize.Width
+                : _viewport?.Bounds.Width ?? 0;
+            double rowWidth = Math.Max(minimumWidth, viewportWidth);
+            base.MeasureOverride(new Avalonia.Size(rowWidth, availableSize.Height));
+            return new Avalonia.Size(rowWidth, rowHeight);
+        }
+
+        private void OnViewportSizeChanged(object? sender, SizeChangedEventArgs e)
+        {
+            if (e.WidthChanged)
+            {
+                InvalidateMeasure();
+            }
         }
 
         protected override void OnDataContextChanged(EventArgs e)
@@ -4028,9 +4407,15 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
                 && !_owner._revisionGraph.IsRowRelative(rowIndex);
             foreach (TextBlock textBlock in this.GetVisualDescendants().OfType<TextBlock>()
                          .Where(textBlock => textBlock.Classes.Contains("revision-subject")
-                             || textBlock.Classes.Contains("revision-body")))
+                             || textBlock.Classes.Contains("revision-body")
+                             || textBlock.Classes.Contains("revision-author-cell")
+                             || textBlock.Classes.Contains("revision-date-cell")
+                             || textBlock.Classes.Contains("revision-object-id-cell")
+                             || textBlock.Classes.Contains("revision-notes-cell")))
             {
-                string resourceKey = textBlock.Classes.Contains("revision-subject")
+                // The source passes the same CellStyle.ForeColor to subject and metadata
+                // painters; inheriting the ListBox foreground misses non-relative rows.
+                string resourceKey = !textBlock.Classes.Contains("revision-body")
                     ? isNonRelativeGray
                         ? isSelectedAndFocused
                             ? "GitExtensionsRevisionNonRelativeSelectedSubjectBrush"
@@ -4058,7 +4443,9 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
         public ListBox Revisions => control._gridView;
 
-        public ObjectId PendingSelectedObjectId => control._pendingSelectedObjectId;
+        public ObjectId PendingSelectedObjectId => control._pendingSelectedObjectIds.FirstOrDefault();
+
+        public IReadOnlyList<ObjectId> PendingSelectedObjectIds => control._pendingSelectedObjectIds;
 
         public void RaiseOwnerWindowDeactivated()
             => control.OnOwnerWindowDeactivated(control._ownerWindow, EventArgs.Empty);
@@ -4072,6 +4459,24 @@ public sealed partial class RevisionGridControl : GitModuleControl, ICheckRefs, 
 
         public void AppendRevisions(IEnumerable<GitRevision> revisions)
             => control.AppendRevisions([.. revisions], cancellationToken: default);
+
+        public void ReadRevisions(IEnumerable<GitRevision> revisions, CancellationToken cancellationToken = default)
+        {
+            GitRevision[] batch = [.. revisions];
+            control.AddToGraph(batch, cancellationToken);
+            control.AppendRevisions(batch, cancellationToken);
+        }
+
+        public void CompleteLoading(CancellationToken cancellationToken = default)
+            => control.OnLoadingCompleted(cancellationToken);
+
+        public IObserver<IReadOnlyList<GitRevision>> CreateRevisionObserver(CancellationToken cancellationToken)
+            => new RevisionObserver(control, cancellationToken, new RevisionLoadEventArgs(
+                control,
+                control.UICommands,
+                new Lazy<IReadOnlyList<IGitRef>>(() => []),
+                new Lazy<IReadOnlyCollection<GitRevision>>(() => []),
+                forceRefresh: false));
 
         public bool HasGraphParent(ObjectId childId, ObjectId parentId)
             => control._revisionGraph.TryGetNode(childId, out RevisionGraphRevision? child)

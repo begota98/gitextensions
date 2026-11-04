@@ -1,4 +1,4 @@
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using Avalonia.Controls;
 using GitCommands;
 using GitUIPluginInterfaces;
@@ -19,12 +19,12 @@ internal sealed class NotesColumnProvider : ColumnProvider
 
     public override void ApplySettings()
     {
-        Column.IsVisible = AppSettings.ShowGitNotesColumn.Value;
+        Column.IsVisible = AppSettings.ShowGitNotesColumn;
     }
 
     public override Control CreateCell()
     {
-        TextBlock textBlock = CreateTextBlock(ColumnLeftMargin);
+        TextBlock textBlock = CreateTextBlock();
         textBlock.Classes.Add("revision-notes-cell");
         return textBlock;
     }

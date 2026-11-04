@@ -1018,7 +1018,7 @@ public sealed class ParityInventoryTests
     }
 
     [Test]
-    public void Run_should_reject_a_reviewed_handwritten_comment_adaptation()
+    public void Run_should_reject_a_handwritten_comment_adaptation_without_an_absent_or_moved_reason()
     {
         using InventoryFixture fixture = new();
         fixture.WriteOriginal("Widget.cs", """
@@ -1043,7 +1043,7 @@ public sealed class ParityInventoryTests
                   "originalPart": "Widget.cs",
                   "originalValue": {{System.Text.Json.JsonSerializer.Serialize(finding.OriginalValue)}},
                   "twinPart": "Widget.cs",
-                  "rationale": "Handwritten comments must not be accepted."
+                  "rationale": "Handwritten comments require an exact absent or moved reason."
                 }
               ]
             }
@@ -1428,8 +1428,11 @@ public sealed class ParityInventoryTests
             && item.Path.Contains("footerPanel.Text", StringComparison.Ordinal));
     }
 
-    [Test]
-    public void Run_should_recognize_explicit_translation_registration_as_a_translation_key()
+    [TestCase("string.Empty", "nameof(Widget)", true)]
+    [TestCase("\"Standard\"", "nameof(Widget)", true)]
+    [TestCase("\"Standard\"", "\"OtherCategory\"", false)]
+    [TestCase("\"Standard\"", "TranslationCategory", false)]
+    public void Run_should_recognize_explicit_translation_registration_as_a_translation_key(string sourceExpression, string categoryExpression, bool belongsToWidget)
     {
         using InventoryFixture fixture = new();
         fixture.WriteOriginal("Widget.Designer.cs", """
@@ -1451,22 +1454,22 @@ public sealed class ParityInventoryTests
               <TextBox x:Name="editor" />
             </UserControl>
             """);
-        fixture.WriteTwin("Widget.axaml.cs", """
+        fixture.WriteTwin("Widget.axaml.cs", $$"""
             namespace Sample;
             public partial class Widget
             {
                 public void AddTranslationItems(ITranslation translation)
                 {
-                    translation.AddTranslationItem(nameof(Widget), nameof(editor), "Text", string.Empty);
+                    translation.AddTranslationItem({{categoryExpression}}, nameof(editor), "Text", {{sourceExpression}});
                 }
             }
             """);
 
         InventoryReport report = fixture.Run();
 
-        report.Twin.TranslationKeys.Should().ContainSingle(item => item.Key == "editor.Text");
-        report.Findings.Should().NotContain(item =>
-            item.Code == "translation.key.missing" && item.Path == "translation.key/editor.Text");
+        report.Twin.TranslationKeys.Any(item => item.Key == "editor.Text").Should().Be(belongsToWidget);
+        report.Findings.Any(item => item.Code == "translation.key.missing" && item.Path == "translation.key/editor.Text")
+            .Should().Be(!belongsToWidget);
     }
 
     [Test]

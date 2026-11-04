@@ -12,6 +12,24 @@ public sealed record CapturePlan
 
     public required string SettingsProfile { get; init; }
 
+    /// <summary>
+    ///  Gets the optional UTC fixture clock; absence preserves the capture consumer's live clock.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTime? FixtureNowUtc
+    {
+        get;
+        init
+        {
+            if (value is { Kind: not DateTimeKind.Utc })
+            {
+                throw new InvalidDataException("The capture fixture clock must be UTC.");
+            }
+
+            field = value;
+        }
+    }
+
     public required IReadOnlyList<int> Scales { get; init; }
 
     public required IReadOnlyList<CaptureThemePlan> Themes { get; init; }
@@ -114,5 +132,10 @@ public enum CaptureStateKind
     Expanded,
     Hover,
     Pressed,
-    MenuOpen
+    MenuOpen,
+
+    /// <summary>
+    ///  Opens a menu after placing the pointer over its owner, preserving that input route.
+    /// </summary>
+    MenuOpenHoveredOwner
 }

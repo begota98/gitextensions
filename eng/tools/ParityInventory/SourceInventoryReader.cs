@@ -289,13 +289,13 @@ internal static class SourceInventoryReader
         }
     }
 
-    private static bool IsComment(SyntaxTrivia trivia) =>
+    internal static bool IsComment(SyntaxTrivia trivia) =>
         trivia.IsKind(SyntaxKind.SingleLineCommentTrivia)
         || trivia.IsKind(SyntaxKind.MultiLineCommentTrivia)
         || trivia.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia)
         || trivia.IsKind(SyntaxKind.MultiLineDocumentationCommentTrivia);
 
-    private static string GetCommentAnchor(
+    internal static string GetCommentAnchor(
         TypeDeclarationSyntax declaration,
         MemberDeclarationSyntax member)
     {
@@ -308,7 +308,7 @@ internal static class SourceInventoryReader
                 .Select(GetMemberAnchor));
     }
 
-    private static string GetMemberAnchor(MemberDeclarationSyntax member) =>
+    internal static string GetMemberAnchor(MemberDeclarationSyntax member) =>
         member switch
         {
             FieldDeclarationSyntax field => $"field:{string.Join(",", field.Declaration.Variables.Select(variable => variable.Identifier.ValueText))}",
@@ -344,7 +344,7 @@ internal static class SourceInventoryReader
             _ => throw new InvalidOperationException($"Trivia '{trivia.Kind()}' is not a comment.")
         };
 
-    private static string NormalizeCommentText(SyntaxTrivia trivia)
+    internal static string NormalizeCommentText(SyntaxTrivia trivia)
     {
         string text = trivia.ToFullString().Replace("\r\n", "\n", StringComparison.Ordinal);
         string[] lines = text.Split('\n');
@@ -379,7 +379,7 @@ internal static class SourceInventoryReader
     private static bool IsSupportedTypeDeclaration(TypeDeclarationSyntax declaration) =>
         declaration is ClassDeclarationSyntax or StructDeclarationSyntax or InterfaceDeclarationSyntax;
 
-    private static string GetTypeName(TypeDeclarationSyntax declaration)
+    internal static string GetTypeName(TypeDeclarationSyntax declaration)
     {
         string namespaceName = string.Join(
             ".",
@@ -901,7 +901,8 @@ internal static class SourceInventoryReader
             SeparatedSyntaxList<ArgumentSyntax> arguments = invocation.ArgumentList.Arguments;
             if (invokedName != "AddTranslationItem"
                 || arguments.Count < 4
-                || !IsExplicitEmptyTranslationSource(arguments[3].Expression))
+                || GetStaticTranslationName(arguments[0].Expression) != className
+                || !IsExplicitTranslationSource(arguments[3].Expression))
             {
                 continue;
             }
@@ -943,11 +944,10 @@ internal static class SourceInventoryReader
         return null;
     }
 
-    private static bool IsExplicitEmptyTranslationSource(ExpressionSyntax expression)
+    private static bool IsExplicitTranslationSource(ExpressionSyntax expression)
     {
         if (expression is LiteralExpressionSyntax literal
-            && literal.IsKind(SyntaxKind.StringLiteralExpression)
-            && literal.Token.ValueText.Length == 0)
+            && literal.IsKind(SyntaxKind.StringLiteralExpression))
         {
             return true;
         }

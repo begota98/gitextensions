@@ -121,6 +121,11 @@ public partial class ImpactControl : UserControl, IDisposable
         }
     }
 
+    public void Stop()
+    {
+        _impactLoader?.Stop();
+    }
+
     private void ImpactControl_MouseWheel(object? sender, PointerWheelEventArgs e)
     {
         _scrollBar.Value = Math.Min(
@@ -130,11 +135,6 @@ public partial class ImpactControl : UserControl, IDisposable
         // Redraw when we've scrolled
         InvalidateVisual();
         e.Handled = true;
-    }
-
-    public void Stop()
-    {
-        _impactLoader?.Stop();
     }
 
     private void OnImpactUpdate(IList<ImpactLoader.Commit> commits)
@@ -227,6 +227,8 @@ public partial class ImpactControl : UserControl, IDisposable
         base.Render(context);
 
         double graphHeight = GetGraphHeight();
+
+        // Panel background
         IBrush background = GetResourceBrush("GitExtensionsPanelBackgroundBrush", Brushes.White);
         context.FillRectangle(background, new Rect(0, 0, Bounds.Width, graphHeight));
         UpdateScrollbar();
@@ -242,7 +244,10 @@ public partial class ImpactControl : UserControl, IDisposable
         // Now we have results, don't show waiting cursor
         Cursor = Cursor.Default;
 
+        // Use default AntiAliasing
         using (context.PushClip(new Rect(0, 0, Bounds.Width, graphHeight)))
+
+        // "Scroll" to the right position
         using (context.PushTransform(Matrix.CreateTranslation(-_scrollBar.Value, 0)))
         {
             lock (_dataLock)
@@ -309,13 +314,6 @@ public partial class ImpactControl : UserControl, IDisposable
         }
     }
 
-    private void OnResize(object? sender, SizeChangedEventArgs e)
-    {
-        UpdatePathsAndLabels();
-        UpdateScrollbar();
-        InvalidateVisual();
-    }
-
     private void UpdateScrollbar()
     {
         double rightValue = Math.Max(0, _scrollBar.Maximum - _scrollBar.LargeChange - _scrollBar.Value);
@@ -329,6 +327,13 @@ public partial class ImpactControl : UserControl, IDisposable
             _scrollBar.Maximum - _scrollBar.LargeChange - rightValue,
             _scrollBar.Minimum,
             _scrollBar.Maximum);
+    }
+
+    private void OnResize(object? sender, SizeChangedEventArgs e)
+    {
+        UpdatePathsAndLabels();
+        UpdateScrollbar();
+        InvalidateVisual();
     }
 
     private static StreamGeometry CreateAuthorPath(List<(Rect rectangle, int changeCount)> points)
@@ -468,7 +473,7 @@ public partial class ImpactControl : UserControl, IDisposable
             // Clear previous labels
             _lineLabels.Clear();
 
-            // Add points to each author's path
+            // Add points to each author's StreamGeometry
             foreach ((string author, List<(Rect rectangle, int changeCount)> points) in authorPoints)
             {
                 // Scale heights
@@ -513,14 +518,12 @@ public partial class ImpactControl : UserControl, IDisposable
     }
 
     /// <summary>
-    /// Determines if the given coordinates are belonging to any author.
+    /// Determines if the given coordinates are belonging to any author
     /// </summary>
-    /// <param name="x">x coordinate.</param>
-    /// <param name="y">y coordinate.</param>
-    /// <returns>
-    /// <see langword="true"/> if author has changed and graph should be redrawn;
-    /// <see langword="false"/>, otherwise.
-    /// </returns>
+    /// <param name="x">x coordinate</param>
+    /// <param name="y">y coordinate</param>
+    /// <returns>true if author has changed and graph should be redrawn
+    /// false, otherwise</returns>
     public bool TrySetAuthorByScreenPosition(int x, int y)
     {
         lock (_dataLock)

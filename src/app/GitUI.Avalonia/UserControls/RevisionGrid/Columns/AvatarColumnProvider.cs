@@ -7,6 +7,8 @@ using GitCommands;
 using GitUI.Avatars;
 using GitUI.Properties;
 using GitUIPluginInterfaces;
+using Point = Avalonia.Point;
+using Size = Avalonia.Size;
 
 namespace GitUI.UserControls.RevisionGrid.Columns;
 
@@ -30,10 +32,7 @@ internal sealed class AvatarColumnProvider : ColumnProvider
         _revisionGridView = revisionGridView;
         _avatarProvider = avatarProvider;
         _avatarCacheCleaner = avatarCacheCleaner;
-        _ = new CacheRefreshSubscription(
-            _revisionGridView,
-            _avatarCacheCleaner,
-            () => Interlocked.Increment(ref _cacheVersion));
+        _ = new CacheRefreshSubscription(this, _avatarCacheCleaner);
     }
 
     public override void ApplySettings()
@@ -62,7 +61,7 @@ internal sealed class AvatarColumnProvider : ColumnProvider
     public override void OnCellPainting(Control control, GitRevision revision)
     {
         AvatarCell image = (AvatarCell)control;
-        if (revision.IsArtificial)
+        if (revision.IsArtificial || revision.AuthorEmail is null)
         {
             image.Clear();
         }
@@ -71,7 +70,7 @@ internal sealed class AvatarColumnProvider : ColumnProvider
             _email = revision.AuthorEmail;
             _author = revision.Author;
             image.Load(
-                revision.AuthorEmail ?? string.Empty,
+                revision.AuthorEmail,
                 revision.Author,
                 Volatile.Read(ref _cacheVersion),
                 _avatarSize);
@@ -95,6 +94,9 @@ internal sealed class AvatarColumnProvider : ColumnProvider
     {
         private readonly IAvatarProvider _avatarProvider;
         private readonly IImage _placeholderImage;
+        private StreamGeometry? _cornerClip;
+        private double _cornerClipScale;
+        private Size _cornerClipSize;
         private int _cacheVersion = -1;
         private string? _email;
         private int _imageSize = -1;
@@ -107,12 +109,30 @@ internal sealed class AvatarColumnProvider : ColumnProvider
         {
             _avatarProvider = avatarProvider;
             _placeholderImage = placeholderImage;
-            Stretch = Avalonia.Media.Stretch.Uniform;
+
+            // The original DrawImage(image, rect) fills the square cell destination,
+            // including when a custom provider returns a non-square server image.
+            Stretch = Avalonia.Media.Stretch.Fill;
         }
 
         public AvatarCell(IAvatarProvider avatarProvider)
             : this(avatarProvider, Images.User80)
         {
+        }
+
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            Size arranged = base.ArrangeOverride(finalSize);
+            double scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1;
+            if (_cornerClip is null || _cornerClipSize != arranged || _cornerClipScale != scale)
+            {
+                _cornerClipSize = arranged;
+                _cornerClipScale = scale;
+                _cornerClip = CreateCornerClip(arranged, scale);
+                Clip = _cornerClip;
+            }
+
+            return arranged;
         }
 
         public void Clear()
@@ -133,6 +153,8 @@ internal sealed class AvatarColumnProvider : ColumnProvider
         public void Load(string email, string? name, int cacheVersion, int imageSize = 20)
         {
             bool identityChanged = _email != email || _name != name || _imageSize != imageSize;
+
+            // Manage exceptional case where cached image have been cleaned by user
             if (!identityChanged && _cacheVersion == cacheVersion)
             {
                 LastLoadTask = null;
@@ -144,30 +166,90 @@ internal sealed class AvatarColumnProvider : ColumnProvider
             _imageSize = imageSize;
             _cacheVersion = cacheVersion;
             int requestVersion = ++_requestVersion;
-            if (identityChanged)
+            LastLoadTask = LoadCoreAsync(email, name, imageSize, requestVersion, identityChanged);
+        }
+
+        private async Task<byte[]?> LoadCoreAsync(string email, string? name, int imageSize, int requestVersion, bool identityChanged)
+        {
+            Task<byte[]?> imageTask = _avatarProvider.GetAvatarAsync(email, name, imageSize);
+            if (identityChanged && !imageTask.IsCompletedSuccessfully)
             {
+                // draw the placeholder
                 ReplaceSource(_placeholderImage);
             }
 
-            LastLoadTask = LoadCoreAsync(email, name, imageSize, requestVersion);
-        }
-
-        private async Task<byte[]?> LoadCoreAsync(string email, string? name, int imageSize, int requestVersion)
-        {
-            byte[]? imageData = await _avatarProvider.GetAvatarAsync(email, name, imageSize);
+            byte[]? imageData = await imageTask.ConfigureAwait(false);
             Bitmap? bitmap = AvatarImage.Decode(imageData);
 
-            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            // Framework constraint: completed cache hits paint inline like WinForms;
+            // only a genuinely asynchronous load needs to return to the owner thread.
+            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
             {
-                if (requestVersion != _requestVersion)
-                {
-                    bitmap?.Dispose();
-                    return;
-                }
+                ApplyLoadedImage(bitmap, requestVersion);
+            }
+            else
+            {
+                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => ApplyLoadedImage(bitmap, requestVersion));
+            }
 
-                ReplaceSource(bitmap);
-            });
             return imageData;
+        }
+
+        private void ApplyLoadedImage(Bitmap? bitmap, int requestVersion)
+        {
+            if (requestVersion != _requestVersion)
+            {
+                bitmap?.Dispose();
+                return;
+            }
+
+            // Once the image has loaded, invalidate only the avatar area for repaint
+            ReplaceSource(bitmap);
+        }
+
+        private static StreamGeometry CreateCornerClip(Size size, double scale)
+        {
+            // Clip around avatar image to round the corners
+            // Algorithm not dependent of dpi scaling (because working with physical pixels)
+            const int CornerWidth = 2;
+            double pixel = 1 / scale;
+            double corner = CornerWidth * pixel;
+            double right = size.Width;
+            double bottom = size.Height;
+            StreamGeometry geometry = new();
+            using (StreamGeometryContext path = geometry.Open())
+            {
+                // Top left corner
+                path.BeginFigure(new Point(corner, 0), isFilled: true);
+
+                // Top right corner
+                path.LineTo(new Point(right - corner, 0));
+                path.LineTo(new Point(right - corner, pixel));
+                path.LineTo(new Point(right - pixel, pixel));
+                path.LineTo(new Point(right - pixel, corner));
+                path.LineTo(new Point(right, corner));
+
+                // Bottom right corner
+                path.LineTo(new Point(right, bottom - corner));
+                path.LineTo(new Point(right - pixel, bottom - corner));
+                path.LineTo(new Point(right - pixel, bottom - pixel));
+                path.LineTo(new Point(right - corner, bottom - pixel));
+                path.LineTo(new Point(right - corner, bottom));
+
+                // Bottom left corner
+                path.LineTo(new Point(corner, bottom));
+                path.LineTo(new Point(corner, bottom - pixel));
+                path.LineTo(new Point(pixel, bottom - pixel));
+                path.LineTo(new Point(pixel, bottom - corner));
+                path.LineTo(new Point(0, bottom - corner));
+                path.LineTo(new Point(0, corner));
+                path.LineTo(new Point(pixel, corner));
+                path.LineTo(new Point(pixel, pixel));
+                path.LineTo(new Point(corner, pixel));
+                path.EndFigure(isClosed: true);
+            }
+
+            return geometry;
         }
 
         private void ReplaceSource(IImage? image)
@@ -185,26 +267,24 @@ internal sealed class AvatarColumnProvider : ColumnProvider
     private sealed class CacheRefreshSubscription
     {
         private readonly IAvatarCacheCleaner _avatarCacheCleaner;
-        private readonly Action _invalidateCacheVersion;
-        private readonly WeakReference<RevisionGridControl> _revisionGridView;
+        private readonly WeakReference<AvatarColumnProvider> _columnProvider;
 
         public CacheRefreshSubscription(
-            RevisionGridControl revisionGridView,
-            IAvatarCacheCleaner avatarCacheCleaner,
-            Action invalidateCacheVersion)
+            AvatarColumnProvider columnProvider,
+            IAvatarCacheCleaner avatarCacheCleaner)
         {
-            _revisionGridView = new WeakReference<RevisionGridControl>(revisionGridView);
+            // The shared cleaner must not retain a closed grid through an instance callback.
+            _columnProvider = new WeakReference<AvatarColumnProvider>(columnProvider);
             _avatarCacheCleaner = avatarCacheCleaner;
-            _invalidateCacheVersion = invalidateCacheVersion;
             _avatarCacheCleaner.CacheCleared += OnCacheCleared;
         }
 
         private void OnCacheCleared(object? sender, EventArgs e)
         {
-            if (_revisionGridView.TryGetTarget(out RevisionGridControl? revisionGridView))
+            if (_columnProvider.TryGetTarget(out AvatarColumnProvider? columnProvider))
             {
-                _invalidateCacheVersion();
-                revisionGridView.RefreshRealizedRows();
+                Interlocked.Increment(ref columnProvider._cacheVersion);
+                columnProvider._revisionGridView.RefreshRealizedRows();
                 return;
             }
 

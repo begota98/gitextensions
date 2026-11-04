@@ -1,4 +1,5 @@
 ﻿using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
@@ -51,17 +52,29 @@ partial class FormBrowse
 
         InsertFetchPullShortcuts();
 
+        foreach (TemplatedControl button in ToolStripMain.Items.OfType<TemplatedControl>())
+        {
+            MenuFlyout? menu = button switch
+            {
+                SplitButton split => split.Flyout as MenuFlyout,
+                DropDownButton dropDown => dropDown.Flyout as MenuFlyout,
+                _ => null,
+            };
+            if (menu is not null)
+            {
+                // Native ToolStrip popups extend from an item edge, not its center.
+                // Resolve the source direction when opening so live RTL still applies.
+                menu.Opening += (_, _) => WinFormsToolStripMenuSizer.ApplyToolbarDropDownPlacement(menu, button);
+            }
+        }
+
         MenuFlyout pullDropDown = (MenuFlyout)toolStripButtonPull.Flyout!;
         pullDropDown.Opening += (_, _) => UpdateFetchAllVisibility();
-        pullDropDown.Opened += (_, _) =>
-        {
-            // Avalonia realizes this toolbar flyout outside ToolStripDropDownItem's
-            // submenu route. Apply the source shortcut text after its row templates exist.
-            WinFormsToolStripMenuSizer.Apply(pullDropDown, pullToolStripMenuItem1);
-            Dispatcher.UIThread.Post(
-                () => WinFormsToolStripMenuSizer.Apply(pullDropDown, pullToolStripMenuItem1),
-                DispatcherPriority.Loaded);
-        };
+
+        // Measure the populated menus through the source ToolStrip layout, including
+        // its paint-only frame and owner font, before the framework places the popup.
+        WinFormsToolStripMenuSizer.ConfigureToolbarDropDown(pullDropDown, toolStripButtonPull);
+        WinFormsToolStripMenuSizer.ConfigureToolbarDropDown(BranchSelectFlyout, branchSelect);
 
         // Layout engine bug (?) which may change the order of toolbars
         // if the 1st one becomes longer than the 2nd toolbar's Location.X
@@ -95,27 +108,6 @@ partial class FormBrowse
                 RevisionGrid.SetAndApplyPathFilter(pathFilter.QuoteNE());
             }
         }
-    }
-
-    private void UpdateWorktreeToolStripVisibility()
-    {
-        if (!Module.IsValidGitWorkingDir())
-        {
-            toolStripWorktrees.IsVisible = false;
-            return;
-        }
-
-        CancellationToken cancellationToken = _loadOperationsCancellationTokenSource.Token;
-        _loadOperations.FileAndForget(async () =>
-        {
-            await TaskScheduler.Default;
-            IReadOnlyList<GitWorktree> worktrees = Module.GetWorktrees();
-
-            await _loadOperations.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-
-            _worktrees = worktrees;
-            toolStripWorktrees.IsVisible = worktrees.Count > 1;
-        });
     }
 
     private void UpdateTooltipWithShortcut(Control button, Command command)
@@ -165,7 +157,14 @@ partial class FormBrowse
                 clonedToolStripMenuItem,
                 toolTipText.UpdateSuffix(command.HasValue ? GetShortcutKeyTooltipString(command.Value) : null!));
 
-            clonedToolStripMenuItem.Click += (_, _) => toolStripMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            clonedToolStripMenuItem.Click += (_, _) =>
+            {
+                // Avalonia's routed event does not enforce PerformClick's Enabled/Available gate.
+                if (toolStripMenuItem.IsEffectivelyEnabled && toolStripMenuItem.IsVisible)
+                {
+                    toolStripMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                }
+            };
             return clonedToolStripMenuItem;
         }
     }
@@ -277,6 +276,8 @@ partial class FormBrowse
             }
         }
 
+        // a user may have a specific shell configured in settings, but the shell is no longer available
+        // set the first available shell as default
         if (selectedDefaultShell?.Tag is IShellDescriptor selectedShell)
         {
             userShell.Icon = selectedShell.Icon;

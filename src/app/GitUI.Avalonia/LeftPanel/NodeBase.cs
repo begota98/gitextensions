@@ -10,6 +10,12 @@ namespace GitUI.LeftPanel;
 /// <summary>A common base class for both <see cref="Node"/> and <see cref="Tree"/>.</summary>
 internal abstract class NodeBase
 {
+    /// <summary>
+    ///  Initializes a new instance of the <see cref="NodeBase"/> class for <see cref="Tree"/> nodes.
+    /// </summary>
+    /// <remarks>
+    ///  Initializes a new instance of the <see cref="NodeBase"/> class for non-<see cref="Tree"/> nodes.
+    /// </remarks>
     protected NodeBase(RepoObjectsTree owner, NodeBase? parent, string caption, IImage icon, bool isBold = false, bool isItalic = false)
     {
         Owner = owner;
@@ -38,8 +44,8 @@ internal abstract class NodeBase
 
     /// <summary>
     /// Marks this node to be included in multi-selection. See <see cref="Select(bool, bool)"/>.
-    /// This flag is independent of the tree's single highlighted node, so keyboard
-    /// navigation does not change which references participate in multi-selection.
+    /// This is remembered here instead of relying on the status of <see cref="TreeViewNode"/>
+    /// because Avalonia's tree highlights a single node independently of multi-selection.
     /// </summary>
     protected internal bool IsSelected { get; set; }
 
@@ -118,6 +124,7 @@ internal abstract class NodeBase
 
         if (style == WinFormsShims.FontStyle.Regular)
         {
+            // For regular, reset to use the NativeTreeView font
             ResetFont();
             return;
         }

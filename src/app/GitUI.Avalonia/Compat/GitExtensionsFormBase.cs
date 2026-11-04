@@ -166,8 +166,20 @@ public class GitExtensionsFormBase : Window, ITranslate, WinFormsShims.IWin32Win
         }
     }
 
-    protected virtual void OnLoad(EventArgs e)
+    /// <summary>
+    /// Checks if the form wants to handle the key and executes that hotkey
+    /// (without propagating an unhandled key to the base class function as in <cref>ProcessCmdKey</cref>).
+    /// </summary>
+    public virtual bool ProcessHotkey(WinFormsShims.Keys keyData)
     {
+        // Avalonia maps modifier-only and unsupported key events to None; None is not an assignable hotkey.
+        if (!HotkeysEnabled || keyData == WinFormsShims.Keys.None)
+        {
+            return false;
+        }
+
+        HotkeyCommand? hotkey = _hotkeys.FirstOrDefault(hotkey => hotkey.KeyData == keyData);
+        return hotkey is not null && ExecuteCommand(hotkey.CommandCode);
     }
 
     protected virtual void OnShown(EventArgs e)
@@ -199,20 +211,8 @@ public class GitExtensionsFormBase : Window, ITranslate, WinFormsShims.IWin32Win
     {
     }
 
-    /// <summary>
-    /// Checks if the form wants to handle the key and executes that hotkey
-    /// (without propagating an unhandled key to the base class function as in <cref>ProcessCmdKey</cref>).
-    /// </summary>
-    public virtual bool ProcessHotkey(WinFormsShims.Keys keyData)
+    protected virtual void OnLoad(EventArgs e)
     {
-        // Avalonia maps modifier-only and unsupported key events to None; None is not an assignable hotkey.
-        if (!HotkeysEnabled || keyData == WinFormsShims.Keys.None)
-        {
-            return false;
-        }
-
-        HotkeyCommand? hotkey = _hotkeys.FirstOrDefault(hotkey => hotkey.KeyData == keyData);
-        return hotkey is not null && ExecuteCommand(hotkey.CommandCode);
     }
 
     protected bool IsDesignMode => Design.IsDesignMode;
@@ -303,6 +303,7 @@ public class GitExtensionsFormBase : Window, ITranslate, WinFormsShims.IWin32Win
     /// <summary>Controls the shared Escape-to-close behavior; the repository browser opts out.</summary>
     protected virtual bool CloseOnEscape => true;
 
+    /// <summary>Overridden: Checks if a hotkey wants to handle the key before letting the message propagate</summary>
     protected override void OnKeyDown(KeyEventArgs e)
     {
         WinFormsShims.Keys keyData = KeysMapper.ToKeys(e);

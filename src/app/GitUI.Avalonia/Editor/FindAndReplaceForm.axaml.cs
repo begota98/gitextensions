@@ -354,6 +354,9 @@ public partial class FindAndReplaceForm : GitExtensionsForm
         HideAndClearSearch();
     }
 
+    /// <summary>
+    /// Clean up any resources being used.
+    /// </summary>
     private void FindAndReplaceForm_Closed(object? sender, EventArgs e)
     {
         _search.Dispose();
@@ -406,6 +409,7 @@ public partial class FindAndReplaceForm : GitExtensionsForm
                     break;
                 }
 
+                // Replace
                 count++;
                 InsertText(txtReplaceWith.Text ?? string.Empty);
             }
@@ -550,11 +554,21 @@ public sealed class TextEditorSearcher : IDisposable
     public bool MatchCase;
     public bool MatchWholeWordOnly;
     private TextEditor? _editor;
+    private TextDocument? _document;
     private string? _lookFor2; // uppercase in case-insensitive mode
-    private ScanRegionRenderer? _region;
     private int? _scanOffset;
     private int _scanLength;
-    private TextDocument? _document;
+
+    // I would have used the TextAnchor class to represent the beginning and
+    // end of the region to scan while automatically adjusting to changes in
+    // the document--but for some reason it is sealed and its constructor is
+    // internal. Instead I use a ScanRegionRenderer, which is perhaps even better as
+    // it gives me the opportunity to highlight the region. Note that all the
+    // markers and coloring information is associated with the text view,
+    // and the editor control, so TextEditorSearcher needs a reference
+    // to the TextEditor. After adding the renderer to the view, we
+    // must remember to remove it when it is no longer needed.
+    private ScanRegionRenderer? _region;
 
     /// <summary>Gets or sets the document to search.</summary>
     public TextDocument? Document
@@ -611,9 +625,8 @@ public sealed class TextEditorSearcher : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    /// <summary>Sets the region to search. The region is updated automatically as the document changes.</summary>
-    /// <param name="offset">The zero-based range offset.</param>
-    /// <param name="length">The range length.</param>
+    /// <summary>Sets the region to search. The region is cleared
+    /// automatically as the document changes.</summary>
     public void SetScanRegion(int offset, int length)
     {
         TextDocument document = _document ?? throw new InvalidOperationException("The searcher has no document.");
@@ -690,6 +703,9 @@ public sealed class TextEditorSearcher : IDisposable
         return result;
     }
 
+    private static bool MatchFirstCh(char a, char b, bool matchCase)
+        => matchCase ? a == b : char.ToUpperInvariant(a) == char.ToUpperInvariant(b);
+
     private TextRange? FindNextIn(int offset1, int offset2, bool searchBackward)
     {
         string lookFor = LookFor ?? throw new InvalidOperationException("No search text was specified.");
@@ -722,9 +738,6 @@ public sealed class TextEditorSearcher : IDisposable
 
         return null;
     }
-
-    private static bool MatchFirstCh(char a, char b, bool matchCase)
-        => matchCase ? a == b : char.ToUpperInvariant(a) == char.ToUpperInvariant(b);
 
     private bool IsWholeWordMatch(int offset)
         => IsWordBoundary(offset) && IsWordBoundary(offset + (LookFor?.Length ?? 0));
@@ -826,7 +839,8 @@ public sealed class TextEditorSearcher : IDisposable
     }
 }
 
-/// <summary>Owns the highlighted search-result ranges for one editor.</summary>
+/// <summary>Bundles a group of markers together so that they can be cleared
+/// together.</summary>
 public sealed class HighlightGroup : IDisposable
 {
     private readonly TextEditor _editor;

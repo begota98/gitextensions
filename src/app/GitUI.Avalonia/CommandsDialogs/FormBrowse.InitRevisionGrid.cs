@@ -50,6 +50,9 @@ partial class FormBrowse
         bool firstTimeInFileHistoryMode = isFileHistoryMode;
         RevisionGrid.RevisionsLoading += (sender, e) =>
         {
+            // Branch-filter refs belong to the revision refresh, not the left panel's visibility.
+            ToolStripFilters.RefreshRevisionFunction(e.GetRefs);
+
             // Open diff in "filehistory" mode
             if (firstTimeInFileHistoryMode)
             {
@@ -88,7 +91,7 @@ partial class FormBrowse
             RevisionGrid_SelectionChanged(sender, e);
         };
 
-        RevisionGrid.SelectedId = selectedId.IsZero ? firstId : selectedId;
+        RevisionGrid.SelectedId = selectedId;
         RevisionGrid.FirstId = firstId;
 
         RevisionGrid.ToggledBetweenArtificialAndHeadCommits += (_, _) =>

@@ -169,8 +169,8 @@ public partial class FormRevertCommit : GitExtensionsDialog
         string existingCommitMessage = ThreadHelper.JoinableTaskFactory.Run(
             () => commitMessageManager.GetMergeOrCommitMessageAsync());
 
-        // Do not verify success: a failed revert commonly means conflicts that the existing
-        // conflict handler must inspect and offer to resolve.
+        // Don't verify whether the command is successful.
+        // If it fails, likely there is a conflict that needs to be resolved.
         FormProcess.ShowDialog(this, UICommands, arguments: command.Value, Module.WorkingDir, input: null, useDialogSettings: true);
 
         if (!string.IsNullOrWhiteSpace(existingCommitMessage))
@@ -221,13 +221,13 @@ public partial class FormRevertCommit : GitExtensionsDialog
         return Commands.Revert(Revision.ObjectId, AutoCommit.IsChecked == true, parentIndex);
     }
 
+    private void lvParentsList_Resize(object? sender, EventArgs e)
+        => lvParentsList.InvalidateMeasure();
+
     private void btnAbort_Click(object? sender, EventArgs e)
     {
         DialogResult = WinFormsShims.DialogResult.Cancel;
     }
-
-    private void lvParentsList_Resize(object? sender, EventArgs e)
-        => lvParentsList.InvalidateMeasure();
 
     internal TestAccessor GetTestAccessor() => new(this);
 

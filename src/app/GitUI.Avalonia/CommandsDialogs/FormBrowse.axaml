@@ -328,7 +328,6 @@
                                 compat:TranslationCompat.UseToolTipText="True"
                                 Classes="gitextensions-toolbar-button gitextensions-icon-only"
                                 Icon="{x:Static properties:Images.WorkTree}"
-                                IsVisible="False"
                                 ToolTip.Tip="Worktrees">
           <compat:IconSplitButton.Flyout>
             <MenuFlyout />
@@ -345,8 +344,7 @@
                                 Content="Branch"
                                 Icon="{x:Static properties:Images.Branch}">
           <compat:IconSplitButton.Flyout>
-            <MenuFlyout Placement="BottomEdgeAlignedLeft"
-                        FlyoutPresenterClasses="gitextensions-branch-menu" />
+            <MenuFlyout Placement="BottomEdgeAlignedLeft" />
           </compat:IconSplitButton.Flyout>
         </compat:IconSplitButton>
         <Border x:Name="toolStripSeparator1" Classes="gitextensions-toolbar-separator">
@@ -371,15 +369,18 @@
                 <MenuItem.Icon><Image Classes="gitextensions-icon-16" Source="{x:Static properties:Images.PullRebase}" /></MenuItem.Icon>
               </wf:ToolStripMenuItem>
               <wf:ToolStripMenuItem x:Name="fetchToolStripMenuItem"
+                                    compat:TranslationCompat.UseToolTipText="True"
                                     Header="_Fetch"
                                     ToolTip.Tip="Fetch branches and tags">
                 <MenuItem.Icon><Image Classes="gitextensions-icon-16" Source="{x:Static properties:Images.PullFetch}" /></MenuItem.Icon>
               </wf:ToolStripMenuItem>
-              <wf:ToolStripMenuItem x:Name="fetchAllToolStripMenuItem" Header="Fetch _all">
+              <wf:ToolStripMenuItem x:Name="fetchAllToolStripMenuItem"
+compat:TranslationCompat.UseToolTipText="True" Header="Fetch _all">
                 <MenuItem.Icon><Image Classes="gitextensions-icon-16" Source="{x:Static properties:Images.PullFetchAll}" /></MenuItem.Icon>
                 <ToolTip.Tip>Fetch branches and tags from all remote repositories</ToolTip.Tip>
               </wf:ToolStripMenuItem>
               <wf:ToolStripMenuItem x:Name="fetchPruneAllToolStripMenuItem"
+                                    compat:TranslationCompat.UseToolTipText="True"
                                     Header="F_etch and prune all"
                                     ToolTip.Tip="Fetch branches and tags from all remote repositories also prune deleted branches">
                 <MenuItem.Icon><Image Classes="gitextensions-icon-16" Source="{x:Static properties:Images.PullFetchPruneAll}" /></MenuItem.Icon>
@@ -413,11 +414,15 @@
                                 ToolTip.Tip="Manage stashes">
           <compat:IconSplitButton.Flyout>
             <MenuFlyout>
-              <wf:ToolStripMenuItem x:Name="stashChangesToolStripMenuItem" Header="_Stash" ToolTip.Tip="Stash changes" />
-              <wf:ToolStripMenuItem x:Name="stashStagedToolStripMenuItem" Header="S_tash staged" ToolTip.Tip="Stash staged changes" />
-              <wf:ToolStripMenuItem x:Name="stashPopToolStripMenuItem" Header="Stash _pop" ToolTip.Tip="Apply and drop single stash" />
+              <wf:ToolStripMenuItem x:Name="stashChangesToolStripMenuItem"
+compat:TranslationCompat.UseToolTipText="True" Header="_Stash" ToolTip.Tip="Stash changes" />
+              <wf:ToolStripMenuItem x:Name="stashStagedToolStripMenuItem"
+compat:TranslationCompat.UseToolTipText="True" Header="S_tash staged" ToolTip.Tip="Stash staged changes" />
+              <wf:ToolStripMenuItem x:Name="stashPopToolStripMenuItem"
+compat:TranslationCompat.UseToolTipText="True" Header="Stash _pop" ToolTip.Tip="Apply and drop single stash" />
               <wf:ToolStripSeparator x:Name="toolStripSeparator9" />
-              <wf:ToolStripMenuItem x:Name="manageStashesToolStripMenuItem" Header="_Manage stashes..." ToolTip.Tip="Manage stashes" />
+              <wf:ToolStripMenuItem x:Name="manageStashesToolStripMenuItem"
+compat:TranslationCompat.UseToolTipText="True" Header="_Manage stashes..." ToolTip.Tip="Manage stashes" />
               <wf:ToolStripMenuItem x:Name="createAStashToolStripMenuItem" Header="_Create a stash..." />
             </MenuFlyout>
           </compat:IconSplitButton.Flyout>
@@ -450,7 +455,7 @@
                            ToolTip.Tip="Settings" />
           </compat:NativeToolStrip>
       </Grid>
-      <Grid x:Name="toolStripFiltersHost" Height="27" ClipToBounds="True">
+      <Grid x:Name="toolStripFiltersHost" ClipToBounds="True">
         <controls:FilterToolBar x:Name="ToolStripFilters">
           <controls:FilterToolBar.OverflowButton>
             <Button x:Name="toolStripFiltersOverflow"
@@ -464,11 +469,9 @@
           </controls:FilterToolBar.OverflowButton>
         </controls:FilterToolBar>
       </Grid>
-      <StackPanel x:Name="ToolStripScripts"
-                  Width="50"
-                  Height="25"
-                  Orientation="Horizontal"
-                  Spacing="1" />
+      <compat:NativeToolStrip x:Name="ToolStripScripts"
+                              GripVisible="False"
+                              Background="{StaticResource GitExtensionsTransparentBrush}" />
       </wf:ToolStripPanel>
     <Grid x:Name="_contentPanel"
           Background="{DynamicResource GitExtensionsWindowBackgroundBrush}">
@@ -514,11 +517,9 @@
             <Grid RowDefinitions="Auto,Auto,*">
               <controls:InteractiveGitActionControl x:Name="notificationBarGitActionInProgress"
                                                     Grid.Row="0"
-                                                    MinHeight="33"
                                                     IsVisible="False" />
               <controls:InteractiveGitActionControl x:Name="notificationBarBisectInProgress"
                                                     Grid.Row="1"
-                                                    MinHeight="33"
                                                     IsVisible="False" />
               <gitui:RevisionGridControl x:Name="RevisionGrid" Grid.Row="2" />
             </Grid>
