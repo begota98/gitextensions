@@ -6,19 +6,25 @@ using GitUI;
 
 namespace GitExtensions;
 
+// Framework constraint: the CLR entry point stays synchronous for STA; the Flatpak-only probe finishes before UI startup.
 internal static class Program
 {
     internal static readonly ServiceContainer ServiceContainer = new();
+    private static readonly Lazy<bool> DocumentationBaseUrlInitialization = new(() =>
+    {
+        AppSettings.SetDocumentationBaseUrl(AppSettings.ProductVersion);
+        return true;
+    });
 
     /// <summary>
     /// The main entry point for the application.
     /// </summary>
     [STAThread]
-    private static async Task<int> Main(string[] args)
+    private static int Main(string[] args)
     {
         ServiceContainerRegistry.RegisterServices(ServiceContainer);
 
-        AppSettings.SetDocumentationBaseUrl(AppSettings.ProductVersion);
+        InitializeDocumentationBaseUrl();
         AppTitleGenerator.Initialise(ThisAssembly.Git.Sha, ThisAssembly.Git.Branch);
 
         // If an error happens before we had a chance to init the environment information
@@ -28,7 +34,9 @@ internal static class Program
 
         if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(FlatpakConformanceProbe.ReportPathEnvironmentVariable)))
         {
-            int? flatpakConformanceExitCode = await FlatpakConformanceProbe.RunIfRequestedAsync();
+#pragma warning disable VSTHRD002
+            int? flatpakConformanceExitCode = FlatpakConformanceProbe.RunIfRequestedAsync().GetAwaiter().GetResult();
+#pragma warning restore VSTHRD002
             return flatpakConformanceExitCode!.Value;
         }
 
@@ -53,6 +61,9 @@ internal static class Program
 
         return builder.LogToTrace();
     }
+
+    internal static void InitializeDocumentationBaseUrl()
+        => _ = DocumentationBaseUrlInitialization.Value;
 
     internal static bool ShouldUseWayland(bool isLinux, string? waylandDisplay)
         => isLinux && !string.IsNullOrWhiteSpace(waylandDisplay);

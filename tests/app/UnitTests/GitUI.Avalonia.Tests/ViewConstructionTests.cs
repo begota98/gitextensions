@@ -1,4 +1,7 @@
+﻿using System.ComponentModel.Design;
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
@@ -7,6 +10,7 @@ using GitCommands.Git.Gpg;
 using GitExtensions.Extensibility;
 using GitExtensions.Extensibility.Git;
 using GitExtensions.Extensibility.Translations;
+using GitExtUtils;
 using GitUI;
 using GitUI.CommandsDialogs;
 using GitUI.CommandsDialogs.BrowseDialog.DashboardControl;
@@ -23,9 +27,17 @@ namespace GitExtensionsTests;
 [TestFixture]
 public sealed class ViewConstructionTests
 {
+    private AppSettingsTestScope _settingsScope = null!;
+
     [SetUp]
     public void SetUp()
-        => ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
+    {
+        _settingsScope = new AppSettingsTestScope();
+        ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
+    }
+
+    [TearDown]
+    public void TearDown() => _settingsScope.Dispose();
 
     [Test]
     public void Translator_should_find_the_shared_translations()
@@ -72,15 +84,47 @@ public sealed class ViewConstructionTests
             }
 
             AppSettings.CommitInfoPosition = CommitInfoPosition.BelowList;
-            FormBrowse changedForm = new();
+            using ServiceContainer services = new();
+            GitExtUtils.ServiceContainerRegistry.RegisterServices(services);
+            services.AddService<IGitExecutorProvider>(Substitute.For<IGitExecutorProvider>());
+            services.AddService<ILinkFactory>(Substitute.For<ILinkFactory>());
+            GitUI.ServiceContainerRegistry.RegisterServices(services);
+            IGitModule module = Substitute.For<IGitModule>();
+            module.WorkingDir.Returns(Path.GetTempPath());
+            module.IsValidGitWorkingDir().Returns(true);
+            GitModuleTestStub.ConfigureEmptyRepositoryReads(module);
+            IAppTitleGenerator title = Substitute.For<IAppTitleGenerator>();
+            title.Generate(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string>()).Returns("Git Extensions");
+            services.AddService<IAppTitleGenerator>(title);
+            IGitUICommands commands = Substitute.For<IGitUICommands>();
+            commands.Module.Returns(module);
+            commands.RepoChangedNotifier.Returns(Substitute.For<ILockableNotifier>());
+            commands.GetService(Arg.Any<Type>()).Returns(call => services.GetService(call.Arg<Type>()));
+            FormBrowse changedForm = new(commands);
+            changedForm.Show();
+            Dispatcher.UIThread.RunJobs();
+            changedForm.UpdateLayout();
             changedForm.CommitInfoTabControl.SelectedItem = changedForm.DiffTabPage;
-            changedForm.RightSplitContainer.RowDefinitions[0].Height = new GridLength(4, GridUnitType.Star);
-            changedForm.RightSplitContainer.RowDefinitions[2].Height = new GridLength(1, GridUnitType.Star);
+            Grid grid = changedForm.RightSplitContainer;
+            GridSplitter handle = grid.Children.OfType<GridSplitter>().Single();
+            double target = Math.Floor((grid.Bounds.Height - handle.Bounds.Height) * 4 / 5);
+            Avalonia.Point start = handle.TranslatePoint(new Avalonia.Point(handle.Bounds.Width / 2, handle.Bounds.Height / 2), changedForm)!.Value;
+            Avalonia.Point end = start + new Avalonia.Vector(0, target - grid.RowDefinitions[0].ActualHeight);
+            changedForm.MouseMove(start);
+            changedForm.MouseDown(start, Avalonia.Input.MouseButton.Left);
+            changedForm.MouseMove(end, Avalonia.Input.RawInputModifiers.LeftMouseButton);
+            changedForm.MouseUp(end, Avalonia.Input.MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+            changedForm.UpdateLayout();
+            grid.RowDefinitions[0].ActualHeight.Should().Be(target);
+            double trailing = grid.RowDefinitions[2].ActualHeight;
             changedForm.toggleSplitViewLayout.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             changedForm.toggleSplitViewLayout.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             changedForm.CommitInfoTabControl.SelectedItem.Should().BeSameAs(changedForm.DiffTabPage);
-            changedForm.RightSplitContainer.RowDefinitions[0].Height.Value.Should().Be(4);
-            changedForm.RightSplitContainer.RowDefinitions[2].Height.Value.Should().Be(1);
+            Dispatcher.UIThread.RunJobs();
+            changedForm.UpdateLayout();
+            grid.RowDefinitions[0].ActualHeight.Should().Be(target);
+            grid.RowDefinitions[2].ActualHeight.Should().Be(trailing);
 
             changedForm.menuCommitInfoPosition.RaiseEvent(new RoutedEventArgs(SplitButton.ClickEvent));
             AppSettings.CommitInfoPosition.Should().Be(CommitInfoPosition.LeftwardFromList);
@@ -141,6 +185,7 @@ public sealed class ViewConstructionTests
         commands.Module.Returns(module);
         commands.RepoChangedNotifier.Returns(notifier);
         commands.GetService(typeof(IAppTitleGenerator)).Returns(appTitleGenerator);
+        commands.GetService(typeof(GitUI.Shells.IShellProvider)).Returns(new GitUI.Shells.ShellProvider());
         commands.GetService(typeof(IHotkeySettingsLoader)).Returns(Substitute.For<IHotkeySettingsLoader>());
         commands.GetService(typeof(IRepositoryHistoryUIService)).Returns(RepositoryHistoryTestHelper.CreateEmptyService());
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
@@ -306,6 +351,7 @@ public sealed class ViewConstructionTests
         commands.Module.Returns(module);
         commands.RepoChangedNotifier.Returns(notifier);
         commands.GetService(typeof(IAppTitleGenerator)).Returns(appTitleGenerator);
+        commands.GetService(typeof(GitUI.Shells.IShellProvider)).Returns(new GitUI.Shells.ShellProvider());
         commands.GetService(typeof(IHotkeySettingsLoader)).Returns(Substitute.For<IHotkeySettingsLoader>());
         commands.GetService(typeof(IRepositoryHistoryUIService)).Returns(RepositoryHistoryTestHelper.CreateEmptyService());
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
@@ -337,6 +383,7 @@ public sealed class ViewConstructionTests
         commands.Module.Returns(module);
         commands.RepoChangedNotifier.Returns(notifier);
         commands.GetService(typeof(IAppTitleGenerator)).Returns(appTitleGenerator);
+        commands.GetService(typeof(GitUI.Shells.IShellProvider)).Returns(new GitUI.Shells.ShellProvider());
         commands.GetService(typeof(IHotkeySettingsLoader)).Returns(Substitute.For<IHotkeySettingsLoader>());
         commands.GetService(typeof(IRepositoryHistoryUIService)).Returns(RepositoryHistoryTestHelper.CreateEmptyService());
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
@@ -368,6 +415,7 @@ public sealed class ViewConstructionTests
         commands.Module.Returns(module);
         commands.RepoChangedNotifier.Returns(notifier);
         commands.GetService(typeof(IAppTitleGenerator)).Returns(appTitleGenerator);
+        commands.GetService(typeof(GitUI.Shells.IShellProvider)).Returns(new GitUI.Shells.ShellProvider());
         commands.GetService(typeof(IHotkeySettingsLoader)).Returns(Substitute.For<IHotkeySettingsLoader>());
         commands.GetService(typeof(IRepositoryHistoryUIService)).Returns(RepositoryHistoryTestHelper.CreateEmptyService());
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
@@ -400,6 +448,7 @@ public sealed class ViewConstructionTests
         commands.Module.Returns(module);
         commands.RepoChangedNotifier.Returns(notifier);
         commands.GetService(typeof(IAppTitleGenerator)).Returns(appTitleGenerator);
+        commands.GetService(typeof(GitUI.Shells.IShellProvider)).Returns(new GitUI.Shells.ShellProvider());
         commands.GetService(typeof(IHotkeySettingsLoader)).Returns(Substitute.For<IHotkeySettingsLoader>());
         commands.GetService(typeof(IRepositoryHistoryUIService)).Returns(RepositoryHistoryTestHelper.CreateEmptyService());
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
@@ -448,6 +497,7 @@ public sealed class ViewConstructionTests
         commands.Module.Returns(module);
         commands.RepoChangedNotifier.Returns(notifier);
         commands.GetService(typeof(IAppTitleGenerator)).Returns(appTitleGenerator);
+        commands.GetService(typeof(GitUI.Shells.IShellProvider)).Returns(new GitUI.Shells.ShellProvider());
         commands.GetService(typeof(IHotkeySettingsLoader)).Returns(Substitute.For<IHotkeySettingsLoader>());
         commands.GetService(typeof(IRepositoryHistoryUIService)).Returns(RepositoryHistoryTestHelper.CreateEmptyService());
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
@@ -481,6 +531,7 @@ public sealed class ViewConstructionTests
             commands.Module.Returns(module);
             commands.RepoChangedNotifier.Returns(Substitute.For<ILockableNotifier>());
             commands.GetService(typeof(IAppTitleGenerator)).Returns(titleGenerator);
+            commands.GetService(typeof(GitUI.Shells.IShellProvider)).Returns(new GitUI.Shells.ShellProvider());
             commands.GetService(typeof(IHotkeySettingsLoader)).Returns(Substitute.For<IHotkeySettingsLoader>());
             commands.GetService(typeof(IRepositoryHistoryUIService)).Returns(RepositoryHistoryTestHelper.CreateEmptyService());
             commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
@@ -525,6 +576,7 @@ public sealed class ViewConstructionTests
         commands.Module.Returns(module);
         commands.RepoChangedNotifier.Returns(notifier);
         commands.GetService(typeof(IAppTitleGenerator)).Returns(appTitleGenerator);
+        commands.GetService(typeof(GitUI.Shells.IShellProvider)).Returns(new GitUI.Shells.ShellProvider());
         commands.GetService(typeof(IHotkeySettingsLoader)).Returns(Substitute.For<IHotkeySettingsLoader>());
         commands.GetService(typeof(IRepositoryHistoryUIService)).Returns(RepositoryHistoryTestHelper.CreateEmptyService());
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
@@ -556,6 +608,7 @@ public sealed class ViewConstructionTests
         commands.Module.Returns(module);
         commands.RepoChangedNotifier.Returns(notifier);
         commands.GetService(typeof(IAppTitleGenerator)).Returns(appTitleGenerator);
+        commands.GetService(typeof(GitUI.Shells.IShellProvider)).Returns(new GitUI.Shells.ShellProvider());
         commands.GetService(typeof(IHotkeySettingsLoader)).Returns(Substitute.For<IHotkeySettingsLoader>());
         commands.GetService(typeof(IRepositoryHistoryUIService)).Returns(RepositoryHistoryTestHelper.CreateEmptyService());
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
@@ -587,6 +640,7 @@ public sealed class ViewConstructionTests
         commands.Module.Returns(module);
         commands.RepoChangedNotifier.Returns(notifier);
         commands.GetService(typeof(IAppTitleGenerator)).Returns(appTitleGenerator);
+        commands.GetService(typeof(GitUI.Shells.IShellProvider)).Returns(new GitUI.Shells.ShellProvider());
         commands.GetService(typeof(IHotkeySettingsLoader)).Returns(Substitute.For<IHotkeySettingsLoader>());
         commands.GetService(typeof(IRepositoryHistoryUIService)).Returns(RepositoryHistoryTestHelper.CreateEmptyService());
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
@@ -618,6 +672,7 @@ public sealed class ViewConstructionTests
         commands.Module.Returns(module);
         commands.RepoChangedNotifier.Returns(notifier);
         commands.GetService(typeof(IAppTitleGenerator)).Returns(appTitleGenerator);
+        commands.GetService(typeof(GitUI.Shells.IShellProvider)).Returns(new GitUI.Shells.ShellProvider());
         commands.GetService(typeof(IHotkeySettingsLoader)).Returns(Substitute.For<IHotkeySettingsLoader>());
         commands.GetService(typeof(IRepositoryHistoryUIService)).Returns(RepositoryHistoryTestHelper.CreateEmptyService());
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());

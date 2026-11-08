@@ -37,6 +37,12 @@ internal static class InventoryRunner
             Twin = twin,
             Summary = new InventorySummary
             {
+                OriginalNestedTypeCount = NestedTypeStatistics.Count(original, testAccessors: false),
+                TwinNestedTypeCount = NestedTypeStatistics.Count(twin, testAccessors: false),
+                OriginalTestAccessorTypeCount = NestedTypeStatistics.Count(original, testAccessors: true),
+                TwinTestAccessorTypeCount = NestedTypeStatistics.Count(twin, testAccessors: true),
+                ProductFindingCount = findings.Count(finding => !finding.IsTestOnly),
+                TestOnlyFindingCount = findings.Count(finding => finding.IsTestOnly),
                 FindingCount = findings.Count,
                 DependentFindingCount = comparison.DependentFindings.Count,
                 TotalDifferenceCount = findings.Count + comparison.DependentFindings.Count,

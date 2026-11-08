@@ -7,7 +7,7 @@ namespace GitUI.Compat;
 
 /// <summary>
 ///  Implements portable shell actions through the XDG desktop portal on Linux and the native
-///  Avalonia launcher on other platforms.
+///  shell application chooser and Avalonia launcher on other platforms.
 /// </summary>
 public sealed class AvaloniaOsShell : IOsShell
 {
@@ -40,6 +40,11 @@ public sealed class AvaloniaOsShell : IOsShell
             return await _portal.TryLaunchAsync(target, kind);
         }
 
+        if (kind == OsShellLaunchKind.ShowInDirectory)
+        {
+            return await NativeFileReveal.RevealAsync(target);
+        }
+
         TopLevel? topLevel = _desktop.MainWindow;
         if (topLevel is null)
         {
@@ -50,9 +55,7 @@ public sealed class AvaloniaOsShell : IOsShell
         {
             OsShellLaunchKind.OpenUri => Uri.TryCreate(target, UriKind.Absolute, out Uri? uri)
                 && await topLevel.Launcher.LaunchUriAsync(uri),
-            OsShellLaunchKind.ShowInDirectory => await LaunchPathAsync(
-                topLevel,
-                Path.GetDirectoryName(Path.GetFullPath(target))),
+            OsShellLaunchKind.OpenAs => await NativeApplicationChooser.OpenAsync(topLevel, target),
             _ => await LaunchPathAsync(topLevel, target),
         };
     }

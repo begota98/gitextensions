@@ -22,6 +22,7 @@ using GitUI.CommandsDialogs;
 using GitUI.Editor;
 using GitUI.ScriptsEngine;
 using GitUI.SpellChecker;
+using GitUI.UserControls;
 using GitUIPluginInterfaces;
 using Microsoft.VisualStudio.Threading;
 using NSubstitute;
@@ -38,6 +39,7 @@ public sealed class FormCommitTests
 
     private string _originalApplicationExecutablePath = null!;
     private string _originalWorkingDirectory = null!;
+    private AppSettingsTestScope _settingsScope = null!;
     private ServiceContainer _serviceContainer = null!;
     private string _workingDirectory = null!;
 
@@ -46,6 +48,7 @@ public sealed class FormCommitTests
     {
         AvaloniaSynchronizationContext.InstallIfNeeded();
         ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
+        _settingsScope = new AppSettingsTestScope();
         AppSettings.TestAccessor settingsAccessor = AppSettings.GetTestAccessor();
         _originalApplicationExecutablePath = settingsAccessor.ApplicationExecutablePath;
         settingsAccessor.ApplicationExecutablePath = Path.Combine(TestContext.CurrentContext.WorkDirectory, "GitExtensions.Avalonia.exe");
@@ -71,10 +74,182 @@ public sealed class FormCommitTests
     [TearDown]
     public void TearDown()
     {
-        AppSettings.GetTestAccessor().ApplicationExecutablePath = _originalApplicationExecutablePath;
-        _serviceContainer.Dispose();
-        Directory.SetCurrentDirectory(_originalWorkingDirectory);
-        TestDirectory.Delete(_workingDirectory);
+        try
+        {
+            AppSettings.GetTestAccessor().ApplicationExecutablePath = _originalApplicationExecutablePath;
+            _serviceContainer.Dispose();
+            Directory.SetCurrentDirectory(_originalWorkingDirectory);
+            TestDirectory.Delete(_workingDirectory);
+        }
+        finally
+        {
+            _settingsScope.Dispose();
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task Commit_splitter_should_retry_saved_distance_after_the_real_window_reaches_its_final_size()
+    {
+        GitModule module = CreateCleanRepository();
+        GitCommands.AppSettingsPath settings = new("CommitDialog");
+        string[] names = ["splitMain", "splitLeft", "splitRight"];
+        string[] suffixes = ["Size", "Distance", "Dpi", "FontSize", "Panel1Collapsed", "Panel2Collapsed"];
+        string[] keys = names.SelectMany(name => suffixes.Select(suffix => name + "_" + suffix)).ToArray();
+        Dictionary<string, string?> previous = keys.ToDictionary(key => key, settings.GetValue);
+        try
+        {
+            foreach (string key in keys)
+            {
+                settings.SetValue(key, null);
+            }
+
+            FormCommit first = new(new GitUICommands(_serviceContainer, module)) { Width = 1500, Height = 800 };
+            first.Show();
+            first.Width = 1500;
+            first.Height = 800;
+            Dispatcher.UIThread.RunJobs();
+            first.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            first.UpdateLayout();
+            Grid firstMain = first.FindControl<Grid>("splitMain")!;
+            GridSplitter handle = firstMain.Children.OfType<GridSplitter>().Single();
+            Avalonia.Point start = handle.TranslatePoint(new Avalonia.Point(handle.Bounds.Width / 2, handle.Bounds.Height / 2), first)!.Value;
+            Avalonia.Point end = start + new Avalonia.Vector(1000 - firstMain.ColumnDefinitions[0].ActualWidth, 0);
+            first.MouseMove(start);
+            first.MouseDown(start, Avalonia.Input.MouseButton.Left);
+            first.MouseMove(end, Avalonia.Input.RawInputModifiers.LeftMouseButton);
+            first.MouseUp(end, Avalonia.Input.MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+            first.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            first.UpdateLayout();
+            firstMain.ColumnDefinitions[0].ActualWidth.Should().Be(1000);
+            first.Close();
+            await first.GetTestAccessor().ClosePersistenceTask;
+            settings.GetValue("splitMain_Distance").Should().Be("1000");
+
+            FormCommit restored = new(new GitUICommands(_serviceContainer, module));
+            File.Exists(_settingsScope.WindowPositionPath).Should().BeTrue();
+            File.Delete(_settingsScope.WindowPositionPath);
+            _settingsScope.ReloadWindowPositions();
+            try
+            {
+                restored.Show();
+                Dispatcher.UIThread.RunJobs();
+                restored.UpdateLayout();
+                Dispatcher.UIThread.RunJobs();
+                restored.UpdateLayout();
+                restored.FindControl<Grid>("splitMain")!.ColumnDefinitions[0].ActualWidth.Should().Be(397);
+                restored.Width = 1500;
+                Dispatcher.UIThread.RunJobs();
+                restored.UpdateLayout();
+                Dispatcher.UIThread.RunJobs();
+                restored.UpdateLayout();
+                restored.Bounds.Width.Should().Be(1500);
+                restored.FindControl<Grid>("splitMain")!.Bounds.Width.Should().Be(1500);
+                restored.FindControl<Grid>("splitMain")!.ColumnDefinitions[0].ActualWidth.Should().Be(1000);
+            }
+            finally
+            {
+                restored.Close();
+                await restored.GetTestAccessor().ClosePersistenceTask;
+            }
+        }
+        finally
+        {
+            foreach ((string key, string? value) in previous)
+            {
+                settings.SetValue(key, value);
+            }
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task Commit_splitters_should_supply_fixed_panel_ratio_DPI_and_collapsed_state_from_production()
+    {
+        GitModule module = CreateCleanRepository();
+        GitCommands.AppSettingsPath settings = new("CommitDialog");
+        string[] names = ["splitMain", "splitLeft", "splitRight"];
+        string[] suffixes = ["Size", "Distance", "Dpi", "FontSize", "Panel1Collapsed", "Panel2Collapsed"];
+        Dictionary<string, string?> previous = names.SelectMany(name => suffixes.Select(suffix => name + "_" + suffix)).ToDictionary(key => key, settings.GetValue);
+        try
+        {
+            foreach (string key in previous.Keys)
+            {
+                settings.SetValue(key, null);
+            }
+
+            settings.SetValue("splitMain_Size", "1800");
+            settings.SetValue("splitMain_Distance", "600");
+            settings.SetValue("splitMain_Dpi", "144");
+            settings.SetValue("splitLeft_Size", "1000");
+            settings.SetValue("splitLeft_Distance", "400");
+            settings.SetValue("splitLeft_Dpi", "96");
+            settings.SetValue("splitRight_Size", "1000");
+            settings.SetValue("splitRight_Distance", "700");
+            settings.SetValue("splitRight_Dpi", "96");
+            FormCommit form = new(new GitUICommands(_serviceContainer, module)) { Width = 1200, Height = 800 };
+            try
+            {
+                form.Show();
+                form.Width = 1200;
+                form.Height = 800;
+                Dispatcher.UIThread.RunJobs();
+                form.UpdateLayout();
+                Dispatcher.UIThread.RunJobs();
+                form.UpdateLayout();
+                Grid main = form.FindControl<Grid>("splitMain")!;
+                Grid left = form.FindControl<Grid>("splitLeft")!;
+                Grid right = form.FindControl<Grid>("splitRight")!;
+                main.ColumnDefinitions[0].ActualWidth.Should().Be(400);
+                left.RowDefinitions[0].ActualHeight.Should().Be(Convert.ToInt32(left.Bounds.Height * 400 / 1000));
+                double previousSize = left.Bounds.Height;
+                double previousDistance = left.RowDefinitions[0].ActualHeight;
+                right.RowDefinitions[2].ActualHeight.Should().Be(288, "the source restores the fixed second panel using its saved size and splitter width");
+                double fixedSecond = right.RowDefinitions[2].ActualHeight;
+                form.Width += 200;
+                form.Height += 150;
+                Dispatcher.UIThread.RunJobs();
+                form.UpdateLayout();
+                Dispatcher.UIThread.RunJobs();
+                form.UpdateLayout();
+                main.ColumnDefinitions[0].ActualWidth.Should().Be(400);
+                right.RowDefinitions[2].ActualHeight.Should().Be(fixedSecond);
+                left.RowDefinitions[0].ActualHeight.Should().Be(Math.Floor(previousDistance * left.Bounds.Height / previousSize));
+            }
+            finally
+            {
+                form.Close();
+                await form.GetTestAccessor().ClosePersistenceTask;
+            }
+
+            settings.GetValue("splitMain_Dpi").Should().Be("96");
+            settings.GetValue("splitMain_FontSize").Should().NotBeNullOrEmpty();
+            settings.GetValue("splitMain_Panel1Collapsed").Should().Be("false");
+            settings.SetValue("splitMain_Panel1Collapsed", "true");
+            FormCommit collapsed = new(new GitUICommands(_serviceContainer, module));
+            try
+            {
+                collapsed.Show();
+                Dispatcher.UIThread.RunJobs();
+                collapsed.UpdateLayout();
+                Dispatcher.UIThread.RunJobs();
+                collapsed.UpdateLayout();
+                collapsed.FindControl<Grid>("splitLeft")!.IsVisible.Should().BeFalse();
+            }
+            finally
+            {
+                collapsed.Close();
+                await collapsed.GetTestAccessor().ClosePersistenceTask;
+            }
+        }
+        finally
+        {
+            foreach ((string key, string? value) in previous)
+            {
+                settings.SetValue(key, value);
+            }
+        }
     }
 
     [AvaloniaTest]
@@ -261,9 +436,10 @@ public sealed class FormCommitTests
                 new GridLength(6),
                 new GridLength(1, GridUnitType.Star));
             splitRight.RowDefinitions.Select(row => row.Height).Should().Equal(
-                new GridLength(412),
+                new GridLength(1, GridUnitType.Star),
                 new GridLength(6),
                 new GridLength(192));
+            splitRight.RowDefinitions.Select(row => row.ActualHeight).Should().Equal(412, 6, 192);
             tableLayoutPanel1.RowDefinitions.Select(row => row.Height).Should().Equal(
                 new GridLength(28),
                 new GridLength(1, GridUnitType.Star));
@@ -358,7 +534,7 @@ public sealed class FormCommitTests
             form.Show();
             await WaitUntilAsync(() => accessor.Amend.IsFocused);
 
-            accessor.CurrentFilesList.Should().BeSameAs(accessor.Unstaged);
+            accessor.CurrentFilesList.Should().BeSameAs(accessor.UnstagedList);
             accessor.Message.IsFocused.Should().BeFalse();
 
             using (AvaloniaControlStateDriver.Apply(
@@ -366,7 +542,7 @@ public sealed class FormCommitTests
                        new CaptureStatePlan { Id = "normal", Kind = CaptureStateKind.Normal }))
             {
                 accessor.Amend.IsFocused.Should().BeTrue();
-                accessor.CurrentFilesList.Should().BeSameAs(accessor.Unstaged);
+                accessor.CurrentFilesList.Should().BeSameAs(accessor.UnstagedList);
             }
         }
         finally
@@ -969,6 +1145,63 @@ public sealed class FormCommitTests
     }
 
     [AvaloniaTest]
+    public async Task FormCommit_should_keep_the_active_list_when_switching_before_selection_notifications()
+    {
+        GitModule module = CreateRepositoryWithStagedAndUnstagedChanges();
+        File.WriteAllText(Path.Combine(_workingDirectory, "z.txt"), "second unstaged file\n");
+        FormCommit form = new(new GitUICommands(_serviceContainer, module));
+        try
+        {
+            form.Show();
+            FileStatusList unstaged = form.FindControl<FileStatusList>("Unstaged")!;
+            FileStatusList staged = form.FindControl<FileStatusList>("Staged")!;
+            FileViewer viewer = form.FindControl<FileViewer>("SelectedDiff")!;
+            await WaitForCountsAsync(unstaged, 2, staged, 1);
+            ClickFileRow(form, unstaged, "z.txt");
+            ClickFileRow(form, staged);
+            staged.IsKeyboardFocusWithin.Should().BeTrue();
+            await WaitUntilAsync(() => ReferenceEquals(form.GetTestAccessor().CurrentFilesList, staged)
+                && staged.SelectedItem?.Item.Name == "tracked.txt"
+                && viewer.TextEditor.Text.Contains("staged line", StringComparison.Ordinal)
+                && !viewer.TextEditor.Text.Contains("unstaged line", StringComparison.Ordinal),
+                () => $"current staged={ReferenceEquals(form.GetTestAccessor().CurrentFilesList, staged)}; selected={staged.SelectedItem}; diff={viewer.TextEditor.Text}");
+            unstaged.SelectedItem.Should().BeNull();
+        }
+        finally
+        {
+            form.Close();
+            await form.GetTestAccessor().ClosePersistenceTask;
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task FormCommit_should_keep_the_staged_file_current_when_clicked_as_the_lists_load()
+    {
+        FormCommit form = new(new GitUICommands(_serviceContainer, CreateRepositoryWithStagedAndUnstagedChanges()));
+        try
+        {
+            form.Show();
+            FileStatusList unstaged = form.FindControl<FileStatusList>("Unstaged")!;
+            FileStatusList staged = form.FindControl<FileStatusList>("Staged")!;
+            FileViewer viewer = form.FindControl<FileViewer>("SelectedDiff")!;
+            await WaitForCountsAsync(unstaged, 1, staged, 1);
+            ClickFileRow(form, staged);
+            staged.IsKeyboardFocusWithin.Should().BeTrue();
+            await WaitUntilAsync(() => ReferenceEquals(form.GetTestAccessor().CurrentFilesList, staged)
+                && staged.SelectedItem?.Item.Name == "tracked.txt"
+                && viewer.TextEditor.Text.Contains("staged line", StringComparison.Ordinal)
+                && !viewer.TextEditor.Text.Contains("unstaged line", StringComparison.Ordinal),
+                () => $"staged current={ReferenceEquals(form.GetTestAccessor().CurrentFilesList, staged)}; focused={staged.IsKeyboardFocusWithin}; selected={staged.SelectedItem}; diff={viewer.TextEditor.Text}");
+            unstaged.SelectedItem.Should().BeNull();
+        }
+        finally
+        {
+            form.Close();
+            await form.GetTestAccessor().ClosePersistenceTask;
+        }
+    }
+
+    [AvaloniaTest]
     public async Task FormCommit_should_show_staged_and_unstaged_changes_with_a_diff_preview()
     {
         GitModule module = CreateRepositoryWithStagedAndUnstagedChanges();
@@ -995,20 +1228,106 @@ public sealed class FormCommitTests
             unstaged.SelectedItem.Should().NotBeNull();
             staged.SelectedItem.Should().BeNull("the unstaged list is selected first, matching the upstream dialog");
 
-            staged.SelectedGitItems = [staged.GitItemStatuses[0]];
+            ClickFileRow(form, unstaged);
+            unstaged.IsKeyboardFocusWithin.Should().BeTrue();
+
+            // The pointer supplies Enter and selection through the actual staged control.
+            ClickFileRow(form, staged);
+            staged.IsKeyboardFocusWithin.Should().BeTrue();
             await WaitUntilAsync(() =>
                 diffEditor.Document?.Text.Contains("staged line", StringComparison.Ordinal) == true
-                && diffEditor.Document.Text.Contains("unstaged line", StringComparison.Ordinal) == false);
+                && diffEditor.Document.Text.Contains("unstaged line", StringComparison.Ordinal) == false,
+                () => $"staged current={ReferenceEquals(form.GetTestAccessor().CurrentFilesList, staged)}; selected={staged.SelectedItem}; diff={diffEditor.Document?.Text}");
             staged.SelectedItem.Should().NotBeNull();
             unstaged.SelectedItem.Should().BeNull();
             selectedDiff.GetTestAccessor().OpenWithDifftool.Should().NotBeNull(
                 "FormCommit should retain its external-difftool consumer action in FileViewer");
+
+            Border toolbar = selectedDiff.FindControl<Border>("fileviewerToolbar")
+                ?? throw new InvalidOperationException("The production diff toolbar was not created.");
+            toolbar.IsVisible.Should().BeFalse("the original reveals its viewer toolbar on pointer movement");
+            form.FocusManager.Should().NotBeNull();
+            Avalonia.Input.IInputElement? focused = form.FocusManager!.GetFocusedElement();
+            focused.Should().NotBeNull();
+            AvaloniaEdit.Rendering.TextView textView = diffEditor.TextArea.TextView;
+            Point hover = textView.TranslatePoint(new Point(textView.Bounds.Width / 2,
+                Math.Min(textView.DefaultLineHeight, textView.Bounds.Height / 2)), form)
+                ?? throw new InvalidOperationException("The actual diff viewport must belong to Commit.");
+            form.MouseMove(hover, Avalonia.Input.RawInputModifiers.None);
+            Dispatcher.UIThread.RunJobs();
+            form.UpdateLayout();
+            toolbar.IsVisible.Should().BeTrue();
+            toolbar.IsEffectivelyVisible.Should().BeTrue();
+            form.FocusManager!.GetFocusedElement().Should().BeSameAs(focused,
+                "showing a pointer-hover toolbar must retain the user's keyboard focus");
+            Point toolbarOrigin = toolbar.TranslatePoint(default, selectedDiff)!.Value;
+            toolbarOrigin.Y.Should().Be(0);
+            (toolbarOrigin.X + toolbar.Bounds.Width).Should().Be(selectedDiff.Bounds.Width - 40,
+                "the original positions its toolbar forty pixels inside the viewer's right edge");
+            StackPanel items = toolbar.Child.Should().BeOfType<StackPanel>().Which;
+            items.Children.Select(control => control.Name).Should().Equal(
+                "nextChangeButton", "previousChangeButton", "toolStripSeparator3",
+                "increaseNumberOfLines", "decreaseNumberOfLines", "toolStripSeparator4",
+                "showEntireFileButton", "showNonPrintChars", "showSyntaxHighlighting",
+                "ignoreWhitespaceAtEol", "ignoreWhiteSpaces", "ignoreAllWhitespaces",
+                "encodingToolStripComboBox", "settingsButton");
+            foreach (Control item in items.Children.Where(item => item.IsEffectivelyVisible))
+            {
+                Point origin = item.TranslatePoint(default, toolbar)!.Value;
+                origin.X.Should().BeGreaterThanOrEqualTo(0);
+                origin.Y.Should().BeGreaterThanOrEqualTo(0);
+                (origin.X + item.Bounds.Width).Should().BeLessThanOrEqualTo(toolbar.Bounds.Width);
+                (origin.Y + item.Bounds.Height).Should().BeLessThanOrEqualTo(toolbar.Bounds.Height);
+            }
+
+            selectedDiff.FindControl<ComboBox>("encodingToolStripComboBox")!.SelectedItem.Should().NotBeNull(
+                "the production hover handler must initialize the encoding selector itself");
+            using Avalonia.Media.Imaging.WriteableBitmap frame = form.CaptureRenderedFrame()
+                ?? throw new AssertionException("Commit with the real hover toolbar must render headlessly.");
+            if (Environment.GetEnvironmentVariable("GITEXT_COMMIT_EVIDENCE") is { Length: > 0 } evidence)
+            {
+                Directory.CreateDirectory(evidence);
+                frame.Save(Path.Combine(evidence, "commit-hover-toolbar.png"), Avalonia.Media.Imaging.PngBitmapEncoderOptions.Default);
+            }
+
+            Control next = selectedDiff.FindControl<Control>("nextChangeButton")!;
+            Point overToolbar = next.TranslatePoint(new Point(next.Bounds.Width / 2, next.Bounds.Height / 2), form)!.Value;
+            form.MouseMove(overToolbar, Avalonia.Input.RawInputModifiers.None);
+            toolbar.IsVisible.Should().BeTrue("the toolbar remains visible while the pointer enters it");
+            Point outside = staged.TranslatePoint(new Point(staged.Bounds.Width / 2, staged.Bounds.Height / 2), form)!.Value;
+            form.MouseMove(outside, Avalonia.Input.RawInputModifiers.None);
+            toolbar.IsVisible.Should().BeFalse("leaving the viewer hides its hover toolbar");
         }
         finally
         {
             form.Close();
             await form.GetTestAccessor().ClosePersistenceTask;
         }
+    }
+
+    private static void ClickFileRow(FormCommit form, FileStatusList list, string fileName = "tracked.txt")
+    {
+        form.UpdateLayout();
+        FileStatusList.TestAccessor accessor = list.GetTestAccessor();
+        Control row = accessor.DiffTree.IsEffectivelyVisible
+            ? accessor.DiffTree.GetVisualDescendants().OfType<TreeViewItem>()
+                .Single(container => container.DataContext is FileStatusList.DiffTreeNode node && node.Item?.Item.Name == fileName)
+            : accessor.List.GetVisualDescendants().OfType<ListBoxItem>()
+                .Single(container => container.DataContext is FileStatusItem item && item.Item.Name == fileName);
+        FileStatusItem? item = row.DataContext switch
+        {
+            FileStatusItem status => status,
+            FileStatusList.DiffTreeNode node => node.Item,
+            _ => null,
+        };
+        item.Should().NotBeNull($"the actual pointer must target a file, not {row.DataContext?.GetType().Name}");
+        item!.Item.Name.Should().Be(fileName);
+        row.IsEffectivelyVisible.Should().BeTrue();
+        row.Bounds.Height.Should().BeGreaterThan(0);
+        Point point = row.TranslatePoint(new Point(row.Bounds.Width / 2, row.Bounds.Height / 2), form)!.Value;
+        form.MouseMove(point, Avalonia.Input.RawInputModifiers.None);
+        form.MouseDown(point, Avalonia.Input.MouseButton.Left, Avalonia.Input.RawInputModifiers.None);
+        form.MouseUp(point, Avalonia.Input.MouseButton.Left, Avalonia.Input.RawInputModifiers.None);
     }
 
     private GitModule CreateRepositoryWithStagedAndUnstagedChanges()

@@ -45,6 +45,9 @@ public sealed partial class FormClone : GitExtensionsDialog
     public FormClone()
     {
         InitializeComponent();
+        HelpButton = true;
+        ManualSectionAnchorName = "clone-repository";
+        ManualSectionSubfolder = "getting_started";
         WireControls();
         InitializeComplete();
         _defaultBranchItems = [];
@@ -55,6 +58,9 @@ public sealed partial class FormClone : GitExtensionsDialog
     {
         _gitModuleChanged = gitModuleChanged;
         InitializeComponent();
+        HelpButton = true;
+        ManualSectionAnchorName = "clone-repository";
+        ManualSectionSubfolder = "getting_started";
         WireControls();
         AcceptButton = Ok;
 
@@ -323,7 +329,13 @@ public sealed partial class FormClone : GitExtensionsDialog
                 cbIntializeAllSubmodules.IsChecked == true,
                 branch, depth, isSingleBranch);
 
-            bool success = FormRemoteProcess.ShowDialog(this, destUICommands, cloneCmd);
+            using FormRemoteProcess fromProcess = new(destUICommands, cloneCmd);
+            string sourceRepo = PathUtil.IsLocalFile(from)
+                ? destUICommands.Module.GetPathForGitExecution(from)
+                : from;
+            fromProcess.SetUrlTryingToConnect(sourceRepo);
+            fromProcess.ShowDialog(this);
+            bool success = !fromProcess.ErrorOccurred();
             if (!success || Module.InTheMiddleOfPatch())
             {
                 return;
@@ -602,6 +614,6 @@ public sealed partial class FormClone : GitExtensionsDialog
 
         public void LoadBranches() => _form.LoadBranches();
 
-        public bool TryExtractUrlForTesting(string text, out string url) => FormClone.TryExtractUrl(text, out url);
+        public bool TryExtractUrl(string text, out string url) => FormClone.TryExtractUrl(text, out url);
     }
 }

@@ -1,4 +1,4 @@
-using GitExtensions.ParityInventory;
+﻿using GitExtensions.ParityInventory;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -72,14 +72,38 @@ internal static class MechanicalFixer
         bool orderChanged = false;
         if (findings.Any(item => item.Code == "member.order"))
         {
+            foreach (TypeDeclarationSyntax nested in originalType.Members.OfType<TypeDeclarationSyntax>())
+            {
+                string nestedName = SourceInventoryReader.GetTypeName(nested);
+                if (FindType(ordered, nestedName) is null)
+                {
+                    continue;
+                }
+
+                FileFix nestedFix = Fix(path, originalText, ordered.ToFullString(), nestedName,
+                    findings.Where(item => item.Code == "member.order").ToArray(), [], [], allowInitializers);
+                initialized.AddRange(nestedFix.InitializedFields.Select(name =>
+                    name.StartsWith(nestedName + ".", StringComparison.Ordinal) ? name : nestedName + "." + name));
+                unresolved.AddRange(nestedFix.Unresolved);
+                if (!nestedFix.ProofPassed)
+                {
+                    return new(path, twinText, 0, false, initialized, unresolved, false);
+                }
+
+                orderChanged |= nestedFix.OrderChanged;
+                ordered = Parse(nestedFix.Text);
+            }
+
+            commented = ordered;
+            commentedType = FindType(commented, typeName)!;
             MemberDeclarationSyntax[] members = commentedType.Members.ToArray();
-            Dictionary<string, int> ranks = originalType.Members
-                .Select((member, index) => (Key: OrderKey(member), Index: index))
-                .GroupBy(item => item.Key, StringComparer.Ordinal)
-                .Where(group => group.Count() == 1)
-                .ToDictionary(group => group.Key, group => group.Single().Index, StringComparer.Ordinal);
-            HashSet<string> unique = members.GroupBy(OrderKey, StringComparer.Ordinal)
-                .Where(group => group.Count() == 1).Select(group => group.Key).ToHashSet(StringComparer.Ordinal);
+            Dictionary<MemberDeclarationSyntax, int> ranks = MemberMatcher.Match(
+                    SourceInventoryReader.GetDeclaredMembers(originalType),
+                    SourceInventoryReader.GetDeclaredMembers(commentedType))
+                .Where(match => match.Original is not null && match.Twin is not null && match.Twin.Part != "-1")
+                .GroupBy(match => int.Parse(match.Twin!.Part, System.Globalization.CultureInfo.InvariantCulture))
+                .Where(group => group.Select(match => match.Original!.Order).Distinct().Count() == 1)
+                .ToDictionary(group => members[group.Key], group => group.First().Original!.Order);
 
             HashSet<SyntaxTrivia> movableWarnings = MovableWarningDirectives(commented, commentedType);
 
@@ -100,9 +124,9 @@ internal static class MechanicalFixer
                 }
 
                 int[] slots = Enumerable.Range(start, end - start)
-                    .Where(index => unique.Contains(OrderKey(members[index])) && ranks.ContainsKey(OrderKey(members[index])))
+                    .Where(index => ranks.ContainsKey(members[index]))
                     .ToArray();
-                MemberDeclarationSyntax[] sorted = slots.Select(index => members[index]).OrderBy(member => ranks[OrderKey(member)]).ToArray();
+                MemberDeclarationSyntax[] sorted = slots.Select(index => members[index]).OrderBy(member => ranks[member]).ToArray();
                 for (int index = 0; index < slots.Length; index++)
                 {
                     if (members[slots[index]] != sorted[index])
@@ -127,13 +151,13 @@ internal static class MechanicalFixer
             }
             else
             {
-                orderChanged = !members.SequenceEqual(commentedType.Members);
+                orderChanged |= !members.SequenceEqual(commentedType.Members);
                 ordered = commented.ReplaceNode(commentedType, commentedType.WithMembers(SyntaxFactory.List(members)));
             }
         }
 
         SyntaxNode reparsed = Parse(ordered.ToFullString());
-        bool proof = !reparsed.ContainsDiagnostics && MemberMultisetEquivalent(commented, reparsed, typeName);
+        bool proof = !reparsed.ContainsDiagnostics && MemberMultisetEquivalent(Parse(commentedText), reparsed, typeName);
         return proof
             ? new(path, ordered.ToFullString(), restored, orderChanged, initialized, unresolved, true)
             : new(path, twinText, 0, false, initialized, ["Member-multiset proof failed; file left untouched."], false);
@@ -145,10 +169,15 @@ internal static class MechanicalFixer
         TypeDeclarationSyntax? right = FindType(after, typeName);
         return left is not null && right is not null
             && OrderDirectiveTexts(before, left).SequenceEqual(OrderDirectiveTexts(after, right))
-            && left.Members.Select(member => member.ToFullString()).Order(StringComparer.Ordinal)
-                .SequenceEqual(right.Members.Select(member => member.ToFullString()).Order(StringComparer.Ordinal))
+            && CanonicalMembers(left).SequenceEqual(CanonicalMembers(right))
             && SyntaxFactory.AreEquivalent(before.ReplaceNode(left, left.WithMembers(default)), after.ReplaceNode(right, right.WithMembers(default)));
     }
+
+    private static IEnumerable<string> CanonicalMembers(TypeDeclarationSyntax type) => type.Members
+        .Select(member => member is TypeDeclarationSyntax nested
+            ? nested.WithMembers(default).ToFullString() + string.Join("\0", CanonicalMembers(nested))
+            : member.ToFullString())
+        .Order(StringComparer.Ordinal);
 
     private static bool HasOrderBarrier(MemberDeclarationSyntax member, HashSet<SyntaxTrivia> movableWarnings) =>
         member.DescendantTrivia().Any(trivia => trivia.IsDirective && !movableWarnings.Contains(trivia));
@@ -481,13 +510,6 @@ internal static class MechanicalFixer
 
     private static TypeDeclarationSyntax? FindType(SyntaxNode root, string name) =>
         root.DescendantNodes().OfType<TypeDeclarationSyntax>().SingleOrDefault(type => SourceInventoryReader.GetTypeName(type) == name);
-
-    private static string OrderKey(MemberDeclarationSyntax member)
-    {
-        string anchor = SourceInventoryReader.GetMemberAnchor(member);
-        int parameters = anchor.IndexOf('(');
-        return parameters < 0 ? anchor : anchor[..parameters];
-    }
 
     private static IEnumerable<string> InitializedNames(MemberDeclarationSyntax member) => member switch
     {

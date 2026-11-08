@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Threading;
 using GitCommands;
 using GitCommands.Settings;
@@ -14,6 +15,7 @@ using GitExtensions.Extensibility.Settings;
 using GitExtensions.Extensibility.Translations;
 using GitExtUtils;
 using GitUI;
+using GitUI.ConsoleEmulation;
 using GitUI.HelperDialogs;
 using GitUI.UserControls;
 using Microsoft.VisualStudio.Threading;
@@ -125,6 +127,123 @@ public sealed class ProcessDialogTests
         }
     }
 
+    [AvaloniaTest]
+    [TestCase(false)]
+    [TestCase(true)]
+    public void FormStatus_should_refuse_title_bar_close_without_disposing_the_command_runner(bool completed)
+    {
+        IConsoleCommandRunner runner = Substitute.For<IConsoleCommandRunner, IDisposable>();
+        runner.Control.Returns(new UserControl());
+        IConsoleEmulatorsRegistry registry = Substitute.For<IConsoleEmulatorsRegistry>();
+        registry.CreateCommandController().Returns(runner);
+        using FormStatus form = new(CreateCommands(Path.GetTempPath()), registry, useDialogSettings: false);
+        int aborts = 0;
+        SetFormStatusCallback(form, "ProcessCallback", _ => { });
+        SetFormStatusCallback(form, "AbortCallback", _ => aborts++);
+        try
+        {
+            form.Show();
+            Dispatcher.UIThread.RunJobs();
+            runner.Received(1).ResetConsole();
+            if (completed)
+            {
+                InvokeFormStatusMethod(form, "Done", true);
+            }
+
+            bool cancelled = RequestNativeClose(form, WindowCloseReason.WindowClosing);
+
+            cancelled.Should().BeTrue("the original disables the control-box close command");
+            form.IsVisible.Should().BeTrue();
+            aborts.Should().Be(0);
+            ((IDisposable)runner).DidNotReceive().Dispose();
+            runner.DidNotReceive().KillCommandProcess();
+            form.GetOutputString().Should().NotContain("Aborted");
+
+            form.Close();
+
+            form.IsVisible.Should().BeFalse("programmatic completion must still be able to close the dialog");
+            ((IDisposable)runner).Received(1).Dispose();
+        }
+        finally
+        {
+            form.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    public void FormStatus_should_keep_the_explicit_abort_callback_and_result()
+    {
+        IConsoleCommandRunner runner = Substitute.For<IConsoleCommandRunner, IDisposable>();
+        runner.Control.Returns(new UserControl());
+        IConsoleEmulatorsRegistry registry = Substitute.For<IConsoleEmulatorsRegistry>();
+        registry.CreateCommandController().Returns(runner);
+        using FormStatus form = new(CreateCommands(Path.GetTempPath()), registry, useDialogSettings: false);
+        int aborts = 0;
+        SetFormStatusCallback(form, "ProcessCallback", _ => { });
+        SetFormStatusCallback(form, "AbortCallback", _ => aborts++);
+        try
+        {
+            form.Show();
+            Dispatcher.UIThread.RunJobs();
+            form.Abort.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+            aborts.Should().Be(1);
+            form.ErrorOccurred().Should().BeTrue();
+            form.GetOutputString().Should().Contain("Aborted");
+            form.DialogResult.Should().Be(GitExtensions.Shims.WinForms.DialogResult.Abort);
+            form.Ok.IsEnabled.Should().BeTrue();
+        }
+        finally
+        {
+            form.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    [TestCase(WindowCloseReason.OwnerWindowClosing)]
+    [TestCase(WindowCloseReason.ApplicationShutdown)]
+    [TestCase(WindowCloseReason.OSShutdown)]
+    public void FormStatus_should_allow_owner_and_application_shutdown(WindowCloseReason reason)
+    {
+        IConsoleCommandRunner runner = Substitute.For<IConsoleCommandRunner, IDisposable>();
+        runner.Control.Returns(new UserControl());
+        IConsoleEmulatorsRegistry registry = Substitute.For<IConsoleEmulatorsRegistry>();
+        registry.CreateCommandController().Returns(runner);
+        using FormStatus form = new(CreateCommands(Path.GetTempPath()), registry, useDialogSettings: false);
+        SetFormStatusCallback(form, "ProcessCallback", _ => { });
+        try
+        {
+            form.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            RequestNativeClose(form, reason).Should().BeFalse();
+            form.Close();
+
+            form.IsVisible.Should().BeFalse();
+            ((IDisposable)runner).Received(1).Dispose();
+        }
+        finally
+        {
+            form.Close();
+        }
+    }
+
+    private static bool RequestNativeClose(Window form, WindowCloseReason reason)
+    {
+        PropertyInfo closing = typeof(Avalonia.Platform.IWindowImpl).GetProperty("Closing", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("The platform close callback could not be found.");
+        Func<WindowCloseReason, bool> requestClose = (Func<WindowCloseReason, bool>?)closing.GetValue(form.PlatformImpl)
+            ?? throw new InvalidOperationException("The window has no platform close callback.");
+        return requestClose(reason);
+    }
+
+    private static void SetFormStatusCallback(FormStatus form, string name, Action<FormStatus> callback)
+    {
+        FieldInfo field = typeof(FormStatus).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException($"FormStatus.{name} could not be found.");
+        field.SetValue(form, callback);
+    }
+
     private static void InvokeFormStatusMethod(FormStatus form, string name, params object[] arguments)
     {
         MethodInfo method = typeof(FormStatus).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)
@@ -229,7 +348,7 @@ public sealed class ProcessDialogTests
         form.Should().BeAssignableTo<FormProcess>();
         translation.Received(1).AddTranslationItem(nameof(FormRemoteProcess), "$this", "Text", Arg.Any<string>());
         translation.Received(1).AddTranslationItem(nameof(FormRemoteProcess), "Abort", "Text", "&Abort");
-        translation.DidNotReceive().AddTranslationItem(
+        translation.Received(1).AddTranslationItem(
             nameof(FormRemoteProcess),
             "_fingerprintNotRegistredText",
             "Text",
@@ -275,6 +394,65 @@ public sealed class ProcessDialogTests
         finally
         {
             form.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    [TestCase(false)]
+    [TestCase(true)]
+    [NonParallelizable]
+    public void FormRemoteProcess_should_prompt_for_missing_key_and_obey_retry(bool retry)
+    {
+        string originalSshPath = AppSettings.SshPath;
+        AppSettings.SshPath = "plink.exe";
+        IConsoleCommandRunner runner = Substitute.For<IConsoleCommandRunner, IDisposable>();
+        runner.Control.Returns(new Border());
+        IConsoleEmulatorsRegistry registry = Substitute.For<IConsoleEmulatorsRegistry>();
+        registry.CreateCommandController().Returns(runner);
+        _serviceContainer.RemoveService(typeof(IConsoleEmulatorsRegistry));
+        _serviceContainer.AddService(registry);
+        int starts = 0;
+        int prompts = 0;
+        runner.When(value => value.StartCommand(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<Dictionary<string, string>>()))
+            .Do(_ =>
+            {
+                starts++;
+                if (starts == 2)
+                {
+                    Dispatcher.UIThread.Post(() => runner.CommandProcessExited += Raise.EventWith(runner, new ConsoleProcessExitEventArgs(0)));
+                }
+            });
+        using IDisposable opened = Window.WindowOpenedEvent.AddClassHandler<Window>((window, _) =>
+        {
+            if (window.GetType().Name == "FormPuttyError")
+            {
+                prompts++;
+                Dispatcher.UIThread.Post(() => window.FindControl<Button>(retry ? "Retry" : "Cancel")!
+                    .RaiseEvent(new RoutedEventArgs(Button.ClickEvent)));
+            }
+        });
+        using FormRemoteProcess form = new(CreateCommands(Path.GetTempPath()), "version", useDialogSettings: false);
+        try
+        {
+            form.Show();
+            runner.CommandOutputReceived += Raise.EventWith(runner, new ConsoleOutputEventArgs("FATAL ERROR: authentication failed\n"));
+            runner.CommandProcessExited += Raise.EventWith(runner, new ConsoleProcessExitEventArgs(1));
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            while (!form.Ok.IsEnabled && stopwatch.ElapsedMilliseconds < 5_000)
+            {
+                Dispatcher.UIThread.RunJobs();
+                Thread.Sleep(10);
+            }
+
+            form.Ok.IsEnabled.Should().BeTrue();
+            prompts.Should().Be(OperatingSystem.IsWindows() ? 1 : 0);
+            starts.Should().Be(OperatingSystem.IsWindows() && retry ? 2 : 1);
+            form.ErrorOccurred().Should().Be(!OperatingSystem.IsWindows() || !retry);
+        }
+        finally
+        {
+            form.Close();
+            AppSettings.SshPath = originalSshPath;
         }
     }
 

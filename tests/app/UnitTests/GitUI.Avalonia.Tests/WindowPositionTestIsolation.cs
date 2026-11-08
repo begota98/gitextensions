@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using System.Security.Cryptography;
 using GitCommands;
 using GitCommands.Settings;
@@ -31,6 +31,12 @@ public sealed class WindowPositionTestIsolation
             // The existing accessor first initializes AppSettings, which may read the test
             // host's normal profile. Never delete, reset, or save that profile for a test run.
             AppSettings.TestAccessor accessor = AppSettings.GetTestAccessor();
+            if (OperatingSystem.IsWindows())
+            {
+                RegistryTestIsolation.SettingsKeyName.Should().Contain(RegistryTestIsolation.TestRoot);
+                TestContext.Progress.WriteLine($"Isolated registry: {RegistryTestIsolation.SettingsKeyName}");
+            }
+
             _originalApplicationDataPath = accessor.ApplicationDataPath;
             _originalSettingsContainer = AppSettings.SettingsContainer;
             _originalSettingsPath = _originalSettingsContainer.SettingsCache.SettingsFilePath;
@@ -49,6 +55,7 @@ public sealed class WindowPositionTestIsolation
             AppSettings.GetString("Detailed.ShowSplitViewLayout", null).Should().BeNull(
                 "the assembly must start with its own fresh profile, not inherit a previous interactive or test session");
             AppSettings.ShowSplitViewLayout.Should().BeTrue();
+            AppSettings.SshPath.Should().BeEmpty("the test assembly starts with its own unconfigured SSH profile");
             // Compose all test plugins before any consumer materializes the cached provider.
             _compositionContext = new Microsoft.VisualStudio.Threading.JoinableTaskContext();
             ThreadHelper.JoinableTaskContext = _compositionContext;
@@ -104,6 +111,7 @@ public sealed class WindowPositionTestIsolation
         }
         finally
         {
+            RegistryTestIsolation.VerifyAndDispose();
             _isolatedSettingsCache?.Dispose();
             _compositionContext?.Dispose();
             if (Directory.Exists(_settingsDirectory))

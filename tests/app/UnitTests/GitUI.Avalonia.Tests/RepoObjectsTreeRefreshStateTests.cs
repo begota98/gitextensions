@@ -14,6 +14,7 @@ using GitUI.LeftPanel;
 using GitUIPluginInterfaces;
 using Microsoft.VisualStudio.Threading;
 using NSubstitute;
+using WinFormsShims = GitExtensions.Shims.WinForms;
 
 namespace GitExtensionsTests;
 
@@ -50,6 +51,38 @@ public sealed class RepoObjectsTreeRefreshStateTests
         }
     }
 
+    [AvaloniaTest]
+    public async Task Selection_before_the_first_ref_refresh_should_not_report_an_exception()
+    {
+        IGitModule module = CreateModule(Path.GetTempPath());
+        GitRevision revision = new(ObjectId.Parse("1234567890abcdef1234567890abcdef12345678"));
+        module.GetMergedBranchesAsync(true, true, revision.Guid, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Array.Empty<string>()));
+        IGitUICommands commands = Substitute.For<IGitUICommands>();
+        commands.Module.Returns(module);
+        IGitUICommandsSource source = Substitute.For<IGitUICommandsSource>();
+        source.UICommands.Returns(commands);
+        RepoObjectsTree control = new() { UICommandsSource = source };
+        List<Exception> exceptions = [];
+        void OnThreadException(object? sender, ThreadExceptionEventArgs e) => exceptions.Add(e.Exception);
+        WinFormsShims.Application.ThreadException += OnThreadException;
+        try
+        {
+            control.GetTestAccessor().TreeView.Items.Should().BeEmpty();
+            control.SelectionChanged([revision]);
+            using CancellationTokenSource cancellation = new(TimeSpan.FromSeconds(10));
+            await ThreadHelper.JoinPendingOperationsAsync(cancellation.Token);
+
+            cancellation.IsCancellationRequested.Should().BeFalse();
+            await module.Received(1).GetMergedBranchesAsync(true, true, revision.Guid, Arg.Any<CancellationToken>());
+            exceptions.Should().BeEmpty("revision selection can precede the first ref refresh");
+        }
+        finally
+        {
+            WinFormsShims.Application.ThreadException -= OnThreadException;
+        }
+    }
+
     /// <summary>
     ///  Restores the same submodule's caret and expanded state when only its displayed branch changes.
     /// </summary>
@@ -82,7 +115,7 @@ public sealed class RepoObjectsTreeRefreshStateTests
                 TreeViewItem nested = FindSubmodule(before, Path.Combine(submodulePath, "nested", "child"));
                 before.IsExpanded = true;
                 nested.IsExpanded = false;
-                accessor.Tree.SelectedItem = before;
+                accessor.TreeView.SelectedItem = before;
                 string identity = RepoObjectsTree.GetNodeIdentity((NodeBase)before.Tag!);
                 int changes = 0;
                 control.NodeSelectionChanged += (_, _) => changes++;
@@ -104,7 +137,7 @@ public sealed class RepoObjectsTreeRefreshStateTests
                 RepoObjectsTree.GetNodeIdentity((NodeBase)after.Tag!).Should().Be(identity);
                 ((SubmoduleNode)after.Tag!).Info.Text.Should().Contain("(new)");
                 ((TextBlock)((StackPanel)after.Header!).Children[1]).Text.Should().Be("foo (new)");
-                accessor.Tree.SelectedItem.Should().BeSameAs(after);
+                accessor.TreeView.SelectedItem.Should().BeSameAs(after);
                 after.IsExpanded.Should().BeTrue();
                 FindSubmodule(after, Path.Combine(submodulePath, "nested", "child")).IsExpanded.Should().BeFalse();
                 changes.Should().Be(0, "restoring source state is not a new user selection or activation");
@@ -177,12 +210,12 @@ public sealed class RepoObjectsTreeRefreshStateTests
                 }
 
                 Dispatcher.UIThread.RunJobs();
-                accessor.Tree.Items.Cast<TreeViewItem>().Should().NotContain(root);
+                accessor.TreeView.Items.Cast<TreeViewItem>().Should().NotContain(root);
                 root.Items.Cast<TreeViewItem>().Should().Equal(before);
 
                 SetVisible(accessor, visible: true);
                 Dispatcher.UIThread.RunJobs();
-                accessor.Tree.Items.Cast<TreeViewItem>().Should().Contain(root);
+                accessor.TreeView.Items.Cast<TreeViewItem>().Should().Contain(root);
                 root.Items.Cast<TreeViewItem>().Should().Equal(before, "the original has no OnAttached replay of cached status");
 
                 Notify(provider, CreateResult(module, topPath, "visible"));

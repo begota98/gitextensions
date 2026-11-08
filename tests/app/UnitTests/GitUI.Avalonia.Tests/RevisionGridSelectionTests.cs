@@ -17,6 +17,8 @@ using GitExtensions.Extensibility.Git;
 using GitExtUtils;
 using GitUI;
 using GitUI.CommandsDialogs;
+using GitUI.Compat;
+using GitUI.NBugReports;
 using GitUI.UserControls.RevisionGrid;
 using GitUIPluginInterfaces;
 using Microsoft.VisualStudio.Threading;
@@ -70,6 +72,46 @@ public sealed class RevisionGridSelectionTests
         AppSettings.ShowStashes = _showStashes;
         _serviceContainer.Dispose();
         TestDirectory.Delete(_workingDirectory);
+    }
+
+    [AvaloniaTest]
+    public async Task ReloadRevisions_should_report_reader_errors_through_the_application_error_path()
+    {
+        const string missingRevision = "refs/heads/parity-revision-that-does-not-exist";
+        GitModule module = CreateRepository();
+        var previousPresenter = UIReporter.TestAccessor.TaskDialogPresenter;
+        List<TaskDialogPage> reports = [];
+        UIReporter.TestAccessor.TaskDialogPresenter = (_, page) =>
+        {
+            Dispatcher.UIThread.CheckAccess().Should().BeTrue();
+            reports.Add(page);
+            TaskDialogButton ignore = page.Buttons.Single(button => button.Text == GitUI.TranslatedStrings.ButtonIgnore);
+            ignore.PerformClick();
+            return ignore;
+        };
+        using FormBrowse form = new(new GitUICommands(_serviceContainer, module));
+        try
+        {
+            form.Show();
+            await WaitUntilAsync(() => form.RevisionGrid.SelectedRevision?.ObjectId == module.GetCurrentCheckout());
+
+            form.RevisionGrid.ReloadRevisions(module, getRefs: _ => throw new IOException($"Cannot read {missingRevision}"));
+            await WaitUntilAsync(() => reports.Count == 1);
+
+            reports.Should().ContainSingle();
+            (reports[0].Heading + reports[0].Text).Should().Contain(missingRevision);
+            form.RevisionGrid.FindControl<TextBlock>("lblLoadingStatus")!.Text.Should().Contain("Failed to load revisions");
+            form.IsVisible.Should().BeTrue();
+
+            form.RevisionGrid.ReloadRevisions(module);
+            await WaitUntilAsync(() => form.RevisionGrid.SelectedRevision?.ObjectId == module.GetCurrentCheckout());
+            reports.Should().ContainSingle();
+        }
+        finally
+        {
+            form.Close();
+            UIReporter.TestAccessor.TaskDialogPresenter = previousPresenter;
+        }
     }
 
     [AvaloniaTest]
@@ -663,6 +705,38 @@ public sealed class RevisionGridSelectionTests
 
             control.SelectedRevision?.ObjectId.Should().Be(first);
             control.SelectedRevision?.IsArtificial.Should().BeFalse();
+        }
+        finally
+        {
+            control.CancelBackgroundTasks();
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task Filtered_HEAD_should_place_artificial_rows_before_its_displayed_ancestor_not_an_unrelated_first_row()
+    {
+        GitModule module = CreateRepository();
+        ObjectId initial = module.GetCurrentCheckout();
+        AddCommit(module, "visible-ancestor");
+        ObjectId ancestor = module.GetCurrentCheckout();
+        AddCommit(module, "excluded-HEAD");
+        ObjectId head = module.GetCurrentCheckout();
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("checkout") { "--quiet", "-b", "unrelated", initial }).Should().BeTrue();
+        Thread.Sleep(1_100);
+        AddCommit(module, "visible-unrelated");
+        ObjectId unrelated = module.GetCurrentCheckout();
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("checkout") { "--quiet", "selection" }).Should().BeTrue();
+        File.AppendAllText(Path.Combine(_workingDirectory, "tracked.txt"), "dirty");
+        RevisionGridControl control = CreateControl(module);
+        try
+        {
+            await ReloadAsync(control, module, revisionFilter: "--all --grep=visible --date-order");
+
+            control.CurrentCheckout.Should().Be(head);
+            ObjectId[] rows = control.GetTestAccessor().Revisions.Items.OfType<GitRevision>()
+                .Select(revision => revision.ObjectId).ToArray();
+            rows.Should().Equal(unrelated, ObjectId.WorkTreeId, ObjectId.IndexId, ancestor);
+            control.GetTestAccessor().HasGraphParent(ObjectId.WorkTreeId, ObjectId.IndexId).Should().BeTrue();
         }
         finally
         {

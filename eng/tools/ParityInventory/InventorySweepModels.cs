@@ -3,7 +3,7 @@
 // parity-scaffolding: Defines the deterministic aggregate contract for a functional baseline sweep.
 internal sealed record InventorySweepResult
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 7;
 
     public required int SchemaVersion { get; init; }
 
@@ -24,6 +24,14 @@ internal sealed record InventorySweepResult
 // parity-scaffolding: Summarizes batch source coverage without implying runtime parity.
 internal sealed record InventorySweepSummary
 {
+    public int OriginalNestedTypeCount { get; init; }
+
+    public int TwinNestedTypeCount { get; init; }
+
+    public int OriginalTestAccessorTypeCount { get; init; }
+
+    public int TwinTestAccessorTypeCount { get; init; }
+
     public required int MappingCount { get; init; }
 
     public required int FormerParityCount { get; init; }
@@ -33,6 +41,10 @@ internal sealed record InventorySweepSummary
     public required int AnalyzedTypeCount { get; init; }
 
     public required int UnsupportedMappingCount { get; init; }
+
+    public int ProductFindingCount { get; init; }
+
+    public int TestOnlyFindingCount { get; init; }
 
     public required int FindingCount { get; init; }
 
@@ -81,6 +93,10 @@ internal sealed record SweepTypeResult
     public required int OriginalPartCount { get; init; }
 
     public required int TwinPartCount { get; init; }
+
+    public int ProductFindingCount { get; init; }
+
+    public int TestOnlyFindingCount { get; init; }
 
     public required int FindingCount { get; init; }
 

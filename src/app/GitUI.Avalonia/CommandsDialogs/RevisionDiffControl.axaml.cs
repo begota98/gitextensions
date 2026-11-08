@@ -59,6 +59,7 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
         LayoutUpdated += (_, _) => InitializeNestedViewerRuntimeState();
 
         InitializeComplete();
+        HotkeysEnabled = true;
     }
 
     private void FileViewer_TopScrollReached(object? sender, EventArgs e)
@@ -178,25 +179,6 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
 
     internal GitRevision? DisplayedRevision { get; private set; }
 
-    internal IScriptOptionsProvider ScriptOptionsProvider => GetScriptOptionsProvider();
-
-    protected override IScriptOptionsProvider GetScriptOptionsProvider()
-    {
-        return new ScriptOptionsProvider(
-            DiffFiles,
-            () => BlameControl.IsVisible ? BlameControl.CurrentFileLine : DiffText.CurrentFileLine,
-            () => BlameControl.IsVisible ? BlameControl.CurrentFileColumn : DiffText.CurrentFileColumn);
-    }
-
-    public void ReloadHotkeys()
-    {
-        LoadHotkeys(HotkeySettingsName);
-        DiffFiles.ReloadHotkeys();
-        DiffText.ReloadHotkeys();
-    }
-
-    public void LoadCustomDifftools() => DiffFiles.LoadCustomDifftools();
-
     public bool ExecuteCommand(Command cmd)
         => ExecuteCommand((int)cmd);
 
@@ -259,6 +241,25 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
             return false;
         }
     }
+
+    internal IScriptOptionsProvider ScriptOptionsProvider => GetScriptOptionsProvider();
+
+    protected override IScriptOptionsProvider GetScriptOptionsProvider()
+    {
+        return new ScriptOptionsProvider(
+            DiffFiles,
+            () => BlameControl.IsVisible ? BlameControl.CurrentFileLine : DiffText.CurrentFileLine,
+            () => BlameControl.IsVisible ? BlameControl.CurrentFileColumn : DiffText.CurrentFileColumn);
+    }
+
+    public void ReloadHotkeys()
+    {
+        LoadHotkeys(HotkeySettingsName);
+        DiffFiles.ReloadHotkeys();
+        DiffText.ReloadHotkeys();
+    }
+
+    public void LoadCustomDifftools() => DiffFiles.LoadCustomDifftools();
 
     public void CancelLoadCustomDifftools() => DiffFiles.CancelLoadCustomDifftools();
 
@@ -479,7 +480,7 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
     public void InitSplitterManager(SplitterManager splitterManager)
     {
         NestedSplitterManager nested = new(splitterManager, Name ?? nameof(RevisionDiffControl));
-        nested.AddSplitter(DiffSplitContainer);
+        nested.AddSplitter(DiffSplitContainer, FixedPanel.Panel1);
         BlameControl.InitSplitterManager(nested);
     }
 
@@ -832,15 +833,22 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
     internal TestAccessor GetTestAccessor()
         => new(this);
 
-    internal readonly struct TestAccessor(RevisionDiffControl control)
+    internal readonly struct TestAccessor
     {
-        public FileStatusList DiffFiles => control.DiffFiles;
-        public Editor.FileViewer DiffText => control.DiffText;
-        public Grid DiffSplitContainer => control.DiffSplitContainer;
-        public Blame.BlameControl BlameControl => control.BlameControl;
-        public TaskManager TaskManager => control._taskManager;
+        private readonly RevisionDiffControl _control;
+
+        public TestAccessor(RevisionDiffControl control)
+        {
+            _control = control;
+        }
+
+        public FileStatusList DiffFiles => _control.DiffFiles;
+        public Editor.FileViewer DiffText => _control.DiffText;
+        public Grid DiffSplitContainer => _control.DiffSplitContainer;
+        public Blame.BlameControl BlameControl => _control.BlameControl;
+        public TaskManager TaskManager => _control._taskManager;
 
         public void ShowSelectedFile(bool ensureNoSwitchToFilter = false, int? line = null)
-            => control.ShowSelectedFile(ensureNoSwitchToFilter, line);
+            => _control.ShowSelectedFile(ensureNoSwitchToFilter, line);
     }
 }

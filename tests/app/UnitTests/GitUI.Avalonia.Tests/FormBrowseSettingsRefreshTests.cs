@@ -137,7 +137,7 @@ public sealed class FormBrowseSettingsRefreshTests
         using BrowseFixture fixture = new();
         RepoObjectsTree tree = fixture.Form.GetTestAccessor().RepoObjectsTree;
         tree.ReloadHotkeys();
-        tree.GetTestAccessor().Tree.SelectedItem.Should().BeNull();
+        tree.GetTestAccessor().TreeView.SelectedItem.Should().BeNull();
         // Delete with no selected node exercises the real route without opening a dialog.
         tree.ProcessHotkey(OldKey).Should().BeTrue();
 
@@ -145,7 +145,7 @@ public sealed class FormBrowseSettingsRefreshTests
 
         tree.ProcessHotkey(OldKey).Should().BeFalse("the old cached shortcut must stop executing");
         tree.ProcessHotkey(NewKey).Should().BeTrue();
-        tree.GetTestAccessor().Tree.SelectedItem.Should().BeNull();
+        tree.GetTestAccessor().TreeView.SelectedItem.Should().BeNull();
     }
 
     [AvaloniaTest]
@@ -281,6 +281,7 @@ public sealed class FormBrowseSettingsRefreshTests
             commands.Module.Returns(module);
             commands.RepoChangedNotifier.Returns(Substitute.For<ILockableNotifier>());
             commands.GetService(typeof(IAppTitleGenerator)).Returns(title);
+            commands.GetService(typeof(GitUI.Shells.IShellProvider)).Returns(new GitUI.Shells.ShellProvider());
             commands.GetService(typeof(IHotkeySettingsLoader)).Returns(loader);
             IRepositoryHistoryUIService history = Substitute.For<IRepositoryHistoryUIService>();
             history.LoadSnapshot().Returns(new RepositoryHistorySnapshot([], []));

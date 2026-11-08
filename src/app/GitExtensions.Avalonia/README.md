@@ -29,6 +29,34 @@ follow-up, and conflict recovery remain deferred with the remaining dialogs. Bro
 use the same persisted `Keys` values and XML settings as the Windows Forms application: F5
 refreshes, the currently implemented configurable Browse commands are dispatched through
 their upstream command IDs, and Escape closes dialogs without closing the repository browser.
+Revision columns can be resized at their cell dividers. A preview line follows the drag,
+then the width commits on release; losing capture restores the original fill sizing.
+Repository refresh preserves typing focus in an open repository dropdown; otherwise
+initialization focuses the revision list.
+Dashboard loads repository-host actions before the remaining plugins, then refreshes its host links.
+Error reports use the original-shaped review form with exception details, reproduction steps,
+Copy, Send and Quit, Quit, and Ignore when permitted. Sending requires reproduction steps and
+confirmation, then opens the fork's issue form. Fatal reporting still runs inside the application;
+independent reporter-process isolation remains unimplemented.
+Dialogs that originally expose context help provide a Help icon in their footer and the F1 key.
+Both open the same manual section; an invalid section disables the help action.
+Splitter settings retain the container size, logical DPI, font size and collapsed states as
+well as the distance. Restoring a layout follows its ratio or fixed pane; distances rejected
+during opening are retried after layout. Earlier native handle-sized records are converted
+without treating the handle as the full container.
+HOME repair searches the original candidate locations for readable `.gitconfig` or compatible
+XDG configuration. If HOME already names an existing directory, repair is offered only when
+there is a better candidate. The dialog suggests the first match while preserving the original
+default, user-profile and custom choices.
+On Windows, Open in Visual Studio searches the latest supported Enterprise, Professional
+or Community installation, including previews, using the installer's `vswhere` utility.
+Open with requests the Windows system application chooser, the Linux XDG portal chooser,
+or a macOS application-bundle picker. Choosing an application opens the selected file with
+it; cancelling leaves the file alone. The macOS picker uses AppKit directly because the
+current Avalonia storage provider filters application bundles out of file-picker results.
+On Windows, selecting Plink enables the original PuTTY recovery dialogs: load a private key
+through Pageant, confirm an unknown host key, and retry the remote command. Linux and macOS
+use OpenSSH and the process dialog's existing input instead.
 On Linux with `setsid` available, commands shown in the process dialog run in an isolated
 process group so cancelling the dialog also terminates descendant processes, including
 children that have been re-parented.
@@ -56,7 +84,7 @@ unconfined toolkit dialog or invoke `xdg-open` directly.
 ## Requirements
 
 - [.NET SDK](https://dotnet.microsoft.com/download) 10.0 or later
-- [Git](https://git-scm.com/) available on `PATH`
+- [Git](https://git-scm.com/) available on `PATH` or a configured Windows installation
 - On Linux, `setsid` from util-linux for reliable process-tree cleanup (included by standard
   desktop distributions; descendant traversal remains available when it is absent)
 - On Linux, `xdg-desktop-portal` and a desktop-appropriate backend such as
@@ -68,6 +96,10 @@ unconfined toolkit dialog or invoke `xdg-open` directly.
   - Windows 10 or later
   - Linux with an X11 or Wayland session (standard desktop distributions work out of the box)
   - macOS 11 or later on Apple Silicon
+
+On Windows, automatic Git discovery also checks `GITEXT_GIT` (an installation directory
+ending in a path separator), the Git installer registry, standard and per-user installations,
+and legacy locations. An explicitly selected executable keeps priority.
 
 ## Building
 
@@ -152,6 +184,10 @@ Windows x64 portable archive, an offline Linux x64 Flatpak bundle, and an Apple 
 application archive. These are unsigned development snapshots intended for
 maintainer testing and issue reports, not production releases. The release title and notes
 identify the exact source commit, and `SHA256SUMS.txt` covers every attached package.
+
+Crash reports from the Avalonia error dialog open the
+[fork issue form](https://github.com/begota98/gitextensions/issues/new). Help and Dashboard
+issue links follow the original application.
 
 Install the Flatpak bundle with:
 
@@ -253,6 +289,13 @@ project. After an intended rendering change, regenerate the images by running th
 once with the environment variable `GITEXT_UPDATE_GOLDEN_IMAGES=1`, review the new
 images, and commit them.
 
+Windows runtime validation through the Exit gate requires PowerShell hosted on
+.NET 10 or later. It tests the registry boundary before launching the application,
+then uses a disposable process-local HKCU hive. It compares the user's real Git
+Extensions registry values, kinds and subkeys before and after the run, failing
+on any difference without restoring them. Portable settings and repositories stay
+inside the disposable runtime.
+
 ## Project layout
 
 The UI lives in `src/app/GitUI.Avalonia`, which mirrors the file structure of the Windows
@@ -275,3 +318,7 @@ engine projects.
 - Follow the repository coding guidelines (`.github/copilot-instructions.md`) and the
   Windows Forms control naming conventions (`.github/ui_design_guidelines.md`).
 - Keep this document up to date when build or runtime requirements change.
+
+Show in folder selects the requested file through Explorer on Windows, Finder on macOS,
+or the XDG desktop portal on Linux. A Linux desktop without FileManager1 support falls
+back to opening the containing folder, as specified by the portal standard.

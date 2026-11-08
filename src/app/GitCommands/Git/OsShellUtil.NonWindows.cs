@@ -18,16 +18,16 @@ public static class OsShellUtil
         => Launch(filePath, OsShellLaunchKind.Open);
 
     /// <summary>
-    ///  Let the user chose an application to open a file on Linux; use the associated application elsewhere.
+    ///  Let the user chose an application to open a file.
     /// </summary>
     /// <param name="filePath">Pathname of the file to open.</param>
     public static void OpenAs(string filePath)
         => Launch(filePath, OsShellLaunchKind.OpenAs); // filePath must not be quoted
 
     /// <summary>
-    ///  Opens the directory containing the specified file in the platform file manager.
+    ///  Selects the specified file in the platform file manager.
     /// </summary>
-    /// <param name="filePath">The full path of the file.</param>
+    /// <param name="filePath">The full path of the file to select.</param>
     public static void SelectPathInFileExplorer(string filePath)
         => Launch(filePath, OsShellLaunchKind.ShowInDirectory);
 

@@ -15,6 +15,7 @@ using GitExtensions.Extensibility.Git;
 using GitExtensions.Extensibility.Settings;
 using GitExtensions.Extensibility.Translations;
 using GitExtUtils.GitUI.Theming;
+using GitUI.Avatars;
 using GitUI.CommandsDialogs;
 using GitUI.CommandsDialogs.SettingsDialog;
 using GitUI.CommandsDialogs.SettingsDialog.Pages;
@@ -586,7 +587,6 @@ public sealed class SettingsDialogTests
         {
             FormFixHome form = new();
             FormFixHome.TestAccessor accessor = form.GetTestAccessor();
-            accessor.LoadSettings();
             accessor.OtherHome.IsChecked = true;
             accessor.OtherHomeDirectory.Text = temporaryDirectory;
 
@@ -595,7 +595,7 @@ public sealed class SettingsDialogTests
             AppSettings.CustomHomeDir.Should().Be(temporaryDirectory);
             AppSettings.UserProfileHomeDir.Should().BeFalse();
             EnvironmentConfiguration.GetHomeDir().Should().Be(temporaryDirectory);
-            FormFixHome.TestAccessor.HasGlobalGitConfigForTesting(temporaryDirectory).Should().BeTrue();
+            FormFixHome.TestAccessor.HasGlobalGitConfig(temporaryDirectory).Should().BeTrue();
         }
         finally
         {
@@ -795,7 +795,7 @@ public sealed class SettingsDialogTests
     }
 
     [AvaloniaTest]
-    public void Appearance_settings_should_map_general_and_avatar_values()
+    public async Task Appearance_settings_should_map_general_and_avatar_values()
     {
         bool originalRelativeDate = AppSettings.RelativeDate;
         bool originalRepositoryBranch = AppSettings.ShowRepoCurrentBranch;
@@ -810,6 +810,8 @@ public sealed class SettingsDialogTests
         bool originalShowAvatarColumn = AppSettings.ShowAuthorAvatarColumn;
         bool originalShowAvatarInCommitInfo = AppSettings.ShowAuthorAvatarInCommitInfo;
         int originalAvatarCacheDays = AppSettings.AvatarImageCacheDays;
+        IAvatarCacheCleaner cacheCleaner = Substitute.For<IAvatarCacheCleaner>();
+        cacheCleaner.ClearCacheAsync().Returns(Task.CompletedTask);
         try
         {
             AppSettings.RelativeDate = true;
@@ -822,8 +824,10 @@ public sealed class SettingsDialogTests
             AppSettings.ShowAuthorAvatarColumn = true;
             AppSettings.ShowAuthorAvatarInCommitInfo = false;
             AppSettings.AvatarImageCacheDays = 23;
+            AppSettings.AvatarProvider = AvatarProvider.Default;
+            AppSettings.AvatarFallbackType = AvatarFallbackType.AuthorInitials;
 
-            AppearanceSettingsPage page = new();
+            AppearanceSettingsPage page = new(cacheCleaner);
             page.LoadSettings();
             AppearanceSettingsPage.TestAccessor accessor = page.GetTestAccessor();
             accessor.ShowRelativeDate.IsChecked.Should().BeTrue();
@@ -861,19 +865,31 @@ public sealed class SettingsDialogTests
         }
         finally
         {
-            AppSettings.RelativeDate = originalRelativeDate;
-            AppSettings.ShowRepoCurrentBranch = originalRepositoryBranch;
-            AppSettings.ShowCurrentBranchInVisualStudio = originalVisualStudioBranch;
-            AppSettings.EnableAutoScale = originalAutoScale;
-            AppSettings.TruncatePathMethod = originalTruncation;
-            AppSettings.Translation = originalTranslation;
-            AppSettings.Dictionary = originalDictionary;
-            AppSettings.AvatarProvider = originalAvatarProvider;
-            AppSettings.AvatarFallbackType = originalFallback;
-            AppSettings.CustomAvatarTemplate = originalAvatarTemplate;
-            AppSettings.ShowAuthorAvatarColumn = originalShowAvatarColumn;
-            AppSettings.ShowAuthorAvatarInCommitInfo = originalShowAvatarInCommitInfo;
-            AppSettings.AvatarImageCacheDays = originalAvatarCacheDays;
+            try
+            {
+                // Keep the real save callback tracked while isolating its external cache side effects.
+                using CancellationTokenSource deadline = new(TimeSpan.FromSeconds(15));
+                await GitUI.ThreadHelper.JoinPendingOperationsAsync(deadline.Token);
+                deadline.Token.ThrowIfCancellationRequested();
+                await cacheCleaner.Received(1).ClearCacheAsync();
+            }
+            finally
+            {
+                AppSettings.RelativeDate = originalRelativeDate;
+                AppSettings.ShowRepoCurrentBranch = originalRepositoryBranch;
+                AppSettings.ShowCurrentBranchInVisualStudio = originalVisualStudioBranch;
+                AppSettings.EnableAutoScale = originalAutoScale;
+                AppSettings.TruncatePathMethod = originalTruncation;
+                AppSettings.Translation = originalTranslation;
+                AppSettings.Dictionary = originalDictionary;
+                AppSettings.AvatarProvider = originalAvatarProvider;
+                AppSettings.AvatarFallbackType = originalFallback;
+                AppSettings.CustomAvatarTemplate = originalAvatarTemplate;
+                AppSettings.ShowAuthorAvatarColumn = originalShowAvatarColumn;
+                AppSettings.ShowAuthorAvatarInCommitInfo = originalShowAvatarInCommitInfo;
+                AppSettings.AvatarImageCacheDays = originalAvatarCacheDays;
+                AvatarService.UpdateAvatarProvider();
+            }
         }
     }
 

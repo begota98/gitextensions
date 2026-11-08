@@ -198,6 +198,12 @@ public sealed partial class FormCommit : GitModuleForm
         InitializeComplete();
     }
 
+    /// <summary>
+    /// Flag whether the push needs to be forced, i.e. after amending a commit or after soft reset to the previous commit.
+    /// </summary>
+    /// The Amend checkbox is disabled after soft reset.
+    private bool PushForced => (Amend.IsChecked == true || !Amend.IsEnabled) && AppSettings.CommitAndPushForcedWhenAmend;
+
     public FormCommit(
         IGitUICommands commands,
         CommitKind commitKind = CommitKind.Normal,
@@ -340,12 +346,6 @@ public sealed partial class FormCommit : GitModuleForm
         InitializeComplete();
     }
 
-    /// <summary>
-    /// Flag whether the push needs to be forced, i.e. after amending a commit or after soft reset to the previous commit.
-    /// </summary>
-    /// The Amend checkbox is disabled after soft reset.
-    private bool PushForced => (Amend.IsChecked == true || !Amend.IsEnabled) && AppSettings.CommitAndPushForcedWhenAmend;
-
     protected override void OnApplicationActivated()
     {
         if (!_bypassActivatedEventHandler && AppSettings.RefreshArtificialCommitOnApplicationActivated)
@@ -362,13 +362,21 @@ public sealed partial class FormCommit : GitModuleForm
 
         // Keep the progress bar within the height of the other status items.
         toolStripProgressBar1.Height = commitStagedCount.Height - toolStripProgressBar1.Margin.Top - toolStripProgressBar1.Margin.Bottom;
+
+        UpdateLayout();
+
+        // The distances which did not fit the initial size of the form are retried now:
+        // the bounds and window state which RestorePosition() requests in base.OnLoad are
+        // applied during opening. Retry here, and on subsequent layout changes, so that
+        // the distances survive until the splitters have their final size.
+        _splitterManager.RestorePendingSplitters();
     }
 
     private void RestoreSplitters()
     {
-        _splitterManager.AddSplitter(splitMain, nameof(splitMain), defaultDistance: 397);
-        _splitterManager.AddSplitter(splitRight, nameof(splitRight), defaultDistance: 412);
-        _splitterManager.AddSplitter(splitLeft, nameof(splitLeft), defaultDistance: 268);
+        _splitterManager.AddSplitter(splitMain, nameof(splitMain), FixedPanel.Panel1);
+        _splitterManager.AddSplitter(splitRight, nameof(splitRight), FixedPanel.Panel2);
+        _splitterManager.AddSplitter(splitLeft, nameof(splitLeft));
         _splitterManager.RestoreSplitters();
     }
 
@@ -1019,12 +1027,16 @@ public sealed partial class FormCommit : GitModuleForm
         this.InvokeAndForget(() => CheckForStagedAndCommitAsync(push));
     }
 
-    private void RescanChanges()
+    /// <summary>
+    /// replace the Message.Text in an undo-able way.
+    /// </summary>
+    /// <param name="message">the new message.</param>
+    private void ReplaceMessage(string message)
     {
-        if (_shouldRescanChanges)
+        if (Message.Text != message)
         {
-            Initialize();
-            Message.RefreshAutoCompleteWords();
+            Message.SelectAll();
+            Message.SelectedText = message;
         }
     }
 
@@ -1084,6 +1096,45 @@ public sealed partial class FormCommit : GitModuleForm
         });
     }
 
+    /// <summary>
+    /// replace the Message.Text in an undo-able way.
+    /// </summary>
+    /// <param name="message">the new message.</param>
+    /// <param name="regexEnabled">regex replace is enabled</param>
+    private void ReplaceMessage(string message, bool regexEnabled)
+    {
+        if (regexEnabled)
+        {
+            try
+            {
+                foreach (Match match in ReplaceMessageRegex().Matches(message))
+                {
+                    int groupIndex = int.TryParse(match.Groups["index"].Value, out int parsedIndex) ? parsedIndex : 1;
+                    Match branchMatch = Regex.Match(Module.GetSelectedBranch(), match.Groups["pattern"].Value);
+                    string replacement = branchMatch.Success && branchMatch.Groups.Count > groupIndex
+                        ? branchMatch.Groups[groupIndex].Value
+                        : string.Empty;
+                    message = message.Replace(match.Value, replacement, StringComparison.Ordinal);
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"ReplaceMessage with regex replace exception: {ex}");
+            }
+        }
+
+        ReplaceMessage(message);
+    }
+
+    private void RescanChanges()
+    {
+        if (_shouldRescanChanges)
+        {
+            Initialize();
+            Message.RefreshAutoCompleteWords();
+        }
+    }
+
     private void UnstageFilesClick(object? sender, EventArgs e) => UnstageSelected();
 
     private void Staged_DoubleClick(object? sender, EventArgs e) => UnstageSelected();
@@ -1091,6 +1142,26 @@ public sealed partial class FormCommit : GitModuleForm
     private void toolUnstageAllItem_Click(object? sender, EventArgs e)
     {
         UnstageAllFiles();
+    }
+
+    private void UpdateStageButtons()
+    {
+        bool actionsEnabled = !_indexOperationInProgress && !_commitInProgress;
+        toolStageItem.IsEnabled = actionsEnabled;
+        toolStageAllItem.IsEnabled = actionsEnabled;
+        toolUnstageItem.IsEnabled = actionsEnabled;
+        toolUnstageAllItem.IsEnabled = actionsEnabled;
+        btnResetUnstagedChanges.IsEnabled = actionsEnabled && Unstaged.GitItemStatuses.Count > 0;
+        btnResetAllChanges.IsEnabled = actionsEnabled && (Unstaged.GitItemStatuses.Count > 0 || Staged.GitItemStatuses.Count > 0);
+
+        Commit.IsEnabled = actionsEnabled;
+        bool hasChanges = Unstaged.GitItemStatuses.Count > 0 || Staged.GitItemStatuses.Count > 0;
+        bool pushOnly = _commitMessageManager is not null && !hasChanges && Amend.IsChecked != true;
+        CommitAndPush.IsEnabled = actionsEnabled;
+        string commitAndPushText = PushForced
+            ? _commitAndForcePush.Text
+            : pushOnly ? TranslatedStrings.ButtonPush : _commitAndPush.Text;
+        CommitAndPush.Content = AvaloniaTranslationUtils.ToAvaloniaMnemonics(commitAndPushText);
     }
 
     private void UnstageAllFiles()
@@ -1124,37 +1195,16 @@ public sealed partial class FormCommit : GitModuleForm
 
     private void UnstagedSelectionChanged(object? sender, EventArgs e)
     {
-        if (_changingSelection || Unstaged.SelectedFileStatusItem is not FileStatusItem item)
+        if (_currentFilesList != Unstaged || _changingSelection || Unstaged.SelectedFileStatusItem is not FileStatusItem item)
         {
             return;
         }
 
-        _currentFilesList = Unstaged;
         _changingSelection = true;
         Staged.ClearSelected();
         _changingSelection = false;
         UpdateStageButtons();
         ShowChanges(item, staged: false);
-    }
-
-    private void UpdateStageButtons()
-    {
-        bool actionsEnabled = !_indexOperationInProgress && !_commitInProgress;
-        toolStageItem.IsEnabled = actionsEnabled;
-        toolStageAllItem.IsEnabled = actionsEnabled;
-        toolUnstageItem.IsEnabled = actionsEnabled;
-        toolUnstageAllItem.IsEnabled = actionsEnabled;
-        btnResetUnstagedChanges.IsEnabled = actionsEnabled && Unstaged.GitItemStatuses.Count > 0;
-        btnResetAllChanges.IsEnabled = actionsEnabled && (Unstaged.GitItemStatuses.Count > 0 || Staged.GitItemStatuses.Count > 0);
-
-        Commit.IsEnabled = actionsEnabled;
-        bool hasChanges = Unstaged.GitItemStatuses.Count > 0 || Staged.GitItemStatuses.Count > 0;
-        bool pushOnly = _commitMessageManager is not null && !hasChanges && Amend.IsChecked != true;
-        CommitAndPush.IsEnabled = actionsEnabled;
-        string commitAndPushText = PushForced
-            ? _commitAndForcePush.Text
-            : pushOnly ? TranslatedStrings.ButtonPush : _commitAndPush.Text;
-        CommitAndPush.Content = AvaloniaTranslationUtils.ToAvaloniaMnemonics(commitAndPushText);
     }
 
     private void Unstaged_Enter(object? sender, EnterEventArgs e)
@@ -1200,6 +1250,9 @@ public sealed partial class FormCommit : GitModuleForm
         UpdateStageButtons();
     }
 
+    private void UnstageItems(IReadOnlyList<GitItemStatus> items)
+        => RunIndexOperation(items, stage: false);
+
     private void Unstage(bool canUseUnstageAll = true)
     {
         if (Module.IsBareRepository())
@@ -1231,9 +1284,6 @@ public sealed partial class FormCommit : GitModuleForm
         return (headRevision, indexRevision, workTreeRevision);
     }
 
-    private void UnstageItems(IReadOnlyList<GitItemStatus> items)
-        => RunIndexOperation(items, stage: false);
-
     private void StageClick(object? sender, EventArgs e) => StageSelected();
 
     private void Unstaged_DoubleClick(object? sender, EventArgs e) => StageSelected();
@@ -1247,28 +1297,6 @@ public sealed partial class FormCommit : GitModuleForm
     private void toolStageAllItem_Click(object? sender, EventArgs e)
     {
         StageAllAccordingToFilter();
-    }
-
-    private void StagedSelectionChanged(object? sender, EventArgs e)
-    {
-        if (_changingSelection || Staged.SelectedFileStatusItem is not FileStatusItem item)
-        {
-            return;
-        }
-
-        _currentFilesList = Staged;
-        _changingSelection = true;
-        Unstaged.ClearSelected();
-        _changingSelection = false;
-        UpdateStageButtons();
-        ShowChanges(item, staged: true);
-    }
-
-    private void Staged_DataSourceChanged(object? sender, EventArgs e)
-    {
-        int stagedCount = Staged.UnfilteredItemsCount;
-        int totalFilesCount = stagedCount + Unstaged.UnfilteredItemsCount;
-        commitStagedCount.Text = stagedCount + "/" + totalFilesCount;
     }
 
     private void ApplySelectionFilter(string filterText)
@@ -1299,6 +1327,27 @@ public sealed partial class FormCommit : GitModuleForm
             // Insert the next term at the start of the filter control
             _selectionFilterHistory.Insert(0, filterText);
         }
+    }
+
+    private void StagedSelectionChanged(object? sender, EventArgs e)
+    {
+        if (_currentFilesList != Staged || _changingSelection || Staged.SelectedFileStatusItem is not FileStatusItem item)
+        {
+            return;
+        }
+
+        _changingSelection = true;
+        Unstaged.ClearSelected();
+        _changingSelection = false;
+        UpdateStageButtons();
+        ShowChanges(item, staged: true);
+    }
+
+    private void Staged_DataSourceChanged(object? sender, EventArgs e)
+    {
+        int stagedCount = Staged.UnfilteredItemsCount;
+        int totalFilesCount = stagedCount + Unstaged.UnfilteredItemsCount;
+        commitStagedCount.Text = stagedCount + "/" + totalFilesCount;
     }
 
     private void Staged_Enter(object? sender, EnterEventArgs e)
@@ -1336,30 +1385,6 @@ public sealed partial class FormCommit : GitModuleForm
         }
     }
 
-    private void Stage(IReadOnlyList<GitItemStatus> items)
-        => RunIndexOperation(items, stage: true);
-
-    private void ResetSoftClick(object? sender, EventArgs e)
-    {
-        if (!MessageBoxes.ConfirmSuppressible(this, _amendResetSoft.Text, _amendCommitCaption.Text, AppSettings.DontConfirmAmend, icon: TaskDialogIcon.Warning))
-        {
-            return;
-        }
-
-        try
-        {
-            Module.GitExecutable.RunCommand(Commands.Reset(ResetMode.Soft, _resetSoftRevision));
-            Amend.IsEnabled = false;
-            Amend.IsChecked = false;
-            Message.Focus();
-        }
-        finally
-        {
-            UICommands.RepoChangedNotifier.Notify();
-            ReloadChanges(preferStaged: true);
-        }
-    }
-
     private void UpdateCursorPosition()
     {
         string text = Message.Text ?? string.Empty;
@@ -1388,6 +1413,30 @@ public sealed partial class FormCommit : GitModuleForm
 
         commitCursorLine.Text = line.ToString();
         commitCursorColumn.Text = column.ToString();
+    }
+
+    private void Stage(IReadOnlyList<GitItemStatus> items)
+        => RunIndexOperation(items, stage: true);
+
+    private void ResetSoftClick(object? sender, EventArgs e)
+    {
+        if (!MessageBoxes.ConfirmSuppressible(this, _amendResetSoft.Text, _amendCommitCaption.Text, AppSettings.DontConfirmAmend, icon: TaskDialogIcon.Warning))
+        {
+            return;
+        }
+
+        try
+        {
+            Module.GitExecutable.RunCommand(Commands.Reset(ResetMode.Soft, _resetSoftRevision));
+            Amend.IsEnabled = false;
+            Amend.IsChecked = false;
+            Message.Focus();
+        }
+        finally
+        {
+            UICommands.RepoChangedNotifier.Notify();
+            ReloadChanges(preferStaged: true);
+        }
     }
 
     private void SolveMergeConflictsClick(object? sender, EventArgs e)
@@ -1600,29 +1649,6 @@ public sealed partial class FormCommit : GitModuleForm
         }
 
         CheckForStagedAndCommit(push: true);
-    }
-
-    private void UpdateAuthorInfo()
-    {
-        string author = toolAuthor.Text ?? string.Empty;
-        TrackLifecycleTask(UpdateAuthorInfoAsync());
-
-        async Task UpdateAuthorInfoAsync()
-        {
-            // Do not cache results in order to update the info on FormActivate
-            string userName = Module.GetEffectiveSetting(SettingKeyString.UserName, defaultValue: string.Empty);
-            string userEmail = Module.GetEffectiveSetting(SettingKeyString.UserEmail, defaultValue: string.Empty);
-            string committer = $"{_commitCommitterInfo.Text} {userName} <{userEmail}>";
-            await this.SwitchToMainThreadAsync();
-            commitAuthorStatus.Content = string.IsNullOrWhiteSpace(author)
-                ? committer
-                : $"{committer}  {_commitAuthorInfo.Text} {author}";
-        }
-    }
-
-    private void ExecuteCommitCommand()
-    {
-        CheckForStagedAndCommit(push: false);
     }
 
     private async Task CheckForStagedAndCommitAsync(bool push)
@@ -1975,6 +2001,29 @@ public sealed partial class FormCommit : GitModuleForm
         }
     }
 
+    private void UpdateAuthorInfo()
+    {
+        string author = toolAuthor.Text ?? string.Empty;
+        TrackLifecycleTask(UpdateAuthorInfoAsync());
+
+        async Task UpdateAuthorInfoAsync()
+        {
+            // Do not cache results in order to update the info on FormActivate
+            string userName = Module.GetEffectiveSetting(SettingKeyString.UserName, defaultValue: string.Empty);
+            string userEmail = Module.GetEffectiveSetting(SettingKeyString.UserEmail, defaultValue: string.Empty);
+            string committer = $"{_commitCommitterInfo.Text} {userName} <{userEmail}>";
+            await this.SwitchToMainThreadAsync();
+            commitAuthorStatus.Content = string.IsNullOrWhiteSpace(author)
+                ? committer
+                : $"{committer}  {_commitAuthorInfo.Text} {author}";
+        }
+    }
+
+    private void ExecuteCommitCommand()
+    {
+        CheckForStagedAndCommit(push: false);
+    }
+
     private void Message_ContextMenuPopulating(object? sender, ContextMenuStrip menu)
     {
         if (menu.ItemsSource is not IList<object> items)
@@ -2144,49 +2193,6 @@ public sealed partial class FormCommit : GitModuleForm
         }
 
         AppSettings.CloseCommitDialogAfterCommit = closeDialogAfterEachCommitToolStripMenuItem.IsChecked == true;
-    }
-
-    /// <summary>
-    /// replace the Message.Text in an undo-able way.
-    /// </summary>
-    /// <param name="message">the new message.</param>
-    private void ReplaceMessage(string message)
-    {
-        if (Message.Text != message)
-        {
-            Message.SelectAll();
-            Message.SelectedText = message;
-        }
-    }
-
-    /// <summary>
-    /// replace the Message.Text in an undo-able way.
-    /// </summary>
-    /// <param name="message">the new message.</param>
-    /// <param name="regexEnabled">regex replace is enabled</param>
-    private void ReplaceMessage(string message, bool regexEnabled)
-    {
-        if (regexEnabled)
-        {
-            try
-            {
-                foreach (Match match in ReplaceMessageRegex().Matches(message))
-                {
-                    int groupIndex = int.TryParse(match.Groups["index"].Value, out int parsedIndex) ? parsedIndex : 1;
-                    Match branchMatch = Regex.Match(Module.GetSelectedBranch(), match.Groups["pattern"].Value);
-                    string replacement = branchMatch.Success && branchMatch.Groups.Count > groupIndex
-                        ? branchMatch.Groups[groupIndex].Value
-                        : string.Empty;
-                    message = message.Replace(match.Value, replacement, StringComparison.Ordinal);
-                }
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"ReplaceMessage with regex replace exception: {ex}");
-            }
-        }
-
-        ReplaceMessage(message);
     }
 
     private void closeDialogAfterAllFilesCommittedToolStripMenuItem_Click(object? sender, EventArgs e)
@@ -2623,36 +2629,44 @@ public sealed partial class FormCommit : GitModuleForm
         return true;
     }
 
-    internal readonly struct TestAccessor(FormCommit form)
+    internal readonly struct TestAccessor
     {
-        internal SpellChecker.EditNetSpell Message => form.Message;
-        internal CheckBox Amend => form.Amend;
-        internal FileStatusList CurrentFilesList => form._currentFilesList;
-        internal FileStatusList Unstaged => form.Unstaged;
-        internal MenuFlyout CommitMessageFlyout => (MenuFlyout)form.commitMessageToolStripMenuItem.Flyout!;
-        internal MenuFlyout CommitTemplatesFlyout => (MenuFlyout)form.commitTemplatesToolStripMenuItem.Flyout!;
-        internal Task ClosePersistenceTask => form._closePersistenceTask;
-        internal ComboBox SelectionFilter => form.selectionFilter;
-        internal bool SelectionFilterVisible => form.toolbarSelectionFilter.IsVisible;
+        private readonly FormCommit _formCommit;
 
-        internal void RaiseUnstagedEnter(bool byMouse) => form.Unstaged_Enter(form.Unstaged, new EnterEventArgs(byMouse));
-        internal void RaiseStagedEnter(bool byMouse) => form.Staged_Enter(form.Staged, new EnterEventArgs(byMouse));
+        internal TestAccessor(FormCommit formCommit)
+        {
+            _formCommit = formCommit;
+        }
+
+        internal FileStatusList UnstagedList => _formCommit.Unstaged;
+
+        internal void RaiseUnstagedEnter(bool byMouse) => _formCommit.Unstaged_Enter(_formCommit.Unstaged, new EnterEventArgs(byMouse));
+        internal FileStatusList CurrentFilesList => _formCommit._currentFilesList;
+        internal void RaiseStagedEnter(bool byMouse) => _formCommit.Staged_Enter(_formCommit.Staged, new EnterEventArgs(byMouse));
+        internal MenuFlyout CommitMessageFlyout => (MenuFlyout)_formCommit.commitMessageToolStripMenuItem.Flyout!;
+        internal MenuFlyout CommitTemplatesFlyout => (MenuFlyout)_formCommit.commitTemplatesToolStripMenuItem.Flyout!;
+        internal Task ClosePersistenceTask => _formCommit._closePersistenceTask;
+        internal ComboBox SelectionFilter => _formCommit.selectionFilter;
+        internal bool SelectionFilterVisible => _formCommit.toolbarSelectionFilter.IsVisible;
+
+        internal SpellChecker.EditNetSpell Message => _formCommit.Message;
+        internal bool ExecuteCommand(Command command) => _formCommit.ExecuteCommand((int)command);
 
         internal ArgumentString CreateCommitArguments(bool amend, bool allowEmpty)
-            => form.CreateCommitArguments(amend, allowEmpty);
+            => _formCommit.CreateCommitArguments(amend, allowEmpty);
 
-        internal void ApplySelectionFilter() => form.ApplySelectionFilter(form.selectionFilter.Text ?? string.Empty);
-        internal bool ExecuteCommand(Command command) => form.ExecuteCommand((int)command);
-        internal bool IsCommitMessageValid(string message) => form.IsCommitMessageValid(message);
-        internal void PopulateCommitMessageHistory() => form.CommitMessageToolStripMenuItemDropDownOpening(form.commitMessageToolStripMenuItem, EventArgs.Empty);
-        internal void PopulateCommitTemplates() => form.commitTemplatesToolStripMenuItem_DropDownOpening(form.commitTemplatesToolStripMenuItem, EventArgs.Empty);
-        internal (string message, int selectionStart) PrefixOrReplaceKeyword(string keyword) => form.PrefixOrReplaceKeyword(keyword);
-        internal bool IncludeFeatureParentheses { set => form._insertScopeParentheses = value; }
+        internal void ApplySelectionFilter() => _formCommit.ApplySelectionFilter(_formCommit.selectionFilter.Text ?? string.Empty);
+        internal CheckBox Amend => _formCommit.Amend;
+        internal bool IsCommitMessageValid(string message) => _formCommit.IsCommitMessageValid(message);
+        internal void PopulateCommitMessageHistory() => _formCommit.CommitMessageToolStripMenuItemDropDownOpening(_formCommit.commitMessageToolStripMenuItem, EventArgs.Empty);
+        internal void PopulateCommitTemplates() => _formCommit.commitTemplatesToolStripMenuItem_DropDownOpening(_formCommit.commitTemplatesToolStripMenuItem, EventArgs.Empty);
+        internal (string message, int selectionStart) PrefixOrReplaceKeyword(string keyword) => _formCommit.PrefixOrReplaceKeyword(keyword);
+        internal bool IncludeFeatureParentheses { set => _formCommit._insertScopeParentheses = value; }
 
         internal void SetMessageState(string text, int position)
         {
-            form.Message.Text = text;
-            form.Message.SelectionStart = position;
+            _formCommit.Message.Text = text;
+            _formCommit.Message.SelectionStart = position;
         }
     }
 }

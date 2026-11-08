@@ -91,6 +91,8 @@ internal static class InventorySweepRunner
                     Report = relativeReport,
                     OriginalPartCount = original.Parts.Count,
                     TwinPartCount = twin.Parts.Count,
+                    ProductFindingCount = findings.Count(finding => !finding.IsTestOnly),
+                    TestOnlyFindingCount = findings.Count(finding => finding.IsTestOnly),
                     FindingCount = findings.Count,
                     DependentFindingCount = comparison.DependentFindings.Count,
                     TotalDifferenceCount = findings.Count + comparison.DependentFindings.Count,
@@ -99,7 +101,7 @@ internal static class InventorySweepRunner
                     AcceptedFrameworkDeviationCount = comparison.AcceptedFrameworkDeviations.Count
                 });
             }
-            catch (InvalidDataException)
+            catch (InvalidDataException exception) when (!exception.Message.StartsWith("Reviewed ", StringComparison.Ordinal))
             {
                 // The per-mapping result below records this type as unsupported.
             }
@@ -150,7 +152,13 @@ internal static class InventorySweepRunner
                 FormerParityCount = mappings.Count(mapping => mapping.Status == "parity"),
                 LinkedExactCount = mappingResults.Count(mapping => mapping.AnalysisStatus == "linkedExact"),
                 AnalyzedTypeCount = typeResults.Count,
+                OriginalNestedTypeCount = reports.Values.Sum(report => report.Summary.OriginalNestedTypeCount),
+                TwinNestedTypeCount = reports.Values.Sum(report => report.Summary.TwinNestedTypeCount),
+                OriginalTestAccessorTypeCount = reports.Values.Sum(report => report.Summary.OriginalTestAccessorTypeCount),
+                TwinTestAccessorTypeCount = reports.Values.Sum(report => report.Summary.TwinTestAccessorTypeCount),
                 UnsupportedMappingCount = mappingResults.Count(mapping => mapping.AnalysisStatus == "unsupported"),
+                ProductFindingCount = allFindings.Count(finding => !finding.IsTestOnly),
+                TestOnlyFindingCount = allFindings.Count(finding => finding.IsTestOnly),
                 FindingCount = allFindings.Length,
                 DependentFindingCount = allDependentFindings.Length,
                 TotalDifferenceCount = allFindings.Length + allDependentFindings.Length,
@@ -215,6 +223,12 @@ internal static class InventorySweepRunner
             Twin = twin,
             Summary = new InventorySummary
             {
+                OriginalNestedTypeCount = NestedTypeStatistics.Count(original, testAccessors: false),
+                TwinNestedTypeCount = NestedTypeStatistics.Count(twin, testAccessors: false),
+                OriginalTestAccessorTypeCount = NestedTypeStatistics.Count(original, testAccessors: true),
+                TwinTestAccessorTypeCount = NestedTypeStatistics.Count(twin, testAccessors: true),
+                ProductFindingCount = comparison.Findings.Count(finding => !finding.IsTestOnly),
+                TestOnlyFindingCount = comparison.Findings.Count(finding => finding.IsTestOnly),
                 FindingCount = comparison.Findings.Count,
                 DependentFindingCount = comparison.DependentFindings.Count,
                 TotalDifferenceCount = comparison.Findings.Count + comparison.DependentFindings.Count,

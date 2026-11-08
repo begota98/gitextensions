@@ -2,6 +2,7 @@
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
+using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -10,6 +11,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using GitExtensions.ParityCapture;
 using GitUI.Compat;
+using NSubstitute;
 using AvaloniaEllipse = Avalonia.Controls.Shapes.Ellipse;
 using AvaloniaPath = Avalonia.Controls.Shapes.Path;
 using WinFormsShims = GitExtensions.Shims.WinForms;
@@ -446,14 +448,102 @@ public sealed class FrameworkControlParityTests
         page.Expander.Text.Should().Be("details");
     }
 
+    [AvaloniaTest]
+    public void Bug_report_button_should_open_the_fork_issue_form_through_the_real_dialog()
+    {
+        System.Reflection.FieldInfo shellField = typeof(WinFormsShims.ShimHost).GetField(
+            "_osShell", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+        object? previousShell = shellField.GetValue(null);
+        System.Reflection.FieldInfo messageField = typeof(WinFormsShims.ShimHost).GetField(
+            "_messageBoxHost", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+        object? previousMessages = messageField.GetValue(null);
+        WinFormsShims.IMessageBoxHost messages = NSubstitute.Substitute.For<WinFormsShims.IMessageBoxHost>();
+        messages.Show(NSubstitute.Arg.Any<WinFormsShims.IWin32Window?>(), NSubstitute.Arg.Any<string>(),
+            NSubstitute.Arg.Any<string>(), NSubstitute.Arg.Any<WinFormsShims.MessageBoxButtons>(),
+            NSubstitute.Arg.Any<WinFormsShims.MessageBoxIcon>(), NSubstitute.Arg.Any<WinFormsShims.MessageBoxDefaultButton>())
+            .Returns(WinFormsShims.DialogResult.Yes);
+        WinFormsShims.IOsShell shell = NSubstitute.Substitute.For<WinFormsShims.IOsShell>();
+        string? launchedUrl = null;
+        shell.TryLaunch(NSubstitute.Arg.Any<string>(), WinFormsShims.OsShellLaunchKind.OpenUri)
+            .Returns(call =>
+            {
+                launchedUrl = call.ArgAt<string>(0);
+                return true;
+            });
+        using GitUI.HelperDialogs.FormBuildServerCredentials owner = new("Test owner");
+        Exception? observationFailure = null;
+        int reports = 0;
+        using IDisposable subscription = Window.WindowOpenedEvent.AddClassHandler<Window>((dialog, _) =>
+        {
+            if (dialog is not BugReporter.BugReportForm)
+            {
+                return;
+            }
+
+            reports++;
+            Dispatcher.UIThread.Post(() =>
+            {
+                try
+                {
+                    dialog.Owner.Should().BeSameAs(owner);
+                    dialog.FindControl<TextBox>("descriptionTextBox")!.Text = "Open the repository, then refresh.";
+                    Button report = dialog.FindControl<Button>("sendAndQuitButton")!;
+                    using Avalonia.Media.Imaging.WriteableBitmap? frame = dialog.CaptureRenderedFrame();
+                    frame.Should().NotBeNull();
+                    if (Environment.GetEnvironmentVariable("GITEXT_REPORT_EVIDENCE") is { Length: > 0 } evidence)
+                    {
+                        Directory.CreateDirectory(evidence);
+                        frame!.Save(Path.Combine(evidence, "report-dialog.png"), Avalonia.Media.Imaging.PngBitmapEncoderOptions.Default);
+                    }
+
+                    Point point = report.TranslatePoint(new Point(report.Bounds.Width / 2, report.Bounds.Height / 2), dialog)!.Value;
+                    dialog.MouseMove(point);
+                    dialog.MouseDown(point, Avalonia.Input.MouseButton.Left);
+                    dialog.MouseUp(point, Avalonia.Input.MouseButton.Left);
+                }
+                catch (Exception exception)
+                {
+                    observationFailure = exception;
+                    dialog.Close();
+                }
+            });
+        });
+        try
+        {
+            WinFormsShims.ShimHost.OsShell = shell;
+            WinFormsShims.ShimHost.MessageBoxHost = messages;
+            owner.Show();
+            WinFormsShims.DialogResult result = new AvaloniaBugReportLauncher().Show(
+                owner, new InvalidOperationException("failure details"), "Command: git", "OS: test",
+                canIgnore: true, showIgnore: true, focusDetails: false);
+
+            observationFailure.Should().BeNull();
+            reports.Should().Be(1);
+            result.Should().Be(WinFormsShims.DialogResult.Abort);
+            shell.Received(1).TryLaunch(NSubstitute.Arg.Any<string>(), WinFormsShims.OsShellLaunchKind.OpenUri);
+            launchedUrl.Should().NotBeNull();
+            new Uri(launchedUrl!).GetLeftPart(UriPartial.Path).Should().Be("https://github.com/begota98/gitextensions/issues/new");
+            Uri.UnescapeDataString(launchedUrl!).Should().Contain("failure details").And.Contain("Command: git").And.Contain("OS: test");
+        }
+        finally
+        {
+            subscription.Dispose();
+            owner.Close();
+            shellField.SetValue(null, previousShell);
+            messageField.SetValue(null, previousMessages);
+        }
+    }
+
     [Test]
     public void Bug_report_boundary_should_build_the_native_GitHub_issue_payload()
     {
         InvalidOperationException exception = new("failure details");
 
-        string url = AvaloniaBugReportLauncher.BuildIssueUrl(exception, "Command: git", "OS: test");
+        string url = new BugReporter.GitHubUrlBuilder(new BugReporter.ErrorReportUrlBuilder()).Build(
+            "https://github.com/begota98/gitextensions/issues/new", new BugReporter.Serialization.SerializableException(exception),
+            "Command: git", "OS: test", additionalInfo: null)!;
 
-        url.Should().StartWith("https://github.com/gitextensions/gitextensions/issues/new?");
+        url.Should().StartWith("https://github.com/begota98/gitextensions/issues/new?");
         url.Should().Contain("template=bug_report.yml");
         url.Should().Contain(Uri.EscapeDataString("[NBug] failure details"));
         url.Should().Contain(Uri.EscapeDataString("Command: git"));

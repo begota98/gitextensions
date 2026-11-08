@@ -17,6 +17,12 @@ public static class DpiUtil
     public static float ScaleY => (float)GetDesktopScale();
 
     /// <summary>
+    /// Returns a copy of <paramref name="value"/> which takes equivalent
+    /// screen space at the current DPI as the original would at 96 DPI.
+    /// </summary>
+    public static Size Scale(Size value) => value;
+
+    /// <summary>
     /// Returns a copy of measurement <paramref name="value"/> which has
     /// equivalent length on screen at the current DPI as the original would
     /// at 96 DPI.
@@ -25,10 +31,17 @@ public static class DpiUtil
     public static int Scale(int value) => value;
 
     /// <summary>
-    /// Returns a copy of <paramref name="value"/> which takes equivalent
-    /// screen space at the current DPI as the original would at 96 DPI.
+    /// Returns a scaled copy of <paramref name="i"/> which has equivalent
+    /// length on screen at the current DPI as the original would at
+    /// <paramref name="originalDpi"/>.
     /// </summary>
-    public static Size Scale(Size value) => value;
+    public static int Scale(int i, int originalDpi)
+    {
+        // Avalonia lengths are DIPs; render scaling applies the current screen DPI.
+        float scale = 96F / originalDpi;
+
+        return (int)(i * scale);
+    }
 
     /// <summary>
     /// Returns <paramref name="value"/> in device-independent units so that it has equivalent physical

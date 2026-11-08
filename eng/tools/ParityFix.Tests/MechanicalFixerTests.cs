@@ -1,4 +1,4 @@
-using AwesomeAssertions;
+﻿using AwesomeAssertions;
 using GitExtensions.ParityInventory;
 using Microsoft.CodeAnalysis.CSharp;
 using NUnit.Framework;
@@ -9,6 +9,88 @@ namespace GitExtensions.ParityFix.Tests;
 [TestFixture]
 public sealed class MechanicalFixerTests
 {
+    [TestCase("int", "int")]
+    [TestCase("Control", "AvaloniaControl")]
+    public void Fix_should_order_each_overload_using_the_inventory_match(string originalType, string twinType)
+    {
+        using Fixture fixture = new($"void A({originalType} value) {{ }}\n void A(string value) {{ }}",
+            $"void A(string value) {{ }}\n void A({twinType} value) {{ }}");
+        FileFix result = fixture.Fix();
+        result.ProofPassed.Should().BeTrue();
+        result.OrderChanged.Should().BeTrue();
+        result.Text.IndexOf($"A({twinType}", StringComparison.Ordinal)
+            .Should().BeLessThan(result.Text.IndexOf("A(string", StringComparison.Ordinal));
+    }
+
+    [Test]
+    public void Fix_should_order_generic_overloads_with_the_same_parameters()
+    {
+        using Fixture fixture = new("void A<T>(int value) { }\n void A<T, U>(int value) { }",
+            "void A<T, U>(int value) { }\n void A<T>(int value) { }");
+        FileFix result = fixture.Fix();
+        result.ProofPassed.Should().BeTrue();
+        result.OrderChanged.Should().BeTrue();
+        result.Text.IndexOf("A<T>(", StringComparison.Ordinal)
+            .Should().BeLessThan(result.Text.IndexOf("A<T, U>(", StringComparison.Ordinal));
+    }
+
+    [Test]
+    public void Fix_should_use_primary_constructor_and_record_parameter_order()
+    {
+        using Fixture fixture = new("record Inner(int Value, string Caption);",
+            "record Inner { public string Caption { get; init; } public Inner(int Value, string Caption) { } public int Value { get; init; } }");
+
+        FileFix result = fixture.Fix(forceOrder: true);
+
+        result.ProofPassed.Should().BeTrue();
+        result.OrderChanged.Should().BeTrue();
+        result.Text.IndexOf("public Inner(", StringComparison.Ordinal)
+            .Should().BeLessThan(result.Text.IndexOf("public int Value", StringComparison.Ordinal));
+        result.Text.IndexOf("public int Value", StringComparison.Ordinal)
+            .Should().BeLessThan(result.Text.IndexOf("public string Caption", StringComparison.Ordinal));
+    }
+
+    [Test]
+    public void Fix_should_reorder_nested_members_without_changing_outer_order()
+    {
+        using Fixture fixture = new("class Inner { void A() { } void B() { } }\n int outer;",
+            "class Inner { void B() { } void A() { } }\n int outer;");
+
+        FileFix result = fixture.Fix();
+
+        result.ProofPassed.Should().BeTrue();
+        result.OrderChanged.Should().BeTrue();
+        result.Text.IndexOf("void A()", StringComparison.Ordinal)
+            .Should().BeLessThan(result.Text.IndexOf("void B()", StringComparison.Ordinal));
+        result.Text.IndexOf("class Inner", StringComparison.Ordinal)
+            .Should().BeLessThan(result.Text.IndexOf("int outer", StringComparison.Ordinal));
+    }
+
+    [Test]
+    public void Fix_should_require_review_of_nested_initializers()
+    {
+        using Fixture fixture = new("class Inner { int first = 1; int second = 2; }",
+            "class Inner { int second = 2; int first = 1; }");
+
+        FileFix blocked = fixture.Fix();
+        FileFix reviewed = fixture.Fix(allowInitializers: true);
+
+        blocked.OrderChanged.Should().BeFalse();
+        blocked.InitializedFields.Should().Contain("Sample.Widget.Inner.first");
+        reviewed.OrderChanged.Should().BeTrue();
+        reviewed.ProofPassed.Should().BeTrue();
+    }
+
+    [Test]
+    public void MemberMultisetEquivalent_should_reject_a_changed_nested_method_body()
+    {
+        const string original = "namespace Sample; class Widget { class Inner { int A() => 1; } }";
+        const string changed = "namespace Sample; class Widget { class Inner { int A() => 2; } }";
+
+        MechanicalFixer.MemberMultisetEquivalent(CSharpSyntaxTree.ParseText(original).GetRoot(),
+            CSharpSyntaxTree.ParseText(changed).GetRoot(), "Sample.Widget").Should().BeFalse();
+    }
+
     [TestCase("// Retain the reason.")]
     [TestCase("/* Retain the reason. */")]
     [TestCase("/// <summary>Retain the reason.</summary>")]
@@ -268,9 +350,9 @@ public sealed class MechanicalFixerTests
     }
 
     [Test]
-    public void Fix_should_not_reorder_overloads_by_name()
+    public void Fix_should_not_reorder_ambiguous_overloads_by_name()
     {
-        using Fixture fixture = new("void A() { }\n    void A(int n) { }", "void A(int n) { }\n    void A() { }");
+        using Fixture fixture = new("void A(int n) { }\n    void A(string n) { }", "void A(bool n) { }\n    void A(long n) { }");
         FileFix result = fixture.Fix(forceOrder: true);
         result.OrderChanged.Should().BeFalse();
         result.Text.Should().Be(fixture.Twin);

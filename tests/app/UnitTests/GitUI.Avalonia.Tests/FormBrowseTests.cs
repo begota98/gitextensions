@@ -5,10 +5,12 @@ using System.Reflection;
 using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
@@ -38,9 +40,11 @@ using GitUI.LeftPanel;
 using GitUI.Properties;
 using GitUI.ScriptsEngine;
 using GitUI.Shells;
+using GitUI.Theming;
 using GitUI.UserControls;
 using GitUI.UserControls.RevisionGrid;
 using GitUI.UserControls.RevisionGrid.Columns;
+using GitUI.UserControls.RevisionGrid.Graph;
 using GitUIPluginInterfaces;
 using Microsoft.VisualStudio.Threading;
 using NSubstitute;
@@ -54,9 +58,150 @@ namespace GitExtensionsTests;
 [TestFixture]
 public sealed class FormBrowseTests
 {
+    private AppSettingsTestScope _settingsScope = null!;
     private ServiceContainer _serviceContainer = null!;
     private string _workingDirectory = null!;
     private bool _revisionGraphShowArtificialCommits;
+
+    [AvaloniaTest]
+    [TestCase(CommitInfoPosition.LeftwardFromList)]
+    [TestCase(CommitInfoPosition.RightwardFromList)]
+    public async Task Browse_splitter_settings_should_migrate_legacy_native_distances_and_keep_the_restored_ratio(CommitInfoPosition position)
+    {
+        CommitInfoPosition originalPosition = AppSettings.CommitInfoPosition;
+        bool originalSplitView = AppSettings.ShowSplitViewLayout;
+        AppSettingsPath settings = new("FormBrowse.Avalonia");
+        string[] names = ["MainSplitContainer", "RevisionsSplitContainer", "RightSplitContainer"];
+        string[] suffixes = ["Size", "Distance", "Dpi", "FontSize", "Panel1Collapsed", "Panel2Collapsed"];
+        Dictionary<string, string?> previousInput = names.SelectMany(name => suffixes.Select(suffix => name + "_" + suffix)).ToDictionary(key => key, settings.GetValue);
+        try
+        {
+            AppSettings.CommitInfoPosition = position;
+            AppSettings.ShowSplitViewLayout = true;
+            foreach (string key in previousInput.Keys)
+            {
+                settings.SetValue(key, null);
+            }
+
+            foreach (string name in names)
+            {
+                settings.SetValue(name + "_Size", "6");
+                settings.SetValue(name + "_Panel1Collapsed", "false");
+                settings.SetValue(name + "_Panel2Collapsed", "false");
+            }
+
+            settings.SetValue("MainSplitContainer_Distance", "275");
+            settings.SetValue("RevisionsSplitContainer_Distance", "240");
+            settings.SetValue("RightSplitContainer_Distance", "210");
+            using FormBrowse form = new(new GitUICommands(_serviceContainer, CreateRepositoryWithInitialCommit()));
+            Dictionary<string, string?> previous = form.GetTestAccessor().SplitterManager.GetTestAccessor().Splitters
+                .SelectMany(splitter => suffixes.Select(suffix => splitter.DistanceSettingsKey[..^"Distance".Length] + suffix))
+                .ToDictionary(key => key, settings.GetValue);
+            foreach ((string key, string? value) in previousInput)
+            {
+                previous[key] = value;
+            }
+
+            try
+            {
+                form.Show();
+                await form.JoinLoadOperationsForTestAsync().WaitAsync(TimeSpan.FromSeconds(30));
+                Dispatcher.UIThread.RunJobs();
+                form.UpdateLayout();
+                Dispatcher.UIThread.RunJobs();
+                form.UpdateLayout();
+                Grid main = form.FindControl<Grid>("MainSplitContainer")!;
+                Grid revisions = form.FindControl<Grid>("RevisionsSplitContainer")!;
+                Grid right = form.FindControl<Grid>("RightSplitContainer")!;
+                int infoColumn = position == CommitInfoPosition.LeftwardFromList ? 0 : 4;
+                main.ColumnDefinitions[0].ActualWidth.Should().Be(275);
+                revisions.ColumnDefinitions[infoColumn].ActualWidth.Should().Be(240);
+                right.RowDefinitions[0].ActualHeight.Should().Be(210);
+                form.GetTestAccessor().SplitterManager.SaveSplitters();
+                settings.GetValue("RevisionsSplitContainer_Distance").Should().Be(Convert.ToInt32(position == CommitInfoPosition.LeftwardFromList
+                    ? 240 : revisions.Bounds.Width - 240).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                settings.GetValue("MainSplitContainer_Dpi").Should().Be("96");
+                double previousSize = right.Bounds.Height;
+                form.Width += 150;
+                form.Height += 100;
+                Dispatcher.UIThread.RunJobs();
+                form.UpdateLayout();
+                Dispatcher.UIThread.RunJobs();
+                form.UpdateLayout();
+                right.Bounds.Height.Should().BeGreaterThan(previousSize);
+                main.ColumnDefinitions[0].ActualWidth.Should().Be(275);
+                revisions.ColumnDefinitions[infoColumn].ActualWidth.Should().Be(240);
+                right.RowDefinitions[0].ActualHeight.Should().Be(Math.Floor(210 * right.Bounds.Height / previousSize));
+            }
+            finally
+            {
+                form.Close();
+                foreach ((string key, string? value) in previous)
+                {
+                    settings.SetValue(key, value);
+                }
+            }
+        }
+        finally
+        {
+            AppSettings.CommitInfoPosition = originalPosition;
+            AppSettings.ShowSplitViewLayout = originalSplitView;
+            foreach ((string key, string? value) in previousInput)
+            {
+                settings.SetValue(key, value);
+            }
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task Browse_splitter_settings_should_use_the_real_container_bounds()
+    {
+        bool originalTab = AppSettings.ShowOutputHistoryAsTab;
+        try
+        {
+            AppSettings.ShowOutputHistoryAsTab.Value = false;
+            GitModule module = CreateRepositoryWithInitialCommit();
+            using FormBrowse form = new(new GitUICommands(_serviceContainer, module));
+            GitCommands.AppSettingsPath settings = new("FormBrowse.Avalonia");
+            string[] suffixes = ["Size", "Distance", "Dpi", "FontSize", "Panel1Collapsed", "Panel2Collapsed"];
+            Dictionary<string, string?> previous = form.GetTestAccessor().SplitterManager.GetTestAccessor().Splitters
+                .SelectMany(splitter => suffixes.Select(suffix => splitter.DistanceSettingsKey[..^"Distance".Length] + suffix))
+                .ToDictionary(key => key, settings.GetValue);
+            form.Show();
+            try
+            {
+                await form.JoinLoadOperationsForTestAsync().WaitAsync(TimeSpan.FromSeconds(30));
+                Dispatcher.UIThread.RunJobs();
+                form.UpdateLayout();
+                form.GetTestAccessor().SplitterManager.SaveSplitters();
+                foreach ((string name, string container, bool horizontal) in new[]
+                {
+                    ("MainSplitContainer", "MainSplitContainer", false),
+                    ("RevisionsSplitContainer", "RevisionsSplitContainer", false),
+                    ("RightSplitContainer", "RightSplitContainer", true),
+                    ("LeftSplitContainer", "mainContentGrid", true),
+                })
+                {
+                    Grid grid = form.FindControl<Grid>(container)!;
+                    int actualSize = Convert.ToInt32(horizontal ? grid.Bounds.Height : grid.Bounds.Width);
+                    actualSize.Should().BeGreaterThan(6);
+                    settings.GetValue(name + "_Size").Should().Be(actualSize.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+            }
+            finally
+            {
+                form.Close();
+                foreach ((string key, string? value) in previous)
+                {
+                    settings.SetValue(key, value);
+                }
+            }
+        }
+        finally
+        {
+            AppSettings.ShowOutputHistoryAsTab.Value = originalTab;
+        }
+    }
 
     [AvaloniaTest]
     public void FormBrowse_notification_bars_should_preserve_the_height_needed_by_enlarged_buttons()
@@ -85,6 +230,7 @@ public sealed class FormBrowseTests
     {
         AvaloniaSynchronizationContext.InstallIfNeeded();
         ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
+        _settingsScope = new AppSettingsTestScope();
         _revisionGraphShowArtificialCommits = AppSettings.RevisionGraphShowArtificialCommits;
         AppSettings.RevisionGraphShowArtificialCommits = false;
 
@@ -109,9 +255,137 @@ public sealed class FormBrowseTests
     [TearDown]
     public void TearDown()
     {
-        AppSettings.RevisionGraphShowArtificialCommits = _revisionGraphShowArtificialCommits;
-        _serviceContainer.Dispose();
-        TestDirectory.Delete(_workingDirectory);
+        try
+        {
+            AppSettings.RevisionGraphShowArtificialCommits = _revisionGraphShowArtificialCommits;
+            _serviceContainer.Dispose();
+            TestDirectory.Delete(_workingDirectory);
+        }
+        finally
+        {
+            _settingsScope.Dispose();
+        }
+    }
+
+    [AvaloniaTest]
+    [NonParallelizable]
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task Dashboard_should_publish_real_MEF_hosters_before_loading_other_plugins(bool isDashboard)
+    {
+        System.Reflection.FieldInfo providerField = typeof(ManagedExtensibility).GetField("_exportProvider", BindingFlags.NonPublic | BindingFlags.Static)!;
+        System.Reflection.FieldInfo loadedField = typeof(PluginRegistry).GetField("_isLoaded", BindingFlags.NonPublic | BindingFlags.Static)!;
+        System.Reflection.PropertyInfo registeredProperty = typeof(PluginRegistry).GetProperty(nameof(PluginRegistry.PluginsRegistered))!;
+        object? previousProvider = providerField.GetValue(null);
+        object? previousLoaded = loadedField.GetValue(null);
+        bool previousRegistered = PluginRegistry.PluginsRegistered;
+        IGitPlugin[] previousPlugins = [.. PluginRegistry.Plugins];
+        IRepositoryHostPlugin[] previousHosts = [.. PluginRegistry.GitHosters];
+        Microsoft.VisualStudio.Composition.AttributedPartDiscoveryV1 discovery = new(Microsoft.VisualStudio.Composition.Resolver.DefaultInstance);
+        Microsoft.VisualStudio.Composition.DiscoveredParts parts = await discovery.CreatePartsAsync([typeof(StartupPhaseExports)]);
+        Microsoft.VisualStudio.Composition.ComposableCatalog catalog = Microsoft.VisualStudio.Composition.ComposableCatalog.Create(Microsoft.VisualStudio.Composition.Resolver.DefaultInstance).AddParts(parts);
+        Microsoft.VisualStudio.Composition.CompositionConfiguration configuration = Microsoft.VisualStudio.Composition.CompositionConfiguration.Create(catalog);
+        configuration.ThrowOnErrors();
+        using Microsoft.VisualStudio.Composition.ExportProvider provider = Microsoft.VisualStudio.Composition.RuntimeComposition.CreateRuntimeComposition(configuration).CreateExportProviderFactory().CreateExportProvider();
+        FormBrowse? form = null;
+        bool hostLinkBeforeOtherPlugin = false;
+        bool hostMenuBeforeOtherPlugin = false;
+        try
+        {
+            PluginRegistry.Plugins.Clear();
+            PluginRegistry.GitHosters.Clear();
+            loadedField.SetValue(null, false);
+            registeredProperty.SetValue(null, false);
+            StartupPhaseExports.Hoster = Substitute.For<IRepositoryHostPlugin>();
+            StartupPhaseExports.Hoster.Name.Returns("Startup host");
+            StartupPhaseExports.Hoster.Description.Returns("Startup host plugin");
+            StartupPhaseExports.Hoster.Id.Returns(Guid.Parse("0561fb5a-aeb0-4c51-a650-246f89175ff8"));
+            StartupPhaseExports.Other = Substitute.For<IGitPlugin>();
+            StartupPhaseExports.Other.Name.Returns("Startup other");
+            StartupPhaseExports.Other.Description.Returns("Startup other plugin");
+            StartupPhaseExports.Other.Id.Returns(Guid.Parse("0561fb5a-aeb0-4c51-a650-246f89175ff9"));
+            ManagedExtensibility.SetTestExportProvider(provider);
+            form = new FormBrowse(new GitUICommands(_serviceContainer, isDashboard ? new GitModule(_serviceContainer.GetRequiredService<IGitExecutorProvider>(), _workingDirectory) : CreateRepositoryWithInitialCommit()));
+            StartupPhaseExports.BeforeOther = () =>
+            {
+                if (Dispatcher.UIThread.CheckAccess())
+                {
+                    ReadStartupState();
+                }
+                else
+                {
+                    Dispatcher.UIThread.Invoke(ReadStartupState);
+                }
+            };
+
+            void ReadStartupState()
+            {
+                hostMenuBeforeOtherPlugin = form.FindControl<MenuItem>("_repositoryHostsToolStripMenuItem") is { IsVisible: true, Header: "Startup host" };
+                hostLinkBeforeOtherPlugin = form.GetLogicalDescendants().OfType<DashboardLinkLabel>()
+                    .Any(link => link.Text.Contains("Startup host", StringComparison.Ordinal));
+            }
+
+            form.Show();
+            await form.JoinLoadOperationsForTestAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            hostMenuBeforeOtherPlugin.Should().Be(isDashboard);
+            hostLinkBeforeOtherPlugin.Should().Be(isDashboard);
+            PluginRegistry.GitHosters.Should().ContainSingle().Which.Should().BeSameAs(StartupPhaseExports.Hoster);
+            StartupPhaseExports.Hoster.Received(1).Register(form.UICommands);
+            StartupPhaseExports.Other.Received(1).Register(form.UICommands);
+        }
+        finally
+        {
+            try
+            {
+                if (form is not null)
+                {
+                    try
+                    {
+                        await form.JoinLoadOperationsForTestAsync().WaitAsync(TimeSpan.FromSeconds(30));
+                    }
+                    finally
+                    {
+                        form.Close();
+                        ((IDisposable)form).Dispose();
+                    }
+                }
+            }
+            finally
+            {
+                StartupPhaseExports.BeforeOther = null;
+                StartupPhaseExports.Hoster = null!;
+                StartupPhaseExports.Other = null!;
+                providerField.SetValue(null, previousProvider);
+                loadedField.SetValue(null, previousLoaded);
+                registeredProperty.SetValue(null, previousRegistered);
+                PluginRegistry.Plugins.Clear();
+                PluginRegistry.Plugins.AddRange(previousPlugins);
+                PluginRegistry.GitHosters.Clear();
+                PluginRegistry.GitHosters.AddRange(previousHosts);
+            }
+        }
+    }
+
+    [System.ComponentModel.Composition.PartCreationPolicy(System.ComponentModel.Composition.CreationPolicy.Shared)]
+    public sealed class StartupPhaseExports
+    {
+        public static IRepositoryHostPlugin Hoster { get; set; } = null!;
+        public static IGitPlugin Other { get; set; } = null!;
+        public static Action? BeforeOther { get; set; }
+
+        [System.ComponentModel.Composition.Export(typeof(IRepositoryHostPlugin))]
+        [System.ComponentModel.Composition.Export(typeof(IGitPlugin))]
+        public IRepositoryHostPlugin Host => Hoster;
+
+        [System.ComponentModel.Composition.Export(typeof(IGitPlugin))]
+        public IGitPlugin General
+        {
+            get
+            {
+                BeforeOther?.Invoke();
+                return Other;
+            }
+        }
     }
 
     [AvaloniaTest]
@@ -1283,7 +1557,7 @@ public sealed class FormBrowseTests
         form.Width = form.ToolStripMain.PreferredSize.Width + form.ToolStripFilters.Strip.PreferredSize.Width + 100;
         form.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
-        ComboBox revisionFilter = form.ToolStripFilters.GetTestAccessor().RevisionFilter;
+        ComboBox revisionFilter = form.ToolStripFilters.GetTestAccessor().tstxtRevisionFilter;
         form.ToolStripFilters.Strip.GetItemPlacement(revisionFilter).Should().Be(NativeToolStripItemPlacement.Main,
             "the actual source focus route does not open closed overflow controls");
         form.ToolStripFilters.SetFocus();
@@ -1292,6 +1566,587 @@ public sealed class FormBrowseTests
         form.ExecuteCommand(FormBrowse.Command.FocusRevisionGrid).Should().BeTrue();
         revisions.IsKeyboardFocusWithin.Should().BeTrue();
         revisionFilter.IsKeyboardFocusWithin.Should().BeFalse();
+    }
+
+    [AvaloniaTest]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task FormBrowse_control_A_should_select_only_the_first_diff_group(bool focusFiles)
+    {
+        bool previousParents = AppSettings.ShowDiffForAllParents;
+        DiffListSortType previousSort = DiffListSortService.Instance.DiffListSorting;
+        CommitInfoPosition previousPosition = AppSettings.CommitInfoPosition;
+        bool previousSplitView = AppSettings.ShowSplitViewLayout;
+        try
+        {
+            AppSettings.ShowDiffForAllParents = true;
+            DiffListSortService.Instance.DiffListSorting = DiffListSortType.FilePathFlat;
+            AppSettings.CommitInfoPosition = CommitInfoPosition.BelowList;
+            AppSettings.ShowSplitViewLayout = true;
+            GitModule module = CreateRepositoryWithMerge();
+            ObjectId head = module.GetCurrentCheckout();
+            using FormBrowse form = new(new GitUICommands(_serviceContainer, module)) { Width = 1200, Height = 700 };
+            form.Show();
+            try
+            {
+                RevisionGridControl grid = form.RevisionGrid;
+                await WaitUntilAsync(() => grid.SelectedRevision?.ObjectId == head);
+                Click(form, form.DiffTabPage, MouseButton.Left);
+                FileStatusList files = form.revisionDiff.FileStatusList;
+                TreeView tree = files.FindControl<TreeView>("tvDiffFiles")!;
+                await WaitUntilAsync(() => files.GitItemStatuses.Count == 4 && tree.ItemCount == 2);
+                form.UpdateLayout();
+                Control target;
+                if (focusFiles)
+                {
+                    TreeViewItem group = (TreeViewItem)tree.ContainerFromIndex(0)!;
+                    TreeViewItem file = group.GetVisualDescendants().OfType<TreeViewItem>()
+                        .First(item => item.DataContext is FileStatusList.DiffTreeNode { Item: not null });
+                    target = file.GetVisualDescendants().OfType<Control>().First(control => control.Name == "PART_HeaderPresenter");
+                }
+                else
+                {
+                    target = (ListBoxItem)grid.GetTestAccessor().Revisions.ContainerFromIndex(0)!;
+                }
+
+                Click(form, target, MouseButton.Left);
+                Dispatcher.UIThread.RunJobs();
+                files.IsKeyboardFocusWithin.Should().Be(focusFiles);
+                grid.GetTestAccessor().Revisions.IsKeyboardFocusWithin.Should().Be(!focusFiles);
+                grid.GetSelectedRevisions().Should().ContainSingle().Which.ObjectId.Should().Be(head);
+
+                form.KeyPress(Key.A, RawInputModifiers.Control, PhysicalKey.A, keySymbol: "a");
+                form.KeyRelease(Key.A, RawInputModifiers.Control, PhysicalKey.A, keySymbol: "a");
+                Dispatcher.UIThread.RunJobs();
+
+                grid.GetSelectedRevisions().Should().ContainSingle().Which.ObjectId.Should().Be(head);
+                files.SelectedItems.Select(item => item.Item.Name).Should().BeEquivalentTo(["left-a.txt", "left-b.txt"]);
+                files.IsKeyboardFocusWithin.Should().BeTrue();
+
+                TextBox filter = files.GetTestAccessor().FilterComboBox.GetVisualDescendants().OfType<TextBox>().Single();
+                Click(form, filter, MouseButton.Left);
+                form.KeyTextInput("left");
+                filter.Text.Should().Be("left");
+                form.KeyPress(Key.A, RawInputModifiers.Control, PhysicalKey.A, keySymbol: "a");
+                form.KeyRelease(Key.A, RawInputModifiers.Control, PhysicalKey.A, keySymbol: "a");
+                filter.SelectedText.Should().Be("left", "Ctrl+A in a text field must remain a text selection");
+                filter.IsKeyboardFocusWithin.Should().BeTrue();
+                grid.GetSelectedRevisions().Should().ContainSingle().Which.ObjectId.Should().Be(head);
+            }
+            finally
+            {
+                form.Close();
+            }
+        }
+        finally
+        {
+            AppSettings.ShowDiffForAllParents = previousParents;
+            DiffListSortService.Instance.DiffListSorting = previousSort;
+            AppSettings.CommitInfoPosition = previousPosition;
+            AppSettings.ShowSplitViewLayout = previousSplitView;
+        }
+    }
+
+    [AvaloniaTest]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task FormBrowse_plain_R_should_open_the_real_reset_dialog_from_the_diff_file(bool treeMode)
+    {
+        DiffListSortType previousSort = DiffListSortService.Instance.DiffListSorting;
+        CommitInfoPosition previousPosition = AppSettings.CommitInfoPosition;
+        bool previousSplitView = AppSettings.ShowSplitViewLayout;
+        try
+        {
+            DiffListSortService.Instance.DiffListSorting = treeMode ? DiffListSortType.FilePath : DiffListSortType.FilePathFlat;
+            AppSettings.CommitInfoPosition = CommitInfoPosition.BelowList;
+            AppSettings.ShowSplitViewLayout = true;
+            GitModule module = CreateRepositoryWithInitialCommit();
+            File.WriteAllText(Path.Combine(_workingDirectory, "tracked.txt"), "second revision\n");
+            module.GitExecutable.RunCommand(new GitArgumentBuilder("commit") { "--quiet", "-am", "second" }).Should().BeTrue();
+            using FormBrowse form = new(new GitUICommands(_serviceContainer, module)) { Width = 1200, Height = 700 };
+            form.Show();
+            try
+            {
+                await WaitUntilAsync(() => form.RevisionGrid.SelectedRevision?.ObjectId == module.GetCurrentCheckout());
+                Click(form, form.DiffTabPage, MouseButton.Left);
+                FileStatusList files = form.revisionDiff.FileStatusList;
+                await WaitUntilAsync(() => files.SelectedItem?.Item.Name == "tracked.txt"
+                    && form.fileViewer.TextEditor.Text.Contains("+second revision", StringComparison.Ordinal));
+                form.UpdateLayout();
+                FileStatusList.TestAccessor accessor = files.GetTestAccessor();
+                Control target = (TreeViewItem)accessor.DiffTree.ContainerFromIndex(0)!;
+                target.IsEffectivelyVisible.Should().BeTrue();
+                Click(form, target, MouseButton.Left);
+                files.IsKeyboardFocusWithin.Should().BeTrue();
+
+                int openedCount = 0;
+                Exception? observationFailure = null;
+                using IDisposable subscription = Window.WindowOpenedEvent.AddClassHandler<FormResetChanges>((dialog, _) =>
+                {
+                    openedCount++;
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        try
+                        {
+                            Click(dialog, dialog.FindControl<Button>("btnCancel")!, MouseButton.Left);
+                        }
+                        catch (Exception exception)
+                        {
+                            observationFailure = exception;
+                            dialog.Close();
+                        }
+                    });
+                });
+
+                form.KeyPress(Key.R, RawInputModifiers.None, PhysicalKey.R, keySymbol: "r");
+                form.KeyRelease(Key.R, RawInputModifiers.None, PhysicalKey.R, keySymbol: "r");
+                Dispatcher.UIThread.RunJobs();
+
+                observationFailure.Should().BeNull();
+                openedCount.Should().Be(1, "the default BrowseDiff R shortcut must invoke the production reset confirmation");
+                File.ReadAllText(Path.Combine(_workingDirectory, "tracked.txt")).Should().Be("second revision\n",
+                    "the actual Cancel button must leave the working file unchanged");
+            }
+            finally
+            {
+                form.Close();
+            }
+        }
+        finally
+        {
+            DiffListSortService.Instance.DiffListSorting = previousSort;
+            AppSettings.CommitInfoPosition = previousPosition;
+            AppSettings.ShowSplitViewLayout = previousSplitView;
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task FormBrowse_default_artificial_commit_shortcut_should_use_the_live_staged_only_status()
+    {
+        bool previousArtificial = AppSettings.RevisionGraphShowArtificialCommits;
+        bool previousStatus = AppSettings.ShowGitStatusForArtificialCommits;
+        CommitInfoPosition previousPosition = AppSettings.CommitInfoPosition;
+        bool previousSplitView = AppSettings.ShowSplitViewLayout;
+        try
+        {
+            AppSettings.RevisionGraphShowArtificialCommits = true;
+            AppSettings.ShowGitStatusForArtificialCommits = true;
+            AppSettings.CommitInfoPosition = CommitInfoPosition.BelowList;
+            AppSettings.ShowSplitViewLayout = true;
+            GitModule module = CreateRepositoryWithInitialCommit();
+            File.WriteAllText(Path.Combine(_workingDirectory, "tracked.txt"), "staged-only\n");
+            module.GitExecutable.RunCommand(new GitArgumentBuilder("add") { "--", "tracked.txt" }).Should().BeTrue();
+            ObjectId head = module.GetCurrentCheckout();
+            using FormBrowse form = new(new GitUICommands(_serviceContainer, module)) { Width = 1200, Height = 700 };
+            form.Show();
+            try
+            {
+                RevisionGridControl grid = form.RevisionGrid;
+                ListBox revisions = grid.GetTestAccessor().Revisions;
+                await WaitUntilAsync(() => revisions.ItemCount == 3
+                    && grid.GetChangeCount(ObjectId.WorkTreeId) is { DataValid: true, HasChanges: false }
+                    && grid.GetChangeCount(ObjectId.IndexId) is { DataValid: true, HasChanges: true });
+                form.UpdateLayout();
+                ListBoxItem headRow = (ListBoxItem)revisions.ContainerFromIndex(2)!;
+                headRow.DataContext.Should().BeOfType<GitRevision>().Which.ObjectId.Should().Be(head);
+                Point point = headRow.TranslatePoint(new Point(100, headRow.Bounds.Height / 2), form)!.Value;
+                form.MouseMove(point, RawInputModifiers.None);
+                form.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+                form.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+                await WaitUntilAsync(() => grid.SelectedRevision?.ObjectId == head);
+
+                int toggled = 0;
+                grid.ToggledBetweenArtificialAndHeadCommits += (_, _) => toggled++;
+                ObjectId[] expected = [ObjectId.IndexId, head, ObjectId.IndexId, head];
+                foreach (ObjectId revision in expected)
+                {
+                    form.KeyPress(Key.OemBackslash, RawInputModifiers.Control, PhysicalKey.IntlBackslash, keySymbol: "<");
+                    form.KeyRelease(Key.OemBackslash, RawInputModifiers.Control, PhysicalKey.IntlBackslash, keySymbol: "<");
+                    await WaitUntilAsync(() => grid.SelectedRevision?.ObjectId == revision);
+                    form.CommitInfoTabControl.SelectedItem.Should().BeSameAs(form.DiffTabPage);
+                    await WaitUntilAsync(() => form.revisionDiff.FileStatusList.IsKeyboardFocusWithin);
+                    form.revisionDiff.FileStatusList.IsKeyboardFocusWithin.Should().BeTrue("the source toggle moves focus to the file list, where the next shortcut must still work");
+                    grid.GetChangeCount(ObjectId.WorkTreeId)!.HasChanges.Should().BeFalse();
+                    grid.GetChangeCount(ObjectId.IndexId)!.HasChanges.Should().BeTrue();
+                }
+
+                toggled.Should().Be(expected.Length);
+            }
+            finally
+            {
+                form.Close();
+            }
+        }
+        finally
+        {
+            AppSettings.RevisionGraphShowArtificialCommits = previousArtificial;
+            AppSettings.ShowGitStatusForArtificialCommits = previousStatus;
+            AppSettings.CommitInfoPosition = previousPosition;
+            AppSettings.ShowSplitViewLayout = previousSplitView;
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task FormBrowse_diff_groups_should_select_their_files_and_support_arrow_navigation()
+    {
+        bool previousParents = AppSettings.ShowDiffForAllParents;
+        DiffListSortType previousSort = DiffListSortService.Instance.DiffListSorting;
+        CommitInfoPosition previousPosition = AppSettings.CommitInfoPosition;
+        bool previousSplitView = AppSettings.ShowSplitViewLayout;
+        try
+        {
+            AppSettings.ShowDiffForAllParents = true;
+            DiffListSortService.Instance.DiffListSorting = DiffListSortType.FilePathFlat;
+            AppSettings.CommitInfoPosition = CommitInfoPosition.BelowList;
+            AppSettings.ShowSplitViewLayout = true;
+            GitModule module = CreateRepositoryWithMerge();
+            using FormBrowse form = new(new GitUICommands(_serviceContainer, module)) { Width = 1200, Height = 700 };
+            form.Show();
+            try
+            {
+                await WaitUntilAsync(() => form.RevisionGrid.SelectedRevision?.ObjectId == module.GetCurrentCheckout());
+                Click(form, form.DiffTabPage, MouseButton.Left);
+                FileStatusList files = form.revisionDiff.FileStatusList;
+                TreeView tree = files.FindControl<TreeView>("tvDiffFiles")!;
+                await WaitUntilAsync(() => files.GitItemStatuses.Count == 4 && tree.ItemCount == 2);
+                for (int groupIndex = 0; groupIndex < 2; groupIndex++)
+                {
+                    form.UpdateLayout();
+                    TreeViewItem group = (TreeViewItem)tree.ContainerFromIndex(groupIndex)!;
+                    Control header = group.GetVisualDescendants().OfType<Control>()
+                        .First(control => control.Name == "PART_HeaderPresenter"
+                            && ReferenceEquals(control.GetVisualAncestors().OfType<TreeViewItem>().FirstOrDefault(), group));
+                    Click(form, header, MouseButton.Left);
+                    Dispatcher.UIThread.RunJobs();
+                    tree.SelectedItem.Should().BeSameAs(tree.Items[groupIndex]);
+                    group.IsKeyboardFocusWithin.Should().BeTrue();
+                    Control? focused = form.FocusManager!.GetFocusedElement() as Control;
+                    TreeViewItem? focusedItem = focused as TreeViewItem
+                        ?? focused?.GetVisualAncestors().OfType<TreeViewItem>().FirstOrDefault();
+                    focusedItem.Should().BeSameAs(group, "the focused header must belong to this group rather than a child file");
+                    string prefix = groupIndex == 0 ? "left" : "right";
+                    files.SelectedItems.Select(item => item.Item.Name).Should().BeEquivalentTo([$"{prefix}-a.txt", $"{prefix}-b.txt"]);
+                    files.SelectedItem.Should().BeNull("a source group has descendants but is not itself a file");
+                    files.HasSelection.Should().BeTrue();
+                    files.SelectedFolder.Should().Be(RelativePath.From(string.Empty));
+                    await WaitUntilAsync(() => form.fileViewer.TextEditor.Text.Contains("(2) /", StringComparison.Ordinal)
+                        && form.fileViewer.TextEditor.Text.Contains($"{prefix}-a.txt", StringComparison.Ordinal)
+                        && form.fileViewer.TextEditor.Text.Contains($"{prefix}-b.txt", StringComparison.Ordinal));
+
+                    form.KeyPress(Key.Down, RawInputModifiers.None, PhysicalKey.ArrowDown, keySymbol: null);
+                    form.KeyRelease(Key.Down, RawInputModifiers.None, PhysicalKey.ArrowDown, keySymbol: null);
+                    await WaitUntilAsync(() => files.SelectedItem is not null);
+                    files.SelectedItems.Should().ContainSingle().Which.Item.Name.Should().Be($"{prefix}-a.txt");
+                    files.SelectedFolder.Should().BeNull("a file leaf is not a folder summary");
+
+                    form.KeyPress(Key.Up, RawInputModifiers.None, PhysicalKey.ArrowUp, keySymbol: null);
+                    form.KeyRelease(Key.Up, RawInputModifiers.None, PhysicalKey.ArrowUp, keySymbol: null);
+                    Dispatcher.UIThread.RunJobs();
+                    tree.SelectedItem.Should().BeSameAs(tree.Items[groupIndex]);
+                    files.SelectedItems.Select(item => item.Item.Name).Should().BeEquivalentTo([$"{prefix}-a.txt", $"{prefix}-b.txt"]);
+                }
+
+                Click(form, form.TreeTabPage, MouseButton.Left);
+                Click(form, form.DiffTabPage, MouseButton.Left);
+                Dispatcher.UIThread.RunJobs();
+                tree.SelectedItem.Should().BeSameAs(tree.Items[1], "returning to Diff must retain its selected group");
+                files.HasSelection.Should().BeTrue();
+
+                TreeViewItem firstGroup = (TreeViewItem)tree.ContainerFromIndex(0)!;
+                Control firstHeader = firstGroup.GetVisualDescendants().OfType<Control>()
+                    .First(control => control.Name == "PART_HeaderPresenter"
+                        && ReferenceEquals(control.GetVisualAncestors().OfType<TreeViewItem>().FirstOrDefault(), firstGroup));
+                Point point = firstHeader.TranslatePoint(new Point(firstHeader.Bounds.Width / 2, firstHeader.Bounds.Height / 2), form)!.Value;
+                form.MouseMove(point, RawInputModifiers.Control);
+                form.MouseDown(point, MouseButton.Left, RawInputModifiers.Control);
+                form.MouseUp(point, MouseButton.Left, RawInputModifiers.Control);
+                (tree.SelectedItems?.Count ?? 0).Should().Be(2);
+                files.HasSelection.Should().BeTrue("logical group selections remain selections even without directly selected file leaves");
+                files.SelectedFolder.Should().BeNull("the original summarizes a folder only when one node is selected");
+                files.SelectedItems.Should().BeEmpty("multiple group tags are not direct file tags in the original");
+            }
+            finally
+            {
+                form.Close();
+            }
+        }
+        finally
+        {
+            AppSettings.ShowDiffForAllParents = previousParents;
+            DiffListSortService.Instance.DiffListSorting = previousSort;
+            AppSettings.CommitInfoPosition = previousPosition;
+            AppSettings.ShowSplitViewLayout = previousSplitView;
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task FormBrowse_revision_arrow_navigation_should_keep_focus_while_the_diff_loads()
+    {
+        CommitInfoPosition previousPosition = AppSettings.CommitInfoPosition;
+        bool previousSplitView = AppSettings.ShowSplitViewLayout;
+        try
+        {
+            AppSettings.CommitInfoPosition = CommitInfoPosition.BelowList;
+            AppSettings.ShowSplitViewLayout = true;
+            GitModule module = CreateRepositoryWithInitialCommit();
+            for (int index = 1; index <= 2; index++)
+            {
+                File.WriteAllText(Path.Combine(_workingDirectory, "tracked.txt"), $"revision-{index}\n");
+                module.GitExecutable.RunCommand(new GitArgumentBuilder("commit") { "--quiet", "-am", $"revision-{index}" }).Should().BeTrue();
+            }
+
+            using FormBrowse form = new(new GitUICommands(_serviceContainer, module)) { Width = 1200, Height = 700 };
+            form.Show();
+            try
+            {
+                RevisionGridControl grid = form.RevisionGrid;
+                ListBox revisions = grid.GetTestAccessor().Revisions;
+                await WaitUntilAsync(() => revisions.ItemCount == 3);
+                Click(form, form.TreeTabPage, MouseButton.Left);
+                Click(form, form.DiffTabPage, MouseButton.Left);
+                await WaitUntilAsync(() => form.fileViewer.TextEditor.Text.Contains("+revision-2", StringComparison.Ordinal));
+                form.revisionDiff.FileStatusList.IsKeyboardFocusWithin.Should().BeTrue("a real Diff tab change should focus its file list");
+                form.UpdateLayout();
+                ListBoxItem row = (ListBoxItem)revisions.ContainerFromIndex(1)!;
+                Point point = row.TranslatePoint(new Point(100, row.Bounds.Height / 2), form)!.Value;
+                form.MouseMove(point, RawInputModifiers.None);
+                form.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+                form.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+                await AssertDiffAndFocusAsync(1);
+
+                foreach ((Key key, PhysicalKey physicalKey, int index) in new[]
+                {
+                    (Key.Up, PhysicalKey.ArrowUp, 0),
+                    (Key.Down, PhysicalKey.ArrowDown, 1),
+                    (Key.Down, PhysicalKey.ArrowDown, 2),
+                    (Key.Up, PhysicalKey.ArrowUp, 1),
+                })
+                {
+                    form.KeyPress(key, RawInputModifiers.None, physicalKey, keySymbol: null);
+                    form.KeyRelease(key, RawInputModifiers.None, physicalKey, keySymbol: null);
+                    await AssertDiffAndFocusAsync(index);
+                }
+
+                return;
+
+                async Task AssertDiffAndFocusAsync(int index)
+                {
+                    GitRevision expected = (GitRevision)revisions.Items[index]!;
+                    string text = index == 2 ? "content" : $"revision-{2 - index}";
+                    await WaitUntilAsync(() => grid.SelectedRevision?.ObjectId == expected.ObjectId
+                        && form.revisionDiff.FileStatusList.SelectedItem?.SecondRevision.ObjectId == expected.ObjectId
+                        && (index == 2
+                            ? form.fileViewer.TextEditor.Text == text
+                            : form.fileViewer.TextEditor.Text.Contains("+" + text, StringComparison.Ordinal)));
+                    revisions.IsKeyboardFocusWithin.Should().BeTrue("loading a diff must not move focus away from revision navigation");
+                    form.revisionDiff.FileStatusList.IsKeyboardFocusWithin.Should().BeFalse();
+                }
+            }
+            finally
+            {
+                form.Close();
+            }
+        }
+        finally
+        {
+            AppSettings.CommitInfoPosition = previousPosition;
+            AppSettings.ShowSplitViewLayout = previousSplitView;
+        }
+    }
+
+    [AvaloniaTest]
+    [TestCase(2)]
+    [TestCase(3)]
+    public async Task FormBrowse_control_click_revisions_should_display_the_actual_endpoint_diff(int selectedCount)
+    {
+        CommitInfoPosition previousPosition = AppSettings.CommitInfoPosition;
+        bool previousSplitView = AppSettings.ShowSplitViewLayout;
+        try
+        {
+            AppSettings.CommitInfoPosition = CommitInfoPosition.BelowList;
+            AppSettings.ShowSplitViewLayout = true;
+            GitModule module = CreateRepositoryWithInitialCommit();
+            ObjectId oldest = module.GetCurrentCheckout();
+            for (int index = 1; index <= 2; index++)
+            {
+                File.WriteAllText(Path.Combine(_workingDirectory, "tracked.txt"), $"revision-{index}\n");
+                module.GitExecutable.RunCommand(new GitArgumentBuilder("commit") { "--quiet", "-am", $"revision-{index}" }).Should().BeTrue();
+            }
+
+            ObjectId newest = module.GetCurrentCheckout();
+            using FormBrowse form = new(new GitUICommands(_serviceContainer, module)) { Width = 1200, Height = 700 };
+            form.Show();
+            try
+            {
+                RevisionGridControl grid = form.RevisionGrid;
+                await WaitUntilAsync(() => grid.GetTestAccessor().Revisions.ItemCount == 3);
+                Click(form, form.DiffTabPage, MouseButton.Left);
+                await WaitUntilAsync(() => form.revisionDiff.FileStatusList.SelectedItem?.SecondRevision.ObjectId == newest
+                    && form.fileViewer.TextEditor.Text.Contains("+revision-2", StringComparison.Ordinal));
+
+                ClickRow(2, RawInputModifiers.None);
+                if (selectedCount == 3)
+                {
+                    ClickRow(1, RawInputModifiers.Control);
+                }
+
+                ClickRow(0, RawInputModifiers.Control);
+                IReadOnlyList<GitRevision> selected = grid.GetSelectedRevisions();
+                selected.Should().HaveCount(selectedCount);
+                selected[0].ObjectId.Should().Be(newest);
+                selected[^1].ObjectId.Should().Be(oldest);
+                await WaitUntilAsync(() => form.revisionDiff.FileStatusList.SelectedItem?.FirstRevision?.ObjectId == oldest
+                    && form.revisionDiff.FileStatusList.SelectedItem?.SecondRevision.ObjectId == newest
+                    && form.fileViewer.TextEditor.Text.Contains("-content", StringComparison.Ordinal)
+                    && form.fileViewer.TextEditor.Text.Contains("+revision-2", StringComparison.Ordinal));
+
+                IReadOnlyList<FileStatusWithDescription> groups = (IReadOnlyList<FileStatusWithDescription>)typeof(FileStatusList)
+                    .GetProperty("GitItemStatusesWithDescription", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(form.revisionDiff.FileStatusList)!;
+                ObjectId[] expectedBases = selectedCount == 3 ? [oldest, module.RevParse("HEAD~1")] : [oldest];
+                groups.Select(group => group.FirstRev!.ObjectId).Should().Equal(expectedBases);
+                groups.Select(group => group.SecondRev.ObjectId).Should().OnlyContain(revision => revision == newest);
+                form.revisionDiff.FileStatusList.GitItemStatuses.Should().HaveCount(selectedCount - 1)
+                    .And.OnlyContain(item => item.Name == "tracked.txt");
+                form.revisionDiff.FileStatusList.FirstGroupItems.Should().ContainSingle().Which.FirstRevision!.ObjectId.Should().Be(oldest);
+                form.fileViewer.TextEditor.Text.Should().NotContain("-revision-1");
+
+                void ClickRow(int index, RawInputModifiers modifiers)
+                {
+                    form.UpdateLayout();
+                    ListBoxItem row = (ListBoxItem)grid.GetTestAccessor().Revisions.ContainerFromIndex(index)!;
+                    Point point = row.TranslatePoint(new Point(100, row.Bounds.Height / 2), form)!.Value;
+                    form.MouseMove(point, modifiers);
+                    form.MouseDown(point, MouseButton.Left, modifiers);
+                    form.MouseUp(point, MouseButton.Left, modifiers);
+                    Dispatcher.UIThread.RunJobs();
+                }
+            }
+            finally
+            {
+                form.Close();
+            }
+        }
+        finally
+        {
+            AppSettings.CommitInfoPosition = previousPosition;
+            AppSettings.ShowSplitViewLayout = previousSplitView;
+        }
+    }
+
+    [AvaloniaTest]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task FormBrowse_F5_should_reload_the_actual_graph_and_preserve_the_pointer_selection(bool multiple)
+    {
+        GitModule module = CreateRepositoryWithInitialCommit();
+        for (int index = 0; index < 2; index++)
+        {
+            File.AppendAllText(Path.Combine(_workingDirectory, "tracked.txt"), $"\nrevision {index}");
+            module.GitExecutable.RunCommand(new GitArgumentBuilder("commit") { "--quiet", "-am", $"revision-{index}" }).Should().BeTrue();
+        }
+
+        GitUICommands commands = new(_serviceContainer, module);
+        using FormBrowse form = new(commands) { Width = 1200, Height = 700 };
+        RevisionGridControl grid = form.RevisionGrid;
+        RevisionGraph graph = (RevisionGraph)typeof(RevisionGridControl).GetField("_revisionGraph", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(grid)!;
+        int loaded = 0;
+        int notified = 0;
+        grid.RevisionsLoaded += (_, _) => loaded++;
+        commands.PostRepositoryChanged += (_, _) => notified++;
+        form.Show();
+        try
+        {
+            await WaitUntilAsync(() => loaded > 0 && grid.GetTestAccessor().Revisions.ItemCount == 3 && graph.GetCachedCount() == 3);
+            ClickRow(2, RawInputModifiers.None);
+            if (multiple)
+            {
+                ClickRow(0, RawInputModifiers.Control);
+            }
+
+            ObjectId[] selected = [.. grid.GetSelectedRevisions().Select(revision => revision.ObjectId)];
+            selected.Should().HaveCount(multiple ? 2 : 1);
+            SaveGraphFrame("initial");
+            for (int refresh = 0; refresh < 2; refresh++)
+            {
+                int previousLoaded = loaded;
+                int previousNotified = notified;
+
+                form.KeyPress(Key.F5, RawInputModifiers.None, PhysicalKey.F5, keySymbol: null);
+                form.KeyRelease(Key.F5, RawInputModifiers.None, PhysicalKey.F5, keySymbol: null);
+                Dispatcher.UIThread.RunJobs();
+
+                notified.Should().Be(previousNotified + 1, "the original F5 shortcut broadcasts a repository refresh");
+                await WaitUntilAsync(() => loaded > previousLoaded && graph.GetCachedCount() == 3);
+                grid.GetSelectedRevisions().Select(revision => revision.ObjectId).Should().Equal(selected);
+                SaveGraphFrame($"refresh-{refresh}");
+            }
+        }
+        finally
+        {
+            form.Close();
+        }
+
+        void ClickRow(int index, RawInputModifiers modifiers)
+        {
+            form.UpdateLayout();
+            ListBoxItem row = (ListBoxItem)grid.GetTestAccessor().Revisions.ContainerFromIndex(index)!;
+            Point point = row.TranslatePoint(new Point(100, row.Bounds.Height / 2), form)!.Value;
+            form.MouseMove(point, modifiers);
+            form.MouseDown(point, MouseButton.Left, modifiers);
+            form.MouseUp(point, MouseButton.Left, modifiers);
+            Dispatcher.UIThread.RunJobs();
+        }
+
+        void SaveGraphFrame(string state)
+        {
+            form.UpdateLayout();
+            Control[] cells = [.. grid.GetVisualDescendants().OfType<Control>().Where(control => control.Classes.Contains("revision-graph-cell") && control.IsEffectivelyVisible)];
+            cells.Should().HaveCount(3);
+            cells.Should().OnlyContain(cell => cell.Bounds.Width > 0 && cell.Bounds.Height > 0);
+            graph.Count.Should().Be(3);
+            graph.GetCachedCount().Should().Be(3);
+            using WriteableBitmap? frame = form.CaptureRenderedFrame();
+            frame.Should().NotBeNull();
+            string directory = Path.Combine(TestContext.CurrentContext.WorkDirectory, "TestResults", "Browse-refresh", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            string path = Path.Combine(directory, $"Browse-F5-{multiple}-{state}.png");
+            frame!.Save(path, PngBitmapEncoderOptions.Default);
+            TestContext.AddTestAttachment(path, $"Browse graph after {state}");
+        }
+    }
+
+    [AvaloniaTest]
+    public void FormBrowse_F5_should_refresh_the_dashboard_without_notifying_a_repository()
+    {
+        GitUICommands commands = new(_serviceContainer, new GitModule(_serviceContainer.GetRequiredService<IGitExecutorProvider>(), _workingDirectory));
+        using FormBrowse form = new(commands);
+        int clicked = 0;
+        int notified = 0;
+        form.refreshDashboardToolStripMenuItem.Click += (_, e) =>
+        {
+            if (ReferenceEquals(e.Source, form.refreshDashboardToolStripMenuItem))
+            {
+                clicked++;
+            }
+        };
+        commands.PostRepositoryChanged += (_, _) => notified++;
+        form.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            form.KeyPress(Key.F5, RawInputModifiers.None, PhysicalKey.F5, keySymbol: null);
+            form.KeyRelease(Key.F5, RawInputModifiers.None, PhysicalKey.F5, keySymbol: null);
+            Dispatcher.UIThread.RunJobs();
+
+            clicked.Should().Be(1);
+            notified.Should().Be(0);
+        }
+        finally
+        {
+            form.Close();
+        }
     }
 
     [AvaloniaTest]
@@ -1578,12 +2433,12 @@ public sealed class FormBrowseTests
             RepoObjectsTree.TestAccessor accessor = repoObjectsTree.GetTestAccessor();
             RevisionGridControl revisionGrid = form.FindControl<RevisionGridControl>("RevisionGrid")!;
 
-            await WaitUntilAsync(() => accessor.Tree.Items.Count == 6);
-            TreeViewItem stashRoot = accessor.Tree.Items.Cast<TreeViewItem>().Last();
+            await WaitUntilAsync(() => accessor.TreeView.Items.Count == 6);
+            TreeViewItem stashRoot = accessor.TreeView.Items.Cast<TreeViewItem>().Last();
             await WaitUntilAsync(() => stashRoot.Items.Count == 2);
             TreeViewItem stashItem = stashRoot.Items.Cast<TreeViewItem>().Last();
 
-            accessor.Tree.SelectedItem = stashItem;
+            accessor.TreeView.SelectedItem = stashItem;
 
             await WaitUntilAsync(() => revisionGrid.SelectedRevision?.ObjectId == olderStash.ObjectId);
             repoObjectsTree.SelectedRevisionObjectId.Should().Be(olderStash.ObjectId);
@@ -1679,11 +2534,11 @@ public sealed class FormBrowseTests
             RepoObjectsTree.TestAccessor accessor = repoObjectsTree.GetTestAccessor();
             IconSplitButton worktreeButton = form.FindControl<IconSplitButton>("toolStripWorktrees")!;
 
-            await WaitUntilAsync(() => accessor.Tree.Items.OfType<TreeViewItem>()
+            await WaitUntilAsync(() => accessor.TreeView.Items.OfType<TreeViewItem>()
                 .Any(item => HeaderText(item).StartsWith("Worktrees", StringComparison.Ordinal) && item.Items.Count == 2));
             worktreeButton.IsVisible.Should().BeTrue();
 
-            TreeViewItem root = accessor.Tree.Items.Cast<TreeViewItem>()
+            TreeViewItem root = accessor.TreeView.Items.Cast<TreeViewItem>()
                 .Single(item => HeaderText(item).StartsWith("Worktrees", StringComparison.Ordinal));
             HeaderText(root).Should().Be("Worktrees");
             root.Items.Cast<TreeViewItem>().Should().HaveCount(2);
@@ -1753,7 +2608,7 @@ public sealed class FormBrowseTests
             new SubmoduleStatusEventArgs(result, structureUpdated: true, CancellationToken.None));
         Dispatcher.UIThread.RunJobs();
 
-        SubmoduleTree submoduleTree = form.repoObjectsTree.GetTestAccessor().Tree.Items
+        SubmoduleTree submoduleTree = form.repoObjectsTree.GetTestAccessor().TreeView.Items
             .Cast<TreeViewItem>()
             .Select(item => item.Tag)
             .OfType<SubmoduleTree>()
@@ -2299,6 +3154,7 @@ public sealed class FormBrowseTests
         IGitModule module = Substitute.For<IGitModule>();
         module.WorkingDir.Returns(_workingDirectory);
         module.IsValidGitWorkingDir().Returns(true);
+        GitModuleTestStub.ConfigureEmptyRepositoryReads(module);
         ILockableNotifier notifier = Substitute.For<ILockableNotifier>();
         IGitUICommands commands = Substitute.For<IGitUICommands>();
         commands.Module.Returns(module);
@@ -2840,6 +3696,101 @@ public sealed class FormBrowseTests
     }
 
     [AvaloniaTest]
+    public async Task FormBrowse_diff_should_render_the_original_default_git_background_colors()
+    {
+        const string Before = "public string value = \"before-value\";\n";
+        const string After = "public string value = \"after-value\";\n";
+        CommitInfoPosition previousPosition = AppSettings.CommitInfoPosition;
+        bool previousSplitView = AppSettings.ShowSplitViewLayout;
+        try
+        {
+            AppSettings.UseGitColoring.Value.Should().BeTrue("the original appearance settings enable Git coloring by default");
+            AppSettings.ReverseGitColoring.Value.Should().BeTrue("the original defaults request themed background colors");
+            AppSettings.CommitInfoPosition = CommitInfoPosition.BelowList;
+            AppSettings.ShowSplitViewLayout = true;
+            GitModule module = CreateRepositoryWithInitialCommit();
+            module.SetSetting("color.diff.old", string.Empty);
+            module.SetSetting("color.diff.new", string.Empty);
+            File.WriteAllText(Path.Combine(_workingDirectory, "tracked.txt"), Before);
+            module.GitExecutable.RunCommand(new GitArgumentBuilder("commit") { "--quiet", "-am", "baseline-line" }).Should().BeTrue();
+            File.WriteAllText(Path.Combine(_workingDirectory, "tracked.txt"), After);
+            module.GitExecutable.RunCommand(new GitArgumentBuilder("commit") { "--quiet", "-am", "replace-content" }).Should().BeTrue();
+            ObjectId head = module.GetCurrentCheckout();
+            using FormBrowse form = new(new GitUICommands(_serviceContainer, module)) { Width = 1200, Height = 800 };
+            form.Show();
+            try
+            {
+                await WaitUntilAsync(() => form.RevisionGrid.SelectedRevision?.ObjectId == head);
+                Click(form, form.DiffTabPage, MouseButton.Left);
+                GitUI.Editor.FileViewer viewer = form.revisionDiff.FileViewer;
+                await WaitUntilAsync(() => form.fileStatusList.SelectedItem?.Item.Name == "tracked.txt"
+                    && viewer.TextEditor.Text.Contains("+" + After.TrimEnd('\n'), StringComparison.Ordinal));
+                GitUI.Editor.FileViewerInternal native = viewer.FindControl<GitUI.Editor.FileViewerInternal>("internalFileViewer")
+                    ?? throw new InvalidOperationException("The production internal diff viewer was not created.");
+                GitUI.Editor.Diff.DiffHighlightService service = native.DiffHighlightService
+                    ?? throw new InvalidOperationException("The production diff did not create its highlight service.");
+                service.Should().BeOfType<GitUI.Editor.Diff.PatchHighlightService>();
+                service.UseGitColoring.Should().BeTrue();
+                service.UseBackgroundColoring.Should().BeTrue();
+                System.Drawing.Color removed = GitExtUtils.GitUI.Theming.AppColor.AnsiTerminalRedBackNormal.GetThemeColor();
+                System.Drawing.Color added = GitExtUtils.GitUI.Theming.AppColor.AnsiTerminalGreenBackNormal.GetThemeColor();
+                int removedOffset = viewer.TextEditor.Text.IndexOf("-" + Before.TrimEnd('\n'), StringComparison.Ordinal) + 1;
+                int addedOffset = viewer.TextEditor.Text.IndexOf("+" + After.TrimEnd('\n'), StringComparison.Ordinal) + 1;
+                removedOffset.Should().BeGreaterThan(0);
+                addedOffset.Should().BeGreaterThan(0);
+                service.TextMarkers.Should().Contain(marker => marker.Offset <= removedOffset && marker.EndOffset > removedOffset
+                    && marker.BackColor.HasValue && marker.BackColor.Value.ToArgb() == removed.ToArgb());
+                service.TextMarkers.Should().Contain(marker => marker.Offset <= addedOffset && marker.EndOffset > addedOffset
+                    && marker.BackColor.HasValue && marker.BackColor.Value.ToArgb() == added.ToArgb());
+                service.InlineMarkers.Should().Contain(marker => marker.IsRemoved && marker.Length > 0);
+                service.InlineMarkers.Should().Contain(marker => !marker.IsRemoved && marker.Length > 0);
+                viewer.TextEditor.Text.Should().NotContain("\u001b");
+                form.UpdateLayout();
+                using WriteableBitmap frame = form.CaptureRenderedFrame()
+                    ?? throw new AssertionException("The real Browse diff must render headlessly.");
+                if (Environment.GetEnvironmentVariable("GITEXT_DIFF_EVIDENCE") is { Length: > 0 } evidence)
+                {
+                    Directory.CreateDirectory(evidence);
+                    frame.Save(Path.Combine(evidence, "browse-git-colors.png"), PngBitmapEncoderOptions.Default);
+                }
+
+                using MemoryStream encoded = new();
+                frame.Save(encoded, PngBitmapEncoderOptions.Default);
+                encoded.Position = 0;
+                using SKBitmap pixels = SKBitmap.Decode(encoded)
+                    ?? throw new AssertionException("The actual diff frame must decode.");
+                AvaloniaEdit.Rendering.TextView textView = viewer.TextEditor.TextArea.TextView;
+                Point origin = textView.TranslatePoint(default, form)
+                    ?? throw new InvalidOperationException("The diff viewport must belong to Browse.");
+                Rect viewport = new(origin, textView.Bounds.Size);
+                viewport.Width.Should().BeGreaterThan(0);
+                viewport.Height.Should().BeGreaterThan(0);
+                foreach ((int offset, System.Drawing.Color sourceColor) in new[] { (removedOffset, removed), (addedOffset, added) })
+                {
+                    int lineNumber = viewer.TextEditor.Document.GetLineByOffset(offset).LineNumber;
+                    AvaloniaEdit.Rendering.VisualLine line = textView.VisualLines.Single(line =>
+                        line.FirstDocumentLine.LineNumber <= lineNumber && line.LastDocumentLine.LineNumber >= lineNumber);
+                    Point blank = new(viewport.Right - 2, origin.Y + line.VisualTop - textView.ScrollOffset.Y + (line.Height / 2));
+                    blank.Y.Should().BeGreaterThanOrEqualTo(viewport.Top);
+                    blank.Y.Should().BeLessThan(viewport.Bottom);
+                    SKColor expected = new(sourceColor.R, sourceColor.G, sourceColor.B, sourceColor.A);
+                    SKColor actual = pixels.GetPixel((int)Math.Floor(blank.X * form.RenderScaling), (int)Math.Floor(blank.Y * form.RenderScaling));
+                    actual.Should().Be(expected, "the original fills the whole changed line, including blank space beyond the text");
+                }
+            }
+            finally
+            {
+                form.Close();
+            }
+        }
+        finally
+        {
+            AppSettings.CommitInfoPosition = previousPosition;
+            AppSettings.ShowSplitViewLayout = previousSplitView;
+        }
+    }
+
+    [AvaloniaTest]
     public async Task FormBrowse_commit_and_diff_tabs_should_follow_the_selected_revision()
     {
         CommitInfoPosition originalPosition = AppSettings.CommitInfoPosition;
@@ -3022,7 +3973,7 @@ public sealed class FormBrowseTests
             leftPanel.IsVisible.Should().BeTrue();
             leftToggle.Classes.Should().Contain("checked");
             RepoObjectsTree tree = form.FindControl<RepoObjectsTree>("repoObjectsTree")!;
-            await WaitUntilAsync(() => tree.GetTestAccessor().Tree.Items
+            await WaitUntilAsync(() => tree.GetTestAccessor().TreeView.Items
                 .Cast<TreeViewItem>()
                 .Where(item => HeaderText(item).StartsWith("Branches", StringComparison.Ordinal))
                 .SelectMany(item => item.Items.Cast<TreeViewItem>())
@@ -3781,6 +4732,228 @@ public sealed class FormBrowseTests
     }
 
     [AvaloniaTest]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task FormBrowse_revision_menu_underlines_should_survive_real_pointer_reopening(bool english)
+    {
+        using TranslationTestScope translationScope = new(english ? "English" : "");
+        GitModule module = CreateRepositoryWithInitialCommit();
+        ObjectId head = module.GetCurrentCheckout();
+        string branch = module.GetSelectedBranch();
+        using FormBrowse form = new(new GitUICommands(_serviceContainer, module)) { Width = 1200, Height = 700 };
+        ContextMenu? menu = null;
+        try
+        {
+            form.Show();
+            RevisionGridControl grid = form.RevisionGrid;
+            ListBox revisions = grid.GetTestAccessor().Revisions;
+            await WaitUntilAsync(() => grid.SelectedRevision is { } revision
+                && revision.ObjectId == head && revision.Refs.Any(gitRef => gitRef.Name == branch));
+            menu = grid.FindControl<ContextMenu>("mainContextMenu")!;
+            CopyContextMenuItem copy = grid.FindControl<CopyContextMenuItem>("copyToClipboardToolStripMenuItem")!;
+            Size doubleTapSize = form.GetPlatformSettings()?.GetDoubleTapSize(PointerType.Mouse)
+                ?? throw new InvalidOperationException("The platform must define pointer gesture bounds.");
+            for (int attempt = 1; attempt <= 2; attempt++)
+            {
+                form.UpdateLayout();
+                ListBoxItem row = (ListBoxItem)revisions.ContainerFromIndex(0)!;
+                Point point = row.TranslatePoint(new Point(
+                    (row.Bounds.Width / 2) + ((attempt - 1) * (doubleTapSize.Width + 1)), row.Bounds.Height / 2), form)!.Value;
+                form.MouseMove(point, RawInputModifiers.None);
+                form.MouseDown(point, MouseButton.Right, RawInputModifiers.None);
+                form.MouseUp(point, MouseButton.Right, RawInputModifiers.None);
+                await WaitUntilAsync(() => menu.IsOpen);
+                TopLevel contextPopup = TopLevel.GetTopLevel(menu)!;
+                AssertUnderlines(menu, contextPopup, $"{attempt}-context");
+                Point copyPoint = copy.TranslatePoint(new Point(copy.Bounds.Width / 2, copy.Bounds.Height / 2), contextPopup)!.Value;
+                contextPopup.MouseMove(copyPoint, RawInputModifiers.None);
+                await WaitUntilAsync(() => copy.IsSubMenuOpen && copy.Items.OfType<MenuItem>().Any(item => item.Header?.ToString()?.StartsWith("_1:", StringComparison.Ordinal) == true));
+                MenuItem first = copy.Items.OfType<MenuItem>().Single(item => item.Header?.ToString()?.StartsWith("_1:", StringComparison.Ordinal) == true);
+                AssertUnderlines(copy, TopLevel.GetTopLevel(first)!, $"{attempt}-copy");
+                for (int escape = 0; escape < 2 && menu.IsOpen; escape++)
+                {
+                    contextPopup.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, keySymbol: null);
+                    contextPopup.KeyRelease(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, keySymbol: null);
+                }
+
+                await WaitUntilAsync(() => !menu.IsOpen);
+            }
+        }
+        finally
+        {
+            menu?.Close();
+            form.Close();
+        }
+
+        return;
+
+        void AssertUnderlines(ItemsControl owner, TopLevel popup, string part)
+        {
+            using WriteableBitmap? frame = popup.CaptureRenderedFrame();
+            frame.Should().NotBeNull();
+            if (Environment.GetEnvironmentVariable("GITEXT_REF_MENU_EVIDENCE") is { Length: > 0 } evidence)
+            {
+                Directory.CreateDirectory(evidence);
+                frame!.Save(Path.Combine(evidence, $"underlines-{english}-{part}.png"), PngBitmapEncoderOptions.Default);
+            }
+
+            AccessText[] captions = owner.Items.OfType<MenuItem>()
+                .SelectMany(item => item.GetVisualDescendants().OfType<AccessText>()).Where(text => text.AccessKey != default).ToArray();
+            captions.Should().NotBeEmpty();
+            captions.Should().OnlyContain(text => text.ShowAccessKey, "the original keeps menu mnemonic underlines visible on every opening");
+        }
+    }
+
+    [AvaloniaTest]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task FormBrowse_revision_copy_mnemonics_should_remain_visible_and_execute_after_reopening(bool english)
+    {
+        using TranslationTestScope translationScope = new(english ? "English" : "");
+        FieldInfo clipboardField = typeof(WinFormsShims.ShimHost).GetField("_clipboard", BindingFlags.NonPublic | BindingFlags.Static)!;
+        object? previousClipboard = clipboardField.GetValue(null);
+        WinFormsShims.IClipboard clipboard = Substitute.For<WinFormsShims.IClipboard>();
+        GitModule module = CreateRepositoryWithInitialCommit();
+        ObjectId head = module.GetCurrentCheckout();
+        string branch = module.GetSelectedBranch();
+        using FormBrowse form = new(new GitUICommands(_serviceContainer, module)) { Width = 1200, Height = 700 };
+        ContextMenu? menu = null;
+        try
+        {
+            WinFormsShims.ShimHost.Clipboard = clipboard;
+            form.Show();
+            RevisionGridControl grid = form.RevisionGrid;
+            ListBox revisions = grid.GetTestAccessor().Revisions;
+            await WaitUntilAsync(() => grid.SelectedRevision is { } revision
+                && revision.ObjectId == head && revision.Refs.Any(gitRef => gitRef.Name == branch));
+            menu = grid.FindControl<ContextMenu>("mainContextMenu")
+                ?? throw new InvalidOperationException("The production revision menu was not created.");
+            CopyContextMenuItem copy = grid.FindControl<CopyContextMenuItem>("copyToClipboardToolStripMenuItem")
+                ?? throw new InvalidOperationException("The production Copy menu was not created.");
+            Size doubleTapSize = form.GetPlatformSettings()?.GetDoubleTapSize(PointerType.Mouse)
+                ?? throw new InvalidOperationException("The platform must define pointer gesture bounds.");
+            for (int attempt = 1; attempt <= 2; attempt++)
+            {
+                form.UpdateLayout();
+                ListBoxItem row = (ListBoxItem)revisions.ContainerFromIndex(0)!;
+                Point point = row.TranslatePoint(new Point(
+                    (row.Bounds.Width / 2) + ((attempt - 1) * (doubleTapSize.Width + 1)), row.Bounds.Height / 2), form)
+                    ?? throw new InvalidOperationException("The revision row must belong to Browse.");
+                form.MouseMove(point, RawInputModifiers.None);
+                form.MouseDown(point, MouseButton.Right, RawInputModifiers.None);
+                form.MouseUp(point, MouseButton.Right, RawInputModifiers.None);
+                await WaitUntilAsync(() => menu.IsOpen);
+                TopLevel contextPopup = TopLevel.GetTopLevel(menu)
+                    ?? throw new InvalidOperationException("The context menu must have a real popup root.");
+                using WriteableBitmap? contextFrame = contextPopup.CaptureRenderedFrame();
+                contextFrame.Should().NotBeNull();
+                if (Environment.GetEnvironmentVariable("GITEXT_REF_MENU_EVIDENCE") is { Length: > 0 } contextEvidence)
+                {
+                    Directory.CreateDirectory(contextEvidence);
+                    contextFrame!.Save(Path.Combine(contextEvidence, $"mnemonic-{english}-{attempt}-context.png"), PngBitmapEncoderOptions.Default);
+                }
+
+                AccessText copyCaption = copy.GetVisualDescendants().OfType<AccessText>().Single();
+                copyCaption.ShowAccessKey.Should().BeTrue("the original keeps context-menu mnemonics visible on every opening");
+                contextPopup.KeyPress(Key.C, RawInputModifiers.None, PhysicalKey.C, keySymbol: "c");
+                contextPopup.KeyTextInput("c");
+                contextPopup.KeyRelease(Key.C, RawInputModifiers.None, PhysicalKey.C, keySymbol: "c");
+                await WaitUntilAsync(() => copy.IsSubMenuOpen);
+                copy.IsSubMenuOpen.Should().BeTrue("the unique Copy mnemonic must open its submenu without Enter");
+                MenuItem first = copy.Items.OfType<MenuItem>().Single(item => item.Header?.ToString()?.StartsWith("_1:", StringComparison.Ordinal) == true);
+                TopLevel childPopup = TopLevel.GetTopLevel(first)
+                    ?? throw new InvalidOperationException("The Copy action must belong to its actual popup.");
+                using WriteableBitmap? childFrame = childPopup.CaptureRenderedFrame();
+                childFrame.Should().NotBeNull();
+                if (Environment.GetEnvironmentVariable("GITEXT_REF_MENU_EVIDENCE") is { Length: > 0 } childEvidence)
+                {
+                    Directory.CreateDirectory(childEvidence);
+                    childFrame!.Save(Path.Combine(childEvidence, $"mnemonic-{english}-{attempt}-copy.png"), PngBitmapEncoderOptions.Default);
+                }
+
+                first.GetVisualDescendants().OfType<AccessText>().Single().ShowAccessKey.Should().BeTrue();
+                childPopup.KeyPress(Key.D1, RawInputModifiers.None, PhysicalKey.Digit1, keySymbol: "1");
+                childPopup.KeyTextInput("1");
+                childPopup.KeyRelease(Key.D1, RawInputModifiers.None, PhysicalKey.Digit1, keySymbol: "1");
+                await WaitUntilAsync(() => !menu.IsOpen);
+                clipboard.Received(attempt).SetText(branch);
+                clipboard.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(WinFormsShims.IClipboard.SetText))
+                    .Should().Be(attempt, "one numeric mnemonic must copy once and dismiss the menu");
+                grid.GetSelectedRevisions().Should().ContainSingle().Which.ObjectId.Should().Be(head);
+            }
+        }
+        finally
+        {
+            menu?.Close();
+            form.Close();
+            clipboardField.SetValue(null, previousClipboard);
+        }
+    }
+
+    [AvaloniaTest]
+    [TestCase(Key.Apps, RawInputModifiers.None)]
+    [TestCase(Key.F10, RawInputModifiers.Shift)]
+    public async Task FormBrowse_context_menu_keys_should_open_the_real_revision_menu(Key key, RawInputModifiers modifiers)
+    {
+        GitModule module = CreateRepositoryWithInitialCommit();
+        ObjectId head = module.GetCurrentCheckout();
+        using FormBrowse form = new(new GitUICommands(_serviceContainer, module)) { Width = 1200, Height = 700 };
+        ContextMenu? menu = null;
+        form.Show();
+        try
+        {
+            RevisionGridControl grid = form.RevisionGrid;
+            ListBox revisions = grid.GetTestAccessor().Revisions;
+            await WaitUntilAsync(() => revisions.ItemCount == 1 && grid.SelectedRevision?.ObjectId == head);
+            menu = grid.FindControl<ContextMenu>("mainContextMenu")
+                ?? throw new InvalidOperationException("The production revision menu was not created.");
+            int doubleClickCount = 0;
+            grid.DoubleClickRevision += (_, _) => doubleClickCount++;
+            int openingCount = 0;
+            menu.Opening += (_, _) => openingCount++;
+            PhysicalKey physicalKey = key == Key.Apps ? PhysicalKey.ContextMenu : PhysicalKey.F10;
+            Size doubleTapSize = form.GetPlatformSettings()?.GetDoubleTapSize(PointerType.Mouse)
+                ?? throw new InvalidOperationException("The platform must define pointer gesture bounds.");
+            for (int attempt = 1; attempt <= 2; attempt++)
+            {
+                form.UpdateLayout();
+                ListBoxItem row = (ListBoxItem)revisions.ContainerFromIndex(0)!;
+                Point point = row.TranslatePoint(new Point(
+                    (row.Bounds.Width / 2) + ((attempt - 1) * (doubleTapSize.Width + 1)), row.Bounds.Height / 2), form)
+                    ?? throw new InvalidOperationException("The revision row must belong to Browse.");
+                form.MouseMove(point, RawInputModifiers.None);
+                form.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+                form.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+                doubleClickCount.Should().Be(0, "each row input must be a single click, not the Commit Diff command");
+                revisions.IsKeyboardFocusWithin.Should().BeTrue($"a single row click must focus the grid (attempt {attempt}, double clicks {doubleClickCount})");
+
+                form.KeyPress(key, modifiers, physicalKey, keySymbol: null);
+                form.KeyRelease(key, modifiers, physicalKey, keySymbol: null);
+                await WaitUntilAsync(() => menu.IsOpen);
+                Dispatcher.UIThread.RunJobs();
+
+                menu.IsOpen.Should().BeTrue("the matching key release must not dismiss the context menu");
+                openingCount.Should().Be(attempt, "one real key gesture must raise Opening exactly once");
+                grid.GetSelectedRevisions().Should().ContainSingle().Which.ObjectId.Should().Be(head);
+                menu.Items.OfType<CopyContextMenuItem>().Should().ContainSingle().Which.IsEffectivelyEnabled.Should().BeTrue();
+                TopLevel popup = TopLevel.GetTopLevel(menu)
+                    ?? throw new InvalidOperationException("The real context menu must have a popup root.");
+                using WriteableBitmap? frame = popup.CaptureRenderedFrame();
+                frame.Should().NotBeNull("the menu must actually render, not just set IsOpen");
+                popup.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, keySymbol: null);
+                form.KeyRelease(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, keySymbol: null);
+                await WaitUntilAsync(() => !menu.IsOpen);
+                Dispatcher.UIThread.RunJobs();
+            }
+        }
+        finally
+        {
+            menu?.Close();
+            form.Close();
+        }
+    }
+
+    [AvaloniaTest]
     [Category("P8.6h.3b.2b.2b.2b.4")]
     public async Task RevisionGrid_context_menu_should_route_the_selected_revision()
     {
@@ -4270,6 +5443,67 @@ public sealed class FormBrowseTests
         {
             form?.Close();
             AppSettings.RevisionGraphShowArtificialCommits = previousShowArtificial;
+        }
+    }
+
+    [AvaloniaTest]
+    [TestCase(false, false)]
+    [TestCase(false, true)]
+    [TestCase(true, false)]
+    [TestCase(true, true)]
+    public async Task FormBrowse_Copy_paths_should_resolve_commands_through_the_owning_pane(bool fileTree, bool fullPath)
+    {
+        FieldInfo clipboardField = typeof(WinFormsShims.ShimHost).GetField("_clipboard", BindingFlags.NonPublic | BindingFlags.Static)!;
+        object? previousClipboard = clipboardField.GetValue(null);
+        WinFormsShims.IClipboard clipboard = Substitute.For<WinFormsShims.IClipboard>();
+        WinFormsShims.ShimHost.Clipboard = clipboard;
+        GitModule module = CreateRepositoryWithInitialCommit();
+        using FormBrowse form = new(new GitUICommands(_serviceContainer, module)) { Width = 1400, Height = 850 };
+        FileStatusList files = fileTree ? form.fileTree.FileStatusList : form.revisionDiff.FileStatusList;
+        ContextMenu menu = files.GetTestAccessor().ContextMenu;
+        try
+        {
+            form.Show();
+            form.CommitInfoTabControl.SelectedItem = fileTree ? form.TreeTabPage : form.DiffTabPage;
+            await form.JoinLoadOperationsForTestAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            await WaitUntilAsync(() => files.SelectedItem?.Item.Name == "tracked.txt");
+            menu.Open(files);
+            Dispatcher.UIThread.RunJobs();
+            CopyPathsToolStripMenuItem copy = (CopyPathsToolStripMenuItem)files.GetTestAccessor().CopyPathsMenuItem;
+            copy.IsEnabled.Should().BeTrue();
+            copy.IsSubMenuOpen = true;
+            Dispatcher.UIThread.RunJobs();
+            MenuItem action = fullPath ? copy.GetTestAccessor().FullNativeMenuItem : copy.GetTestAccessor().RelativeNativeMenuItem;
+            TopLevel popup = TopLevel.GetTopLevel(action) ?? throw new AssertionException("The copy action must be in its open popup.");
+            Click(popup, action, MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+            clipboard.Received(1).SetText(fullPath ? Path.Combine(module.WorkingDir, "tracked.txt") : "tracked.txt");
+            clipboard.ReceivedCalls().Should().HaveCount(1);
+        }
+        finally
+        {
+            menu.Close();
+            form.Close();
+            clipboardField.SetValue(null, previousClipboard);
+        }
+    }
+
+    private GitModule CreateRepositoryWithMerge()
+    {
+        GitModule module = CreateRepositoryWithInitialCommit();
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("checkout") { "--quiet", "-b", "issue-merge-left" }).Should().BeTrue();
+        CommitFiles("left");
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("checkout") { "--quiet", "-b", "issue-merge-right", "HEAD~1" }).Should().BeTrue();
+        CommitFiles("right");
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("merge") { "--quiet", "--no-ff", "issue-merge-left", "-m", "merge" }).Should().BeTrue();
+        return module;
+
+        void CommitFiles(string prefix)
+        {
+            File.WriteAllText(Path.Combine(_workingDirectory, $"{prefix}-a.txt"), $"{prefix} a\n");
+            File.WriteAllText(Path.Combine(_workingDirectory, $"{prefix}-b.txt"), $"{prefix} b\n");
+            module.GitExecutable.RunCommand(new GitArgumentBuilder("add") { "--", $"{prefix}-a.txt", $"{prefix}-b.txt" }).Should().BeTrue();
+            module.GitExecutable.RunCommand(new GitArgumentBuilder("commit") { "--quiet", "-m", prefix }).Should().BeTrue();
         }
     }
 

@@ -93,7 +93,7 @@ $adapterArguments = @('--', 'NUnit.AssemblySelectLimit=100000')
 # Paths that can never reach the WinForms solution. Anything else, unknown paths included, builds it.
 $cannotAffectWinForms = '^(src/app/GitUI\.Avalonia/|src/app/GitExtensions\.Avalonia/|src/app/GitExtensions\.Shims\.WinForms/|tests/app/UnitTests/GitUI\.Avalonia\.Tests/|eng/avalonia/|eng/tools/|GitExtensions\.Avalonia\.slnx$)'
 # Paths that cannot change what the Avalonia build and its tests do. These standalone tools have no product consumers.
-$cannotAffectProduct = '^eng/avalonia/(portmap\.json|parity-ledger\.json|[^/]+\.(md|ps1))$|^eng/tools/(?:ParityFix|ParityInventory)(?:\.Tests)?/'
+$cannotAffectProduct = '^eng/avalonia/(portmap\.json|parity-ledger\.json|framework-adaptations\.json|[^/]+\.(md|ps1))$|^eng/tools/(?:ParityFix|ParityInventory)(?:\.Tests)?/'
 # Paths that cannot change the source inventory. The portmap, ledger and adaptations can.
 $cannotAffectInventory = '^eng/avalonia/[^/]+\.(md|ps1)$|^eng/tools/ParityFix(?:\.Tests)?/'
 $readOnlyOriginals = '^(src/app/GitUI/|src/app/GitExtensions/|src/app/BugReporter/|externals/(?!Git\.hub\.Portable/|Directory\.Build\.))'
@@ -114,6 +114,32 @@ if (@($Only | Where-Object { $_ -in 'tool-tests', 'linux-tool-tests' }).Count -a
 
 function Get-FreeGb {
     return [math]::Round((Get-PSDrive -Name $repo.Substring(0, 1)).Free / 1GB, 1)
+}
+
+function Remove-ExpiredGateLogs([string]$GateRoot, [int]$KeepPassingLogs) {
+    $passingRuns = @(Get-ChildItem -LiteralPath $gateRoot -Directory |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'receipt.json') } |
+        Sort-Object Name -Descending |
+        Where-Object { (Get-Content -LiteralPath (Join-Path $_.FullName 'receipt.json') -Raw | ConvertFrom-Json).status -eq 'passed' })
+    foreach ($old in @($passingRuns | Select-Object -Skip $keepPassingLogs)) {
+        $files = @(Get-ChildItem -LiteralPath $old.FullName -File)
+        foreach ($result in @($files | Where-Object Extension -eq '.trx')) {
+            try { $document = [xml][IO.File]::ReadAllText($result.FullName) }
+            catch { continue } # An unreadable result cannot identify a deployment directory safely.
+            foreach ($deployment in $document.SelectNodes('//*[local-name()="Deployment"]/@runDeploymentRoot')) {
+                if ([string]::IsNullOrWhiteSpace($deployment.Value)) { continue }
+                try { $target = [IO.Path]::GetFullPath((Join-Path $old.FullName $deployment.Value)) }
+                catch { continue }
+                # Only a named test deployment directly inside this run can be removed recursively.
+                if ([IO.Path]::GetDirectoryName($target) -ne $old.FullName -or
+                    [IO.Path]::GetFileName($target) -in 'windows-smoke', 'linux-runtime') { continue }
+                if (Test-Path -LiteralPath $target -PathType Container) {
+                    Remove-Item -LiteralPath $target -Recurse -Force
+                }
+            }
+        }
+        $files | Where-Object { $_.Extension -in '.log', '.trx' } | Remove-Item
+    }
 }
 
 # Hashes the whole working tree, untracked files included, without touching the real index.
@@ -229,6 +255,8 @@ function Test-AssemblyCompleted([string]$Trx) {
 
 # Multiline commands reach WSL as an owned LF script: Windows argument reparsing corrupts them otherwise.
 function Invoke-WslScript([string]$Name, [string]$Body) {
+    # A CR after a Bash export becomes part of its value, so normalize generated wrappers.
+    $Body = $Body.Replace("`r`n", "`n")
     $script = Join-Path $runDirectory "$Name.sh"
     [IO.File]::WriteAllText($script, "#!/usr/bin/env bash`nset -euo pipefail`n$Body`n", [Text.UTF8Encoding]::new($false))
     # A login shell, because dotnet is only on PATH through the user's profile.
@@ -345,11 +373,23 @@ bash '$(ConvertTo-WslPath $repo)/eng/avalonia/wsl-gate.sh' run bash -c 'dotnet b
         if ($difference.Count) { throw "Linux and Windows inventories differ in $($difference.Count) file entries" }
     }
     'windows-smoke' = {
-        & (Join-Path $PSScriptRoot 'windows-runtime-smoke.ps1') -BrowseWindow -EvidenceDirectory (Join-Path $runDirectory 'windows-smoke') *> (Join-Path $runDirectory 'windows-smoke.log')
+        & (Join-Path $PSScriptRoot 'windows-runtime-smoke.ps1') -BrowseWindow -CheckPlugins -EvidenceDirectory (Join-Path $runDirectory 'windows-smoke') *> (Join-Path $runDirectory 'windows-smoke.log')
     }
     'linux-runtime' = {
-        $exitCode = Invoke-WslScript 'linux-runtime' "bash '$(ConvertTo-WslPath $repo)/eng/avalonia/wsl-gate.sh' runtime"
+        $runtimeEvidence = ConvertTo-WslPath (Join-Path $runDirectory 'linux-runtime')
+        $exitCode = Invoke-WslScript 'linux-runtime' @"
+export GITEXTENSIONS_RUNTIME_EVIDENCE='$runtimeEvidence'
+bash '$(ConvertTo-WslPath $repo)/eng/avalonia/wsl-gate.sh' runtime
+"@
         if ($exitCode -ne 0) { throw "Linux runtime smoke failed (exit $exitCode)" }
+        foreach ($backend in 'wayland', 'x11') {
+            $manifestPath = Join-Path $runDirectory "linux-runtime/$backend/smoke.json"
+            if (-not (Test-Path -LiteralPath $manifestPath)) { throw "Linux runtime evidence is missing: $manifestPath" }
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            if ($manifest.backend -ne $backend -or $manifest.screenshotSha256 -cnotmatch '^[0-9a-f]{64}$') {
+                throw "Invalid Linux $backend runtime manifest: $manifestPath"
+            }
+        }
     }
 }
 
@@ -582,14 +622,8 @@ if ((Get-WorkTree) -ne $tree) {
     notRun = $notRun
 } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $runDirectory 'receipt.json') -Encoding utf8
 
-# Receipts stay forever. Logs stay for failures and for the latest passing runs.
-$passingRuns = @(Get-ChildItem -LiteralPath $gateRoot -Directory |
-    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'receipt.json') } |
-    Sort-Object Name -Descending |
-    Where-Object { (Get-Content -LiteralPath (Join-Path $_.FullName 'receipt.json') -Raw | ConvertFrom-Json).status -eq 'passed' })
-foreach ($old in @($passingRuns | Select-Object -Skip $keepPassingLogs)) {
-    Get-ChildItem -LiteralPath $old.FullName -Exclude 'receipt.json' | Remove-Item -Recurse
-}
+# Receipts and retained evidence stay forever; prune old successful logs/results.
+Remove-ExpiredGateLogs $gateRoot $keepPassingLogs
 
 $total = [math]::Round(((Get-Date) - $started).TotalMinutes, 1)
 "$($status.ToUpperInvariant()) $Level tree $tree in $total min, $(Get-FreeGb) GB free; receipt: eng/avalonia/parity-evidence/gates/$id/receipt.json"

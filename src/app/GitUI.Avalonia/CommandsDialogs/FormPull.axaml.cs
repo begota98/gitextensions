@@ -113,6 +113,26 @@ public sealed partial class FormPull : GitExtensionsDialog
         InitializeComplete();
     }
 
+    public bool ErrorOccurred { get; private set; }
+
+    private void ApplySourceAutoSize()
+    {
+        WinFormsAutoSizeContentControl.Attach(PullFromRemote, 25, 19);
+        WinFormsAutoSizeContentControl.Attach(PullFromUrl, 25, 19);
+        WinFormsAutoSizeContentControl.Attach(Merge, 41, 21);
+        WinFormsAutoSizeContentControl.Attach(Rebase, 41, 21);
+        WinFormsAutoSizeContentControl.Attach(Fetch, 25, 21);
+        WinFormsAutoSizeContentControl.Attach(ReachableTags, 25, 21);
+        WinFormsAutoSizeContentControl.Attach(NoTags, 25, 21);
+        WinFormsAutoSizeContentControl.Attach(AllTags, 25, 21);
+        WinFormsAutoSizeContentControl.Attach(Unshallow, 26, 19);
+        WinFormsAutoSizeContentControl.Attach(Prune, 26, 19);
+        WinFormsAutoSizeContentControl.Attach(PruneTags, 26, 19);
+        WinFormsAutoSizeContentControl.Attach(AutoStash, 26, 19);
+        WinFormsAutoSizeContentControl.Attach(lblLocalBranch, 7, 15);
+        WinFormsAutoSizeContentControl.Attach(lblRemoteBranch, 7, 15);
+    }
+
     public FormPull(GitUICommands commands, string? defaultRemoteBranch, string? defaultRemote, GitPullAction pullAction)
         : base(commands, enablePositionRestore: false)
     {
@@ -141,26 +161,6 @@ public sealed partial class FormPull : GitExtensionsDialog
         UpdateFormTitleAndButton();
         UpdateActionState();
     }
-
-    private void ApplySourceAutoSize()
-    {
-        WinFormsAutoSizeContentControl.Attach(PullFromRemote, 25, 19);
-        WinFormsAutoSizeContentControl.Attach(PullFromUrl, 25, 19);
-        WinFormsAutoSizeContentControl.Attach(Merge, 41, 21);
-        WinFormsAutoSizeContentControl.Attach(Rebase, 41, 21);
-        WinFormsAutoSizeContentControl.Attach(Fetch, 25, 21);
-        WinFormsAutoSizeContentControl.Attach(ReachableTags, 25, 21);
-        WinFormsAutoSizeContentControl.Attach(NoTags, 25, 21);
-        WinFormsAutoSizeContentControl.Attach(AllTags, 25, 21);
-        WinFormsAutoSizeContentControl.Attach(Unshallow, 26, 19);
-        WinFormsAutoSizeContentControl.Attach(Prune, 26, 19);
-        WinFormsAutoSizeContentControl.Attach(PruneTags, 26, 19);
-        WinFormsAutoSizeContentControl.Attach(AutoStash, 26, 19);
-        WinFormsAutoSizeContentControl.Attach(lblLocalBranch, 7, 15);
-        WinFormsAutoSizeContentControl.Attach(lblRemoteBranch, 7, 15);
-    }
-
-    public bool ErrorOccurred { get; private set; }
 
     protected override void OnRuntimeLoad(EventArgs e)
     {
@@ -1237,23 +1237,30 @@ public sealed partial class FormPull : GitExtensionsDialog
 
     internal TestAccessor GetTestAccessor() => new(this);
 
-    internal readonly struct TestAccessor(FormPull form)
+    internal readonly struct TestAccessor
     {
-        internal string Title => form.Title ?? string.Empty;
-        internal string FetchTitleText => form._formTitleFetch.Text;
-        internal string PullTitleText => form._formTitlePull.Text;
-        internal RadioButton Merge => form.Merge;
-        internal RadioButton Rebase => form.Rebase;
-        internal RadioButton Fetch => form.Fetch;
-        internal CheckBox AutoStash => form.AutoStash;
-        internal CheckBox Prune => form.Prune;
-        internal CheckBox PruneTags => form.PruneTags;
-        internal ComboBox Remotes => form._NO_TRANSLATE_Remotes;
-        internal TextBox LocalBranch => form.localBranch;
+        private readonly FormPull _form;
+
+        public TestAccessor(FormPull form)
+        {
+            _form = form;
+        }
+
+        internal string Title => _form.Title ?? string.Empty;
+        internal string FetchTitleText => _form._formTitleFetch.Text;
+        internal string PullTitleText => _form._formTitlePull.Text;
+        internal RadioButton Merge => _form.Merge;
+        internal RadioButton Rebase => _form.Rebase;
+        internal RadioButton Fetch => _form.Fetch;
+        internal CheckBox AutoStash => _form.AutoStash;
+        internal CheckBox Prune => _form.Prune;
+        internal CheckBox PruneTags => _form.PruneTags;
+        internal ComboBox Remotes => _form._NO_TRANSLATE_Remotes;
+        internal TextBox LocalBranch => _form.localBranch;
         internal FormProcess CreateFormProcess(string source, string? localBranch, string? remoteBranch)
-            => form.CreateFormProcess(source, localBranch, remoteBranch);
+            => _form.CreateFormProcess(source, localBranch, remoteBranch);
         internal bool CheckMergeConflictsOnError(WinFormsShims.IWin32Window? owner)
-            => form.CheckMergeConflictsOnError(owner);
-        internal void UpdateSettingsDuringPull() => form.UpdateSettingsDuringPull();
+            => _form.CheckMergeConflictsOnError(owner);
+        internal void UpdateSettingsDuringPull() => _form.UpdateSettingsDuringPull();
     }
 }

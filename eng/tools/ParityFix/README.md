@@ -1,6 +1,6 @@
 # ParityFix
 
-Temporary source-parity tooling for reviewed `ParityInventory` schema 5 `types/*.json` reports.
+Temporary source-parity tooling for reviewed `ParityInventory` schema 8 `types/*.json` reports.
 Targets plain `net10.0`; belongs to neither application solution. Run from the repository root.
 
 ```powershell
@@ -14,6 +14,9 @@ dotnet artifacts/Debug/bin/ParityFix/net10.0/ParityFix.dll `
 
 The default command previews changes. Add `--apply` to write proved candidate files. Original files,
 linked sources outside the twin root, AXAML, cross-part moves and non-mechanical findings are excluded.
+Nested declarations are reordered within their own bodies and original partials. Primary constructors
+and positional record properties supply the same ordering anchors as explicit members. The recursive
+member-content proof retains every nested member body and checks unchanged directives.
 `--twin-root` can select another explicit twin project or mapped plugin directory. It must match each
 selected report root or contain every twin part in that report. Snapshot paths retain their recorded
 root for validation; only writes use the explicit boundary. Linked unchanged originals remain protected.
@@ -77,7 +80,7 @@ Member order changes stay inside a partial and cannot cross directive-bearing me
 whose only directives are internal adjacent warning-disable/restore pairs for the same explicit codes.
 These pairs can move with their complete member only when the file has no ambient warning directives;
 their exact text remains protected by the member-multiset proof. Regions and conditional scopes stay barriers. Unknown members
-keep their slots; overloads and other ambiguous declarations remain in place. The full member multiset,
+keep their slots; overloads use the inventory matcher, while ambiguous declarations remain in place. The full member multiset,
 including trivia, and syntax outside the type must be unchanged after reordering and reparsing. Moved
 fields, events and properties with initializers are listed and block that file's order changes by default.
 After hand review, `--allow-initializers` permits those proposals; the list remains in the report. Compilation

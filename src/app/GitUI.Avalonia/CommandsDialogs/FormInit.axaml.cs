@@ -29,6 +29,9 @@ public sealed partial class FormInit : GitExtensionsDialog
     public FormInit()
     {
         InitializeComponent();
+        HelpButton = true;
+        ManualSectionAnchorName = "create-new-repository";
+        ManualSectionSubfolder = "getting_started";
         WireControls();
         InitializeComplete();
     }
@@ -46,6 +49,9 @@ public sealed partial class FormInit : GitExtensionsDialog
 
         _gitModuleChanged = gitModuleChanged;
         InitializeComponent();
+        HelpButton = true;
+        ManualSectionAnchorName = "create-new-repository";
+        ManualSectionSubfolder = "getting_started";
         WireControls();
         AcceptButton = Init;
 
@@ -139,7 +145,7 @@ public sealed partial class FormInit : GitExtensionsDialog
 
         public Avalonia.Controls.ComboBox DirectoryCombo => _form._NO_TRANSLATE_Directory;
 
-        public bool IsRootedDirectoryPathForTesting(string path)
+        public bool IsRootedDirectoryPath(string path)
         {
             return FormInit.IsRootedDirectoryPath(path);
         }

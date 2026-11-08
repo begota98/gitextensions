@@ -29,6 +29,9 @@ public class MessageBoxes : Translate
     private readonly TranslationString _middleOfPatchApplyCaption = new("Patch apply");
     private readonly TranslationString _middleOfPatchApply = new("You are in the middle of a patch apply, continue patch apply?");
 
+    private readonly TranslationString _serverHostkeyNotCachedText =
+        new("The server's host key is not cached in the registry.\n\nDo you want to trust this host key and then try again?");
+
     private readonly TranslationString _updateSubmodules = new("Update submodules");
     private readonly TranslationString _theRepositorySubmodules = new("Update submodules on checkout?");
     private readonly TranslationString _updateSubmodulesToo = new("Since this repository has submodules, it's necessary to update them on every checkout.\r\n\r\nThis will just checkout on the submodule the commit determined by the superproject.");
@@ -72,12 +75,6 @@ public class MessageBoxes : Translate
     public static void NotValidGitDirectory(WinFormsShims.IWin32Window? owner)
         => ShowError(owner, Instance._notValidGitDirectory.Text);
 
-    public static void SubmoduleDirectoryDoesNotExist(WinFormsShims.IWin32Window? owner, string directory, string submoduleName)
-        => ShowError(owner, string.Format(Instance._submoduleDirectoryDoesNotExist.Text, directory, submoduleName), Instance._cannotOpenSubmoduleCaption.Text);
-
-    public static void SubmoduleDirectoryDoesNotExist(WinFormsShims.IWin32Window? owner, string directory)
-        => ShowError(owner, string.Format(Instance._directoryDoesNotExist.Text, directory), Instance._cannotOpenSubmoduleCaption.Text);
-
     public static void ShowGitConfigurationExceptionMessage(WinFormsShims.IWin32Window? owner, GitConfigurationException exception)
         => Show(
             owner,
@@ -99,8 +96,17 @@ public class MessageBoxes : Translate
     public static void SelectOnlyOneOrTwoRevisions(WinFormsShims.IWin32Window? owner)
         => ShowError(owner, Instance._selectOnlyOneOrTwoRevisions.Text, Instance._archiveRevisionCaption.Text);
 
+    public static void SubmoduleDirectoryDoesNotExist(WinFormsShims.IWin32Window? owner, string directory, string submoduleName)
+        => ShowError(owner, string.Format(Instance._submoduleDirectoryDoesNotExist.Text, directory, submoduleName), Instance._cannotOpenSubmoduleCaption.Text);
+
+    public static void SubmoduleDirectoryDoesNotExist(WinFormsShims.IWin32Window? owner, string directory)
+        => ShowError(owner, string.Format(Instance._directoryDoesNotExist.Text, directory), Instance._cannotOpenSubmoduleCaption.Text);
+
     public static void GitExtensionsDirectoryDoesNotExist(WinFormsShims.IWin32Window? owner, string directory)
         => ShowError(owner, string.Format(Instance._directoryDoesNotExist.Text, directory), Instance._cannotOpenGitExtensionsCaption.Text);
+
+    public static bool CacheHostkey(WinFormsShims.IWin32Window? owner)
+        => Confirm(owner, Instance._serverHostkeyNotCachedText.Text, "SSH");
 
     public static bool ConfirmResolveMergeConflicts(WinFormsShims.IWin32Window? owner)
         => ConfirmSuppressible(owner, Instance._unresolvedMergeConflicts.Text, Instance._unresolvedMergeConflictsCaption.Text, AppSettings.DontConfirmResolveConflicts);
