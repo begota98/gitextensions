@@ -146,6 +146,8 @@ logo="$repo_root/setup/assets/Logo/git-extensions-logo-512px.png"
 sed -e 's/\r$//' -e "s/$package_app_id/$app_id/g" "$desktop_source" > "$desktop"
 sed -e 's/\r$//' -e "s/$package_app_id/$app_id/g" "$metainfo_source" > "$metainfo"
 
+cp "$flatpak_root"/gitextensions-*.sh "$flatpak_cache_root/"
+
 sed \
     -e "s/$package_app_id/$app_id/g" \
     -e "s#\"path\": \"publish\"#\"path\": \"$publish_root\"#" \
@@ -200,6 +202,8 @@ rm -f -- \
     "$unreachable_stderr_log"
 
 flatpak info --user --show-permissions "$app_id" >"$permissions_log"
+grep -Fx 'org.freedesktop.Flatpak=talk' "$permissions_log" >/dev/null
+flatpak run --user --command=/bin/sh "$app_id" -c 'test -x /usr/bin/flatpak-spawn'
 filesystem_permissions="$(sed -n 's/^filesystems=//p' "$permissions_log")"
 case ";$filesystem_permissions" in
     *";host;"*) ;;

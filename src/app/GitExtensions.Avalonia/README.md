@@ -69,13 +69,40 @@ configured default terminal, followed by `x-terminal-emulator`, GNOME Terminal, 
 xterm; Windows prefers Windows Terminal and falls back to Command Prompt; macOS opens
 Terminal.app. Linux launch removes inherited Snap-specific GTK/GIO overrides so a system
 terminal can start correctly when Git Extensions was launched from a Snap-hosted IDE.
-In Flatpak, external terminals and host Gource executables are reported as unavailable:
-`--filesystem=host` exposes their files but does not make arbitrary host programs executable
-inside the sandbox. Git and OpenSSH are bundled for repository and SSH operations.
+In Flatpak, external terminals run on the host through `flatpak-spawn --host`, using the
+host's PATH and desktop default terminal. This requires the manifest's
+`--talk-name=org.freedesktop.Flatpak` permission and a running Flatpak host-command service.
+If that permission is revoked or the service is unavailable, the terminal action reports
+that host tools are not available in this Flatpak installation. Configured Gource also uses
+the host launcher. Git and OpenSSH are bundled for repository and SSH operations.
 The manifest forwards the host SSH agent. HTTPS authentication uses Git's configured
 credential-helper protocol, but a host helper executable is not assumed to be runnable inside
 the sandbox; Secret Service/keyring integration requires a compatible bundled helper and
 explicit packaging support.
+
+Known diff/merge tools and editor suggestions retain the shared installation lookup first.
+On unconfined Linux, an additional lookup searches PATH, then installed Flatpak applications
+by their known IDs. On macOS it checks the executables inside system and user application
+bundles, then /opt/homebrew/bin and /usr/local/bin. Explicit configured paths and custom
+commands take priority. Inside the application Flatpak, discovery queries the host's PATH
+and installed Flatpak applications through the host-command service.
+Flatpak tool and editor commands use file forwarding so the selected application can read
+files created by the host's Git in a private temporary directory.
+
+Git settings retain host-valid commands. Bundled Git translates external editor and diff/merge
+launches through the host service without rewriting those settings. The built-in editor uses
+the installed Flatpak application ID with file forwarding, so the same saved command works
+from the host's Git. Before using temporary storage, startup checks that the host can read the
+same file in its cache directory; sandbox-private `/tmp` is not used for these tool files.
+When only a registered tool's Flatpak application is installed, the bundled Git helper uses
+an app-local launch proxy with file forwarding. Native host executables take priority.
+On macOS, edit/reword uses a POSIX sequence-editor command instead of GNU-only `sed` flags.
+
+The Flatpak uses its bundled Git by default. In Settings → Paths, select **Use Git installed
+on the host** to run host Git through the existing Git command setting. The host must provide
+Git 2.43.0 or later. If Git is missing, too old, or host-command permission is unavailable,
+the launcher uses bundled Git and reports the fallback. Clear the option to select bundled Git.
+
 On Linux, file and folder dialogs use the XDG FileChooser portal. Opening a file or URI and
 showing a path in the file manager use the XDG OpenURI portal. If the desktop portal or its
 backend is unavailable, Git Extensions reports the failure and does not fall back to an

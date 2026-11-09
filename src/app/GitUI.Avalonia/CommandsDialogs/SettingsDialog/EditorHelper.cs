@@ -1,4 +1,5 @@
 using GitCommands;
+using GitUI.Compat;
 
 namespace GitUI.CommandsDialogs.SettingsDialog;
 
@@ -14,8 +15,9 @@ public static class EditorHelper
                 "vi",
                 "vim",
                 "nano",
-                "code --new-window --wait",
-                "zed --wait",
+                GetVsCode(),
+                GetZed(),
+                GetSublimeText(),
             ];
         }
 
@@ -35,6 +37,12 @@ public static class EditorHelper
 
     internal static string GetBuiltInEditorCommand()
     {
+        if (FlatpakEnvironment.IsFlatpak())
+        {
+            // Cross-platform constraint: the saved editor must also run from the host's Git, including host-private temporary files.
+            return FlatpakToolEnvironment.GetBuiltInEditorCommand();
+        }
+
         string executableName = OperatingSystem.IsWindows()
             ? "GitExtensions.Avalonia.exe"
             : "GitExtensions.Avalonia";
@@ -57,12 +65,17 @@ public static class EditorHelper
     private static string GetEditorCommandLine(string executableName, string commandLineParameter, params string[] installFolders)
     {
         string exec = executableName.FindInFolders(installFolders);
+
+        // Cross-platform constraint: supplement the shared search with native installation locations.
+        if (string.IsNullOrEmpty(exec) && PlatformToolLocator.Current.FindForConfiguration(executableName) is LocatedTool tool)
+        {
+            return PlatformToolLocator.GetEditorCommand(tool, commandLineParameter);
+        }
+
         if (string.IsNullOrEmpty(exec))
         {
             // hoping the tool is available in the PATH
-            exec = Path.GetExtension(executableName) == ".exe"
-                ? Path.GetFileNameWithoutExtension(executableName)
-                : executableName;
+            exec = PlatformToolLocator.Current.GetFallbackExecutableName(executableName);
         }
         else
         {

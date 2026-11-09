@@ -48,6 +48,9 @@ public partial class App : Application
 
             ShimServices.Install(desktop);
 
+            // Cross-platform constraint: external tools need host-visible files, while their launch proxies stay private.
+            DispatcherPump.Wait(FlatpakToolEnvironment.InitializeAsync);
+
             // If you want to suppress the BugReportInvoker when debugging and exit quickly, uncomment the condition:
             ////if (!Debugger.IsAttached)
             AppDomain.CurrentDomain.UnhandledException += (_, e) => ReportUnhandledException(
@@ -61,6 +64,7 @@ public partial class App : Application
             string? userPluginsPath = UserPluginsDirectory.GetPath(AppSettings.LocalApplicationDataPath.Value);
             ManagedExtensibility.Initialise(userPluginsPath: userPluginsPath);
             AppSettings.LoadSettings();
+            FlatpakHostGit.InitializeEnvironment();
             AvaloniaThemeSettings.ApplyAppSettings();
             AvaloniaFontSettings.ApplyAppSettings();
 
@@ -97,6 +101,14 @@ public partial class App : Application
                 formChoose.ShowDialog();
             }
 
+            FlatpakHostGit.InitializeEnvironment();
+            DispatcherPump.Wait(async () =>
+            {
+                await FlatpakHostGit.NotifyIfFallingBackAsync();
+                return true;
+            });
+            FileEditorConformanceProbe.InstallIfRequested(desktop);
+
             StartupCoordinator coordinator = new();
             if (!coordinator.EnsurePrerequisites(commands, args))
             {
@@ -122,6 +134,8 @@ public partial class App : Application
 
             // parity-scaffolding: font evidence is requested only after the runtime screenshot.
             RuntimeFontProbe.StartIfRequested(desktop);
+
+            HostGitConformanceProbe.StartIfRequested(desktop, commands);
         }
         catch (Exception exception)
         {
