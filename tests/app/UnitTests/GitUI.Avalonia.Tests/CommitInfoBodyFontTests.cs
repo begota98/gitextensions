@@ -48,8 +48,10 @@ public sealed class CommitInfoBodyFontTests
             AppSettings.Font = new WinFormsShims.Font(family, points);
             AppSettings.CommitFont = new WinFormsShims.Font(family, points);
             AvaloniaFontSettings.ApplyAppSettings();
+            using CommitInfoTestSupport.UiContextScope uiContext = new();
             CommitInfo control = new();
-            CommitInfo.TestAccessor accessor = control.GetTestAccessor();
+            using IDisposable controlLifetime = control;
+            CommitInfoTestSupport.Accessor accessor = control.GetNativeTestSupport();
             accessor.TableLayout.IsVisible = true;
             XhtmlTextBlock[] blocks = [accessor.CommitMessage, accessor.RevisionInfo];
             foreach (XhtmlTextBlock block in blocks)
@@ -192,12 +194,14 @@ public sealed class CommitInfoBodyFontTests
             AppSettings.Font = new WinFormsShims.Font("Segoe UI", 11);
             AppSettings.CommitFont = new WinFormsShims.Font("Consolas", 18);
             AvaloniaFontSettings.ApplyAppSettings();
+            using CommitInfoTestSupport.UiContextScope uiContext = new();
             CommitInfo control = new();
-            CommitInfo.TestAccessor accessor = control.GetTestAccessor();
+            using IDisposable controlLifetime = control;
+            CommitInfoTestSupport.Accessor accessor = control.GetNativeTestSupport();
             accessor.TableLayout.IsVisible = true;
             accessor.CommitMessage.SetXHTMLText(PlainParagraphs);
             accessor.RevisionInfo.SetXHTMLText(PlainParagraphs);
-            XhtmlTextBlock header = accessor.Header.GetTestAccessor().RevisionHeader;
+            XhtmlTextBlock header = accessor.Header.GetRevisionHeader();
             window = new Window { Width = 1200, Height = 900, Content = control };
             window.Show();
             RunLayout(window);
@@ -268,6 +272,7 @@ public sealed class CommitInfoBodyFontTests
 
     private static void RunLayout(Window window)
     {
+        CommitInfoTestSupport.WaitForContentsLayout(window);
         Dispatcher.UIThread.RunJobs();
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();

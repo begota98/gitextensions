@@ -1,11 +1,12 @@
 using Avalonia.Controls;
-using Avalonia.Media;
 using Avalonia.Threading;
 using GitExtensions.Extensibility;
 using GitExtensions.Extensibility.Git;
 using GitExtensions.Extensibility.Translations.Xliff;
+using GitUI.Compat;
 using GitUIPluginInterfaces;
 using Microsoft.VisualStudio.Threading;
+using TreeNode = Avalonia.Controls.TreeViewItem;
 
 namespace GitUI.LeftPanel;
 
@@ -22,7 +23,7 @@ internal enum RepoTreeKind
 [LocalizableProperties]
 internal abstract class Tree : NodeBase, IDisposable
 {
-    private IGitUICommandsSource? _uiCommandsSource;
+    private readonly IGitUICommandsSource _uiCommandsSource;
 
     // The previewer constructs repository trees without the runtime ThreadHelper bootstrap.
     private readonly ExclusiveTaskRunner _reloadTaskRunner = Design.IsDesignMode
@@ -31,32 +32,45 @@ internal abstract class Tree : NodeBase, IDisposable
     private bool _firstReloadNodesSinceModuleChanged = true;
     protected TaskCompletionSource LoadingCompleted = new();
 
-    protected Tree(RepoObjectsTree owner, RepoTreeKind kind, string caption, IImage icon)
-        : base(owner, parent: null, caption, icon)
+    protected Tree(TreeNode treeNode, IGitUICommandsSource uiCommands)
+        : base(treeNode)
     {
-        Kind = kind;
+        _uiCommandsSource = uiCommands;
 
-        // When GitModule has changed, clear selected node
-        // Certain operations need to happen the first time after we change modules. For example,
-        // we don't want to use the expanded/collapsed state of existing nodes in the tree, but at
-        // the same time, we don't want to remove them from the tree as this is visible to the user,
-        // as well as less efficient.
-        SetUICommandsSource(owner.CommandsSource);
-        Attached();
+        uiCommands.UICommandsChanged += (a, e) =>
+        {
+            // When GitModule has changed, clear selected node
+            // Framework constraint: RepoObjectsTree clears the selection of every tree inside its
+            // selection-notification boundary, which Avalonia raises on the owning TreeView.
+
+            // Certain operations need to happen the first time after we change modules. For example,
+            // we don't want to use the expanded/collapsed state of existing nodes in the tree, but at
+            // the same time, we don't want to remove them from the tree as this is visible to the user,
+            // as well as less efficient.
+            _firstReloadNodesSinceModuleChanged = true;
+        };
     }
 
     public virtual void Dispose()
     {
         Detached();
-        SetUICommandsSource(null);
         _reloadTaskRunner.Dispose();
     }
 
-    public RepoTreeKind Kind { get; }
+    public RepoTreeKind Kind => this switch
+    {
+        LocalBranchTree => RepoTreeKind.Branches,
+        RemoteBranchTree => RepoTreeKind.Remotes,
+        WorktreeTree => RepoTreeKind.Worktrees,
+        TagTree => RepoTreeKind.Tags,
+        SubmoduleTree => RepoTreeKind.Submodules,
+        StashTree => RepoTreeKind.Stashes,
+        _ => throw new NotSupportedException(GetType().Name),
+    };
 
-    internal RepoObjectsTree OwnerControl => Owner;
+    internal RepoObjectsTree OwnerControl { get; init; } = null!;
 
-    public IGitUICommands UICommands => _uiCommandsSource?.UICommands ?? Owner.UICommands;
+    public IGitUICommands UICommands => _uiCommandsSource.UICommands;
 
     /// <summary>
     /// A flag to indicate that node SelectionChanged event is not user-originated and
@@ -118,36 +132,6 @@ internal abstract class Tree : NodeBase, IDisposable
 
     internal IEnumerable<NodeBase> GetSelectedNodes()
         => GetNodesAndSelf().Where(node => node.IsSelected);
-
-    internal void OnModuleChanged()
-    {
-        // When GitModule has changed, clear selected node.
-        _firstReloadNodesSinceModuleChanged = true;
-    }
-
-    internal void SetUICommandsSource(IGitUICommandsSource? uiCommands)
-    {
-        if (ReferenceEquals(_uiCommandsSource, uiCommands))
-        {
-            return;
-        }
-
-        // Portable ref refresh replaces root owners; a disposed generation must not
-        // remain alive through the command source's module-change notification.
-        if (_uiCommandsSource is not null)
-        {
-            _uiCommandsSource.UICommandsChanged -= UICommandsSource_UICommandsChanged;
-        }
-
-        _uiCommandsSource = uiCommands;
-        if (uiCommands is not null)
-        {
-            uiCommands.UICommandsChanged += UICommandsSource_UICommandsChanged;
-        }
-    }
-
-    private void UICommandsSource_UICommandsChanged(object? sender, GitUICommandsChangedEventArgs e)
-        => OnModuleChanged();
 
     // Invoke from child class to reload nodes for the current Tree. Clears Nodes, invokes
     // input async function that should populate Nodes, then fills the tree view with its contents,
@@ -213,7 +197,7 @@ internal abstract class Tree : NodeBase, IDisposable
     ///  Completes when the UI thread has no more messages to handle, i.e. after the pending painting is done.
     /// </summary>
     /// <param name="cancellationToken">The token to cancel waiting.</param>
-    internal static async Task WaitForIdleAsync(CancellationToken cancellationToken)
+    private static async Task WaitForIdleAsync(CancellationToken cancellationToken)
     {
         // The idle priority is not processed without a message loop, like in unit tests.
         if (Avalonia.Application.Current?.ApplicationLifetime is not Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)
@@ -228,24 +212,9 @@ internal abstract class Tree : NodeBase, IDisposable
     {
         _ = originalSelectedNodeFullNamePath;
         Nodes.FillTreeViewNode(TreeViewNode);
+        OwnerControl.ApplyRoots();
+
         PostFillTreeViewNode(firstTime);
-    }
-
-    protected void Complete(string caption, Avalonia.Media.IImage icon, bool expanded)
-    {
-        SetHeader(caption, icon);
-        TreeViewNode.IsExpanded = expanded;
-        foreach (NodeBase node in DescendantsAndSelf().Skip(1))
-        {
-            node.ApplyStyle();
-        }
-
-        FillTreeViewNode(originalSelectedNodeFullNamePath: null, _firstReloadNodesSinceModuleChanged);
-        ExpandPathToSelectedNode();
-        if (Nodes.Count > 0)
-        {
-            _firstReloadNodesSinceModuleChanged = false;
-        }
     }
 
     // Called after the TreeView has been populated from Nodes. A good place to update properties
@@ -263,6 +232,11 @@ internal abstract class Tree : NodeBase, IDisposable
         }
 
         // If no selected node, just make sure that the first node is visible
-        OwnerControl.EnsureHighlightedNodeVisible();
+        TreeView treeView = OwnerControl.treeMain;
+        TreeNode? node = treeView.SelectedItem as TreeNode ?? treeView.Items.OfType<TreeNode>().FirstOrDefault();
+        if (node is not null)
+        {
+            OwnerControl.EnsureVerticallyVisible(node);
+        }
     }
 }

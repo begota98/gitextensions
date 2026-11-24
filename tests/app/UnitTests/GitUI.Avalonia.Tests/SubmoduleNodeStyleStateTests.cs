@@ -112,12 +112,15 @@ public sealed class SubmoduleNodeStyleStateTests
                     Record(window, theme, "selected", node);
 
                     object? previousHeader = item.Header;
+                    Image previousImage = ((StackPanel)item.Header!).Children.OfType<Image>().Single();
                     node.Info = new SubmoduleInfo(originalInfo.Text, originalInfo.Path, originalInfo.Bold)
                     {
                         Detailed = new DetailedSubmoduleInfo { IsDirty = true },
                     };
                     node.RefreshDetails();
-                    item.Header.Should().NotBeSameAs(previousHeader, "the status update must exercise the framework's new image header");
+                    item.Header.Should().BeSameAs(previousHeader, "like the native node, a status update changes only the image of the existing item");
+                    ((StackPanel)item.Header!).Children.OfType<Image>().Single().Should().NotBeSameAs(previousImage,
+                        "the status update must exercise the framework's new image");
                     (node.Info.Detailed?.IsDirty).Should().BeTrue();
                     AssertStyle(window, accessor, node, item, selected: true, "Consolas", 13);
                     Record(window, theme, "status-refreshed", node);
@@ -155,7 +158,7 @@ public sealed class SubmoduleNodeStyleStateTests
         node.TreeViewNode.Should().BeSameAs(originalItem);
         node.TreeViewNode.Tag.Should().BeSameAs(node);
         node.IsSelected.Should().Be(selected);
-        accessor.LogicalSelection.Contains(originalItem).Should().Be(selected);
+        accessor.GetLogicalSelection().Contains(originalItem).Should().Be(selected);
         NativeTreeTextBlock label = HeaderLabel(node);
         label.FontFamily.Name.Should().Be(family);
         label.FontSize.Should().Be(AvaloniaFontSettings.ToDeviceIndependentPixels(points));

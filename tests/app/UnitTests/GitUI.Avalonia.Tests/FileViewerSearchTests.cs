@@ -22,6 +22,20 @@ namespace GitExtensionsTests;
 public sealed class FileViewerSearchTests
 {
     [AvaloniaTest]
+    public void FileViewer_should_emit_no_separate_translation_for_the_continuous_scroll_caption()
+    {
+        using FileViewer viewer = new();
+        ITranslation translation = Substitute.For<ITranslation>();
+
+        viewer.AddTranslationItems(translation);
+
+        translation.Received(1).AddTranslationItem(nameof(FileViewer), "copyToolStripMenuItem", "Text", Arg.Any<string>());
+        translation.DidNotReceive().AddTranslationItem(nameof(FileViewer), "automaticContinuousScrollToolStripMenuItem", "Text", Arg.Any<string>());
+        viewer.FindControl<MenuItem>("automaticContinuousScrollToolStripMenuItem")!.Header
+            .Should().Be(GitUI.TranslatedStrings.ContScrollToNextFileOnlyWithAlt);
+    }
+
+    [AvaloniaTest]
     public void FileViewer_should_create_the_find_window_only_when_requested()
     {
         FileViewer viewer = new();
@@ -320,6 +334,40 @@ public sealed class FileViewerSearchTests
     }
 
     [AvaloniaTest]
+    [TestCase(false, false)]
+    [TestCase(false, true)]
+    [TestCase(true, false)]
+    [TestCase(true, true)]
+    public async Task FindAndReplaceForm_should_search_supplementary_letters_with_the_selected_case_rule(bool backwards, bool matchCase)
+    {
+        const string uppercase = "\U00010400";
+        const string lowercase = "\U00010428";
+        string text = backwards ? $"{uppercase} {lowercase} " : $" {lowercase} {uppercase}";
+        using FileViewer viewer = new();
+        Window owner = new() { Width = 500, Height = 300, Content = viewer };
+        try
+        {
+            owner.Show();
+            await viewer.ViewTextAsync("search.txt", text);
+            viewer.TextEditor.CaretOffset = backwards ? text.Length : 0;
+            viewer.Find(replace: false);
+            FindAndReplaceForm form = viewer.GetTestAccessor().FindAndReplaceForm;
+            FindAndReplaceForm.TestAccessor accessor = form.GetTestAccessor();
+            accessor.TxtLookFor.Text = uppercase;
+            accessor.ChkMatchCase.IsChecked = matchCase;
+
+            TextRange? result = await form.FindNextAsync(viaF3: false, searchBackward: backwards, messageIfNotFound: null);
+
+            result.Should().NotBeNull();
+            viewer.TextEditor.SelectedText.Should().Be(matchCase ? uppercase : lowercase);
+        }
+        finally
+        {
+            owner.Close();
+        }
+    }
+
+    [AvaloniaTest]
     public async Task FindAndReplaceForm_should_replace_the_selection_and_find_the_next_match()
     {
         FileViewer viewer = new();
@@ -364,6 +412,51 @@ public sealed class FileViewerSearchTests
     }
 
     [AvaloniaTest]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Highlighted_occurrence_navigation_should_reveal_the_target_horizontally(bool backwards)
+    {
+        const string token = "needle";
+        string prefix = token + " " + new string('x', 240) + " ";
+        int targetOffset = prefix.Length;
+        using FileViewer viewer = new();
+        Window window = new() { Width = 480, Height = 280, Content = viewer };
+        try
+        {
+            window.Show();
+            await viewer.ViewTextAsync("search.txt", prefix + token);
+            viewer.TextEditor.WordWrap = false;
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            viewer.TextEditor.Select(0, token.Length);
+            viewer.TextEditor.TextArea.Caret.Offset = backwards ? targetOffset + token.Length : 0;
+            viewer.HScrollPosition = 0;
+            viewer.HScrollPosition.Should().Be(0);
+
+            if (backwards)
+            {
+                viewer.GoToPreviousOccurrence();
+            }
+            else
+            {
+                viewer.GoToNextOccurrence();
+            }
+
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            viewer.TextEditor.TextArea.Caret.Offset.Should().Be(targetOffset);
+            viewer.HScrollPosition.Should().BeGreaterThan(0);
+            global::Avalonia.Rect caret = viewer.TextEditor.TextArea.Caret.CalculateCaretRectangle();
+            AvaloniaEdit.Rendering.TextView textView = viewer.TextEditor.TextArea.TextView;
+            (caret.X - textView.ScrollOffset.X).Should().BeInRange(0, textView.Bounds.Width);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
     public async Task FindAndReplaceForm_should_show_the_file_name_and_render_the_scan_region()
     {
         FileViewer viewer = new();
@@ -403,16 +496,17 @@ public sealed class FileViewerSearchTests
             AppSettings.DiffDisplayAppearance.Value = DiffDisplayAppearance.Patch;
             AppSettings.AutomaticContinuousScroll = false;
             FileViewer viewer = new();
-            FileViewer.TestAccessor accessor = viewer.GetTestAccessor();
             int reloadRequests = 0;
             viewer.ExtraDiffArgumentsChanged += (_, _) => reloadRequests++;
 
-            accessor.ShowGitWordColoringMenuItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
+            viewer.FindControl<MenuItem>("showGitWordColoringToolStripMenuItem")!
+                .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
 
             AppSettings.DiffDisplayAppearance.Value.Should().Be(DiffDisplayAppearance.GitWordDiff);
             viewer.GetExtraDiffArguments().ToString().Should().Contain("--word-diff=color");
 
-            accessor.TreatAllFilesAsTextMenuItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
+            viewer.FindControl<MenuItem>("treatAllFilesAsTextToolStripMenuItem")!
+                .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
 
             viewer.GetExtraDiffArguments().ToString().Should().Contain("--text");
             viewer.GetExtraGrepArguments().ToString().Should().Contain("--text");
@@ -422,7 +516,8 @@ public sealed class FileViewerSearchTests
             extraCacheKey.Should().Contain(";DFT_COLOR=always").And.Contain(";DFT_BACKGROUND=light");
             Environment.GetEnvironmentVariable("DFT_WIDTH").Should().Be("88");
 
-            accessor.AutomaticContinuousScrollMenuItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
+            viewer.FindControl<MenuItem>("automaticContinuousScrollToolStripMenuItem")!
+                .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
 
             AppSettings.AutomaticContinuousScroll.Should().BeTrue();
             reloadRequests.Should().Be(2);
@@ -497,7 +592,8 @@ public sealed class FileViewerSearchTests
         IGitUICommandsSource source = Substitute.For<IGitUICommandsSource>();
         source.UICommands.Returns(commands);
         FileViewer viewer = new() { UICommandsSource = source };
-        ToolTip.SetTip(viewer.GetTestAccessor().NextChangeButton, "Next change");
+        Button nextChangeButton = viewer.FindControl<Button>("nextChangeButton")!;
+        ToolTip.SetTip(nextChangeButton, "Next change");
         ITranslation translation = Substitute.For<ITranslation>();
         translation.TranslateItem(
                 nameof(FileViewer),
@@ -509,9 +605,8 @@ public sealed class FileViewerSearchTests
         viewer.ReloadHotkeys();
         viewer.TranslateItems(translation);
 
-        FileViewer.TestAccessor accessor = viewer.GetTestAccessor();
-        accessor.FindMenuItem.InputGesture.Should().Be(new KeyGesture(Key.F, KeyModifiers.Control));
-        ToolTip.GetTip(accessor.NextChangeButton).Should().Be("Next change\u00A0(Ctrl+Down)");
+        viewer.FindControl<MenuItem>("findToolStripMenuItem")!.InputGesture.Should().Be(new KeyGesture(Key.F, KeyModifiers.Control));
+        ToolTip.GetTip(nextChangeButton).Should().Be("Next change\u00A0(Ctrl+Down)");
     }
 
     [AvaloniaTest]
@@ -535,19 +630,19 @@ public sealed class FileViewerSearchTests
         {
             AppSettings.FixedWidthFont = new WinFormsShims.Font("Consolas", 10);
             FileViewer viewer = new() { UICommandsSource = source, IsVisible = false };
-            FileViewer.TestAccessor accessor = viewer.GetTestAccessor();
+            Button nextChangeButton = viewer.FindControl<Button>("nextChangeButton")!;
             owner.Content = viewer;
             owner.Show();
             Dispatcher.UIThread.RunJobs();
 
-            GetToolTipText(accessor.NextChangeButton).Should().Be("Next change");
+            GetToolTipText(nextChangeButton).Should().Be("Next change");
             viewer.Font.Name.Should().Be("Courier New");
             _ = loader.DidNotReceive().LoadHotkeys(FileViewer.HotkeySettingsName);
 
             viewer.IsVisible = true;
             Dispatcher.UIThread.RunJobs();
 
-            GetToolTipText(accessor.NextChangeButton).Should().Be("Next change\u00A0(Ctrl+Down)");
+            GetToolTipText(nextChangeButton).Should().Be("Next change\u00A0(Ctrl+Down)");
             viewer.Font.Name.Should().Be("Consolas");
             viewer.Font.Size.Should().Be(10);
             _ = loader.Received(1).LoadHotkeys(FileViewer.HotkeySettingsName);

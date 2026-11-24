@@ -75,6 +75,9 @@ internal sealed partial class FilterToolBar : TranslatedControl
         InitializeComponent();
         _defaultOwnerFont = (innerStackPanel.FontFamily, innerStackPanel.FontSize, innerStackPanel.FontStyle, innerStackPanel.FontWeight);
 
+        // Select an option until we get a filter bound.
+        SelectShowBranchesFilterOption(selectedIndex: 0);
+
         innerStackPanel.PreferredSizeChanged += (_, _) =>
         {
             // A constrained DesiredSize can stay unchanged when the source preferred size grows.
@@ -97,7 +100,6 @@ internal sealed partial class FilterToolBar : TranslatedControl
             }
         };
 
-        // Select an option until we get a filter bound.
         tsbtnAdvancedFilter.Click += tsbtnAdvancedFilter_ButtonClick;
         tsmiResetPathFilters.Click += tsmiDisablePathFilters_Click;
         tsmiResetAllFilters.Click += tsmiDisableAllFilters_Click;
@@ -120,10 +122,10 @@ internal sealed partial class FilterToolBar : TranslatedControl
         tsmiBranchLocal.Click += (_, _) => UpdateBranchFilterItems();
         tsmiBranchRemote.Click += (_, _) => UpdateBranchFilterItems();
         tsmiBranchTag.Click += (_, _) => UpdateBranchFilterItems();
-        tsmiCommitFilter.Click += revisionFilterBox_CheckedChanged;
-        tsmiCommitterFilter.Click += revisionFilterBox_CheckedChanged;
-        tsmiAuthorFilter.Click += revisionFilterBox_CheckedChanged;
-        tsmiDiffContainsFilter.Click += revisionFilterBox_CheckedChanged;
+        tsmiCommitFilter.PropertyChanged += revisionFilterBox_CheckedChanged;
+        tsmiCommitterFilter.PropertyChanged += revisionFilterBox_CheckedChanged;
+        tsmiAuthorFilter.PropertyChanged += revisionFilterBox_CheckedChanged;
+        tsmiDiffContainsFilter.PropertyChanged += revisionFilterBox_CheckedChanged;
 
         _revisionFilters = AppSettings.RevisionFilterDropdowns
             .Union([
@@ -134,7 +136,6 @@ internal sealed partial class FilterToolBar : TranslatedControl
             .ToList();
         RefreshRevisionFilterItems();
 
-        SetBranchMode(tsmiShowBranchesAll, Properties.Images.BranchLocal);
         InitializeComplete();
 
         foreach (TemplatedControl button in new TemplatedControl[]
@@ -561,9 +562,7 @@ internal sealed partial class FilterToolBar : TranslatedControl
         string currentText = tscboBranchFilter.Text ?? string.Empty;
         string[] matches = (_getRefs?.Invoke(filter) ?? GetModule().GetRefs(filter))
             .Select(gitRef => gitRef.Name)
-            .Distinct(StringComparer.Ordinal)
             .Where(branch => branch.Contains(currentText, StringComparison.InvariantCultureIgnoreCase))
-            .Order(StringComparer.InvariantCulture)
             .ToArray();
 
         _updatingSuggestions = true;
@@ -674,7 +673,9 @@ internal sealed partial class FilterToolBar : TranslatedControl
 
     private void revisionFilterBox_CheckedChanged(object sender, EventArgs e)
     {
-        if (!string.IsNullOrWhiteSpace(tstxtRevisionFilter.Text))
+        // Avalonia exposes the menu check transition through the native property.
+        if (e is AvaloniaPropertyChangedEventArgs args && args.Property == MenuItem.IsCheckedProperty
+            && !string.IsNullOrWhiteSpace(tstxtRevisionFilter.Text))
         {
             ApplyRevisionFilter();
         }
@@ -719,7 +720,13 @@ internal sealed partial class FilterToolBar : TranslatedControl
     }
 
     private void tscboBranchFilter_DropDown(object sender, EventArgs e)
-        => UpdateBranchFilterItems();
+    {
+        // Avalonia also raises DropDownOpened after the editor update opens the popup.
+        if (!_updatingSuggestions)
+        {
+            UpdateBranchFilterItems();
+        }
+    }
 
     private void tscboBranchFilter_KeyUp(object sender, KeyEventArgs e)
     {
@@ -742,7 +749,7 @@ internal sealed partial class FilterToolBar : TranslatedControl
     private void tscboBranchFilter_TextUpdate(object sender, EventArgs e)
     {
         _filterBeingChanged = true;
-        if (!_isApplyingFilter && !_updatingSuggestions && tscboBranchFilter.IsDropDownOpen)
+        if (!_isApplyingFilter && !_updatingSuggestions)
         {
             UpdateBranchFilterItems();
         }

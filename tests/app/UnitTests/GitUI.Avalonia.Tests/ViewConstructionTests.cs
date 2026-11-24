@@ -88,6 +88,7 @@ public sealed class ViewConstructionTests
             GitExtUtils.ServiceContainerRegistry.RegisterServices(services);
             services.AddService<IGitExecutorProvider>(Substitute.For<IGitExecutorProvider>());
             services.AddService<ILinkFactory>(Substitute.For<ILinkFactory>());
+            services.AddService<GitCommands.UserRepositoryHistory.IRepositoryDescriptionProvider>(new GitCommands.UserRepositoryHistory.RepositoryDescriptionProvider(new GitCommands.Git.GitDirectoryResolver(new System.IO.Abstractions.FileSystem())));
             GitUI.ServiceContainerRegistry.RegisterServices(services);
             IGitModule module = Substitute.For<IGitModule>();
             module.WorkingDir.Returns(Path.GetTempPath());
@@ -100,7 +101,7 @@ public sealed class ViewConstructionTests
             commands.Module.Returns(module);
             commands.RepoChangedNotifier.Returns(Substitute.For<ILockableNotifier>());
             commands.GetService(Arg.Any<Type>()).Returns(call => services.GetService(call.Arg<Type>()));
-            FormBrowse changedForm = new(commands);
+            FormBrowse changedForm = new(commands, new BrowseArguments());
             changedForm.Show();
             Dispatcher.UIThread.RunJobs();
             changedForm.UpdateLayout();
@@ -191,8 +192,9 @@ public sealed class ViewConstructionTests
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
         IUserRepositoriesListController repositoriesController = RepositoryHistoryTestHelper.CreateEmptyController();
         commands.GetService(typeof(IUserRepositoriesListController)).Returns(repositoriesController);
+        commands.GetService(typeof(GitUI.IRepositoryCurrentBranchNameCache)).Returns(Substitute.For<GitUI.IRepositoryCurrentBranchNameCache>());
 
-        FormBrowse form = new(commands);
+        FormBrowse form = new(commands, new BrowseArguments());
         MenuItem refresh = form.FindControl<MenuItem>("refreshToolStripMenuItem")
             ?? throw new InvalidOperationException("Refresh menu item was not created.");
 
@@ -357,8 +359,9 @@ public sealed class ViewConstructionTests
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
         IUserRepositoriesListController repositoriesController = RepositoryHistoryTestHelper.CreateEmptyController();
         commands.GetService(typeof(IUserRepositoriesListController)).Returns(repositoriesController);
+        commands.GetService(typeof(GitUI.IRepositoryCurrentBranchNameCache)).Returns(Substitute.For<GitUI.IRepositoryCurrentBranchNameCache>());
 
-        FormBrowse form = new(commands);
+        FormBrowse form = new(commands, new BrowseArguments());
         MenuItem commit = form.FindControl<MenuItem>("commitToolStripMenuItem")
             ?? throw new InvalidOperationException("Commit menu item was not created.");
         commit.IsEnabled = true;
@@ -389,8 +392,9 @@ public sealed class ViewConstructionTests
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
         IUserRepositoriesListController repositoriesController = RepositoryHistoryTestHelper.CreateEmptyController();
         commands.GetService(typeof(IUserRepositoriesListController)).Returns(repositoriesController);
+        commands.GetService(typeof(GitUI.IRepositoryCurrentBranchNameCache)).Returns(Substitute.For<GitUI.IRepositoryCurrentBranchNameCache>());
 
-        FormBrowse form = new(commands);
+        FormBrowse form = new(commands, new BrowseArguments());
         MenuItem stash = form.FindControl<MenuItem>("stashToolStripMenuItem")
             ?? throw new InvalidOperationException("Manage-stashes menu item was not created.");
         stash.IsEnabled = true;
@@ -421,8 +425,9 @@ public sealed class ViewConstructionTests
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
         IUserRepositoriesListController repositoriesController = RepositoryHistoryTestHelper.CreateEmptyController();
         commands.GetService(typeof(IUserRepositoriesListController)).Returns(repositoriesController);
+        commands.GetService(typeof(GitUI.IRepositoryCurrentBranchNameCache)).Returns(Substitute.For<GitUI.IRepositoryCurrentBranchNameCache>());
 
-        FormBrowse form = new(commands);
+        FormBrowse form = new(commands, new BrowseArguments());
         MenuItem merge = form.FindControl<MenuItem>("mergeBranchToolStripMenuItem")
             ?? throw new InvalidOperationException("Merge-branches menu item was not created.");
         merge.IsEnabled = true;
@@ -454,8 +459,9 @@ public sealed class ViewConstructionTests
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
         IUserRepositoriesListController repositoriesController = RepositoryHistoryTestHelper.CreateEmptyController();
         commands.GetService(typeof(IUserRepositoriesListController)).Returns(repositoriesController);
+        commands.GetService(typeof(GitUI.IRepositoryCurrentBranchNameCache)).Returns(Substitute.For<GitUI.IRepositoryCurrentBranchNameCache>());
 
-        FormBrowse form = new(commands);
+        FormBrowse form = new(commands, new BrowseArguments());
         MenuItem rebase = form.FindControl<MenuItem>("rebaseToolStripMenuItem")
             ?? throw new InvalidOperationException("Rebase menu item was not created.");
         RevisionGridControl revisionGrid = form.FindControl<RevisionGridControl>("RevisionGrid")
@@ -503,8 +509,9 @@ public sealed class ViewConstructionTests
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
         IUserRepositoriesListController repositoriesController = RepositoryHistoryTestHelper.CreateEmptyController();
         commands.GetService(typeof(IUserRepositoriesListController)).Returns(repositoriesController);
+        commands.GetService(typeof(GitUI.IRepositoryCurrentBranchNameCache)).Returns(Substitute.For<GitUI.IRepositoryCurrentBranchNameCache>());
 
-        FormBrowse form = new(commands);
+        FormBrowse form = new(commands, new BrowseArguments());
         MenuItem pull = form.FindControl<MenuItem>("pullToolStripMenuItem")
             ?? throw new InvalidOperationException("Pull menu item was not created.");
         pull.IsEnabled = true;
@@ -537,8 +544,9 @@ public sealed class ViewConstructionTests
             commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
             IUserRepositoriesListController repositoriesController = RepositoryHistoryTestHelper.CreateEmptyController();
             commands.GetService(typeof(IUserRepositoriesListController)).Returns(repositoriesController);
+            commands.GetService(typeof(GitUI.IRepositoryCurrentBranchNameCache)).Returns(Substitute.For<GitUI.IRepositoryCurrentBranchNameCache>());
 
-            FormBrowse form = new(commands);
+            FormBrowse form = new(commands, new BrowseArguments());
             Button commit = form.FindControl<Button>("toolStripButtonCommit")!;
             Button push = form.FindControl<Button>("toolStripButtonPush")!;
             SplitButton stash = form.FindControl<SplitButton>("toolStripSplitStash")!;
@@ -582,8 +590,9 @@ public sealed class ViewConstructionTests
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
         IUserRepositoriesListController repositoriesController = RepositoryHistoryTestHelper.CreateEmptyController();
         commands.GetService(typeof(IUserRepositoriesListController)).Returns(repositoriesController);
+        commands.GetService(typeof(GitUI.IRepositoryCurrentBranchNameCache)).Returns(Substitute.For<GitUI.IRepositoryCurrentBranchNameCache>());
 
-        FormBrowse form = new(commands);
+        FormBrowse form = new(commands, new BrowseArguments());
         MenuItem checkout = form.FindControl<MenuItem>("checkoutBranchToolStripMenuItem")
             ?? throw new InvalidOperationException("Checkout-branch menu item was not created.");
         checkout.IsEnabled = true;
@@ -614,8 +623,9 @@ public sealed class ViewConstructionTests
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
         IUserRepositoriesListController repositoriesController = RepositoryHistoryTestHelper.CreateEmptyController();
         commands.GetService(typeof(IUserRepositoriesListController)).Returns(repositoriesController);
+        commands.GetService(typeof(GitUI.IRepositoryCurrentBranchNameCache)).Returns(Substitute.For<GitUI.IRepositoryCurrentBranchNameCache>());
 
-        FormBrowse form = new(commands);
+        FormBrowse form = new(commands, new BrowseArguments());
         MenuItem createBranch = form.FindControl<MenuItem>("branchToolStripMenuItem")
             ?? throw new InvalidOperationException("Create-branch menu item was not created.");
         createBranch.IsEnabled = true;
@@ -646,8 +656,9 @@ public sealed class ViewConstructionTests
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
         IUserRepositoriesListController repositoriesController = RepositoryHistoryTestHelper.CreateEmptyController();
         commands.GetService(typeof(IUserRepositoriesListController)).Returns(repositoriesController);
+        commands.GetService(typeof(GitUI.IRepositoryCurrentBranchNameCache)).Returns(Substitute.For<GitUI.IRepositoryCurrentBranchNameCache>());
 
-        FormBrowse form = new(commands);
+        FormBrowse form = new(commands, new BrowseArguments());
         MenuItem deleteBranch = form.FindControl<MenuItem>("deleteBranchToolStripMenuItem")
             ?? throw new InvalidOperationException("Delete-branch menu item was not created.");
         deleteBranch.IsEnabled = true;
@@ -678,8 +689,9 @@ public sealed class ViewConstructionTests
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
         IUserRepositoriesListController repositoriesController = RepositoryHistoryTestHelper.CreateEmptyController();
         commands.GetService(typeof(IUserRepositoriesListController)).Returns(repositoriesController);
+        commands.GetService(typeof(GitUI.IRepositoryCurrentBranchNameCache)).Returns(Substitute.For<GitUI.IRepositoryCurrentBranchNameCache>());
 
-        FormBrowse form = new(commands);
+        FormBrowse form = new(commands, new BrowseArguments());
         MenuItem createTag = form.FindControl<MenuItem>("tagToolStripMenuItem")
             ?? throw new InvalidOperationException("Create-tag menu item was not created.");
         MenuItem deleteTag = form.FindControl<MenuItem>("deleteTagToolStripMenuItem")
@@ -880,11 +892,12 @@ public sealed class ViewConstructionTests
     public void FileViewer_should_construct_and_view_a_patch()
     {
         FileViewer control = new();
+        Separator separator = control.FindControl<Separator>("toolStripSeparator4")!;
         control.ViewPatch("@@ -1,1 +1,1 @@\n-old\n+new\n");
-        control.GetTestAccessor().ContextLinesSeparator.IsVisible.Should().BeTrue();
+        separator.IsVisible.Should().BeTrue();
 
         control.ViewText("file.txt", "text");
-        control.GetTestAccessor().ContextLinesSeparator.IsVisible.Should().BeFalse();
+        separator.IsVisible.Should().BeFalse();
     }
 
     [AvaloniaTest]

@@ -1148,10 +1148,11 @@ public sealed class ParityInventoryTests
                 private ContextMenuStrip menu;
                 private ToolStripMenuItem open;
                 private CopyContextMenuItem copy;
+                private CopyPathsToolStripMenuItem copyPaths;
                 private ToolStripSeparator toolStripMenuItem1;
                 private void InitializeComponent()
                 {
-                    menu.Items.AddRange(new ToolStripItem[] { open, copy, toolStripMenuItem1 });
+                    menu.Items.AddRange(new ToolStripItem[] { open, copy, copyPaths, toolStripMenuItem1 });
                 }
             }
             """);
@@ -1166,6 +1167,7 @@ public sealed class ParityInventoryTests
               <wf:ContextMenuStrip x:Name="menu">
                 <wf:ToolStripMenuItem x:Name="open" Header="Open" />
                 <controls:CopyContextMenuItem x:Name="copy" />
+                <controls:CopyPathsToolStripMenuItem x:Name="copyPaths" Header="Copy _path(s)" />
                 <wf:ToolStripSeparator x:Name="toolStripMenuItem1" />
               </wf:ContextMenuStrip>
             </UserControl>
@@ -1181,6 +1183,10 @@ public sealed class ParityInventoryTests
             item.Parent == "menu" && item.Name == "copy");
         report.Original.Menus.Should().Contain(item =>
             item.Parent == "menu" && item.Name == "copy");
+        report.Twin.Menus.Should().Contain(item =>
+            item.Parent == "menu" && item.Name == "copyPaths" && item.Order == 2);
+        report.Original.Menus.Should().Contain(item =>
+            item.Parent == "menu" && item.Name == "copyPaths" && item.Order == 2);
         report.Twin.Menus.Should().Contain(item =>
             item.Parent == "menu" && item.Name == "toolStripMenuItem1" && item.Kind == "separator");
         report.Original.Menus.Should().Contain(item =>
@@ -1370,6 +1376,41 @@ public sealed class ParityInventoryTests
             item.Key == "helpTextLbl.Text" && item.InEnglishCatalog);
         report.Findings.Should().NotContain(item =>
             item.Code == "translation.key.missing" && item.Path == "translation.key/helpTextLbl.Text");
+    }
+
+    [Test]
+    public void Run_should_preserve_the_watermark_translation_key_from_designer_to_axaml()
+    {
+        using InventoryFixture fixture = new();
+        fixture.WriteOriginal("Widget.Designer.cs", """
+            namespace Sample;
+            public partial class Widget
+            {
+                private WatermarkComboBox filter;
+
+                private void InitializeComponent()
+                {
+                    filter.Watermark = "Filter files...";
+                }
+            }
+            """);
+        fixture.WriteOriginal("Widget.cs", "namespace Sample; public partial class Widget { }");
+        fixture.WriteTwin("Widget.axaml.cs", "namespace Sample; public partial class Widget { }");
+        fixture.WriteTwin("Widget.axaml", """
+            <UserControl xmlns="https://github.com/avaloniaui"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         xmlns:controls="using:Sample.Controls"
+                         x:Class="Sample.Widget">
+              <controls:WatermarkComboBox x:Name="filter" Watermark="Filter files..." />
+            </UserControl>
+            """);
+        fixture.WriteEnglish("filter.Watermark");
+
+        InventoryReport report = fixture.Run();
+
+        report.Original.TranslationKeys.Should().ContainSingle(key => key.Key == "filter.Watermark" && key.InEnglishCatalog);
+        report.Twin.TranslationKeys.Should().ContainSingle(key => key.Key == "filter.Watermark" && key.InEnglishCatalog);
+        report.Findings.Should().NotContain(finding => finding.Path == "translation.key/filter.Watermark");
     }
 
     [Test]

@@ -196,7 +196,7 @@ public sealed class CommitInfoParagraphCopyTests
                 ?? throw new AssertionException("The source caption characters must be attached to the owned window.");
             int activations = 0;
             block.LinkClicked += (_, _) => activations++;
-            CommitInfo.TestAccessor accessor = control.GetTestAccessor();
+            CommitInfoTestSupport.Accessor accessor = control.GetNativeTestSupport();
             try
             {
                 window.MouseMove(point);
@@ -231,8 +231,8 @@ public sealed class CommitInfoParagraphCopyTests
     {
         WithClipboard(clipboard => WithSurface("body", (control, _, window) =>
         {
-            CommitInfo.TestAccessor accessor = control.GetTestAccessor();
-            XhtmlTextBlock header = accessor.Header.GetTestAccessor().RevisionHeader;
+            CommitInfoTestSupport.Accessor accessor = control.GetNativeTestSupport();
+            XhtmlTextBlock header = accessor.Header.GetRevisionHeader();
             header.SetXHTMLText("Author:\tA &amp; B\r\nCommit hash:\tabc123");
             string body = "body first\nbody second" + (trailingParagraph ? "\n" : string.Empty);
             accessor.CommitMessage.SetXHTMLText(body.Replace("\n", "\r\n", StringComparison.Ordinal));
@@ -254,6 +254,7 @@ public sealed class CommitInfoParagraphCopyTests
 
     private static void RunLayout(Window window)
     {
+        CommitInfoTestSupport.WaitForContentsLayout(window);
         for (int pass = 0; pass < 8; pass++)
         {
             Dispatcher.UIThread.RunJobs();
@@ -291,12 +292,14 @@ public sealed class CommitInfoParagraphCopyTests
 
     private static void WithSurface(string role, Action<CommitInfo, XhtmlTextBlock, Window> verify)
     {
+        using CommitInfoTestSupport.UiContextScope uiContext = new();
         CommitInfo control = new();
-        CommitInfo.TestAccessor accessor = control.GetTestAccessor();
+        using IDisposable controlLifetime = control;
+        CommitInfoTestSupport.Accessor accessor = control.GetNativeTestSupport();
         accessor.TableLayout.IsVisible = true;
         XhtmlTextBlock block = role switch
         {
-            "header" => accessor.Header.GetTestAccessor().RevisionHeader,
+            "header" => accessor.Header.GetRevisionHeader(),
             "body" => accessor.CommitMessage,
             "refs" => accessor.RevisionInfo,
             _ => throw new ArgumentOutOfRangeException(nameof(role)),

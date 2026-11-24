@@ -247,7 +247,7 @@ public sealed class RevisionGridRefHitInfoTests
         IGitRef local = CreateRef(module, objectId, "long-local-branch-name-for-source-clipping", isRemote: false);
         IGitRef remote = CreateRef(module, objectId, "origin/main", isRemote: true);
         local.IsTrackingRemote(remote).Returns(true);
-        Control pair = RevisionGridRefRenderer.CreateLabels([local, remote]).Single();
+        Control pair = RevisionRefLabelFixture.Render([local, remote]).Single();
         pair.VerticalAlignment = VerticalAlignment.Center;
         Window window = new() { Width = 1000, Height = 100, Content = pair };
         window.Show();
@@ -415,6 +415,19 @@ public sealed class RevisionGridRefHitInfoTests
         {
             fixture.Commands.Received(1).StartCheckoutBranch(null, first.GitRef!.Name);
         }
+    }
+
+    [AvaloniaTest]
+    public void Leaving_a_realized_message_cell_should_clear_its_ref_highlight()
+    {
+        using GridFixture fixture = new(nestled: false);
+        RevisionGridRefRenderer.RefLabelControl label = fixture.Labels.Single();
+        fixture.MovePointer(label.TranslatePoint(label.CapsuleBounds.Center, fixture.Window)!.Value);
+        fixture.Labels.Single().IsHighlighted.Should().BeTrue();
+
+        fixture.MovePointer(new Point(fixture.Window.ClientSize.Width - 2, fixture.Window.ClientSize.Height - 2));
+
+        fixture.Labels.Single().IsHighlighted.Should().BeFalse();
     }
 
     [AvaloniaTest]
@@ -642,11 +655,11 @@ public sealed class RevisionGridRefHitInfoTests
                 Revision.Refs = [.. Revision.Refs, tag];
             }
 
-            Grid.GetTestAccessor().SetRevisions([Revision]);
+            Grid.GetNativeTestAccessor().SetRevisions([Revision]);
             Window = new Window { Width = 1000, Height = 180, Content = Grid };
             Window.Show();
             Dispatcher.UIThread.RunJobs();
-            Grid.GetTestAccessor().Revisions.SelectedItem = Revision;
+            Grid._gridView.SelectedItem = Revision;
             Window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
             Menu = Grid.FindControl<ContextMenu>("mainContextMenu")!;

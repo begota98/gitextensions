@@ -4,16 +4,19 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using GitCommands;
 using GitCommands.Git;
+using GitExtensions.Extensibility;
 using GitExtensions.Extensibility.Git;
 using GitExtUtils;
 using GitUI;
 using GitUI.CommandsDialogs;
 using GitUI.CommandsDialogs.BrowseDialog;
 using GitUI.CommandsDialogs.Menus;
+using GitUI.UserControls.RevisionGrid;
 using Microsoft.VisualStudio.Threading;
 using NSubstitute;
 
@@ -23,10 +26,15 @@ namespace GitExtensionsTests;
 [NonParallelizable]
 public sealed class BrowseRepositoryDropdownFocusTests
 {
+    [TearDown]
+    public void TearDown() => WorkingDirectoryTestSupport.Reset();
+
     [AvaloniaTest]
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task Refresh_should_preserve_an_open_repository_filter_and_otherwise_focus_revisions(bool dropdownOpen)
+    [TestCase(false, false)]
+    [TestCase(true, false)]
+    [TestCase(false, true)]
+    [TestCase(true, true)]
+    public async Task Refresh_should_preserve_an_open_repository_filter_and_otherwise_focus_revisions(bool dropdownOpen, bool backgroundNotification)
     {
         AvaloniaSynchronizationContext.InstallIfNeeded();
         ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
@@ -47,7 +55,10 @@ public sealed class BrowseRepositoryDropdownFocusTests
             File.WriteAllText(Path.Combine(directory, "file.txt"), "content\n");
             module.GitExecutable.RunCommand(new GitArgumentBuilder("add") { "--", "file.txt" }).Should().BeTrue();
             module.GitExecutable.RunCommand(new GitArgumentBuilder("commit") { "--quiet", "-m", "initial" }).Should().BeTrue();
-            form = new FormBrowse(new GitUICommands(services, module));
+            GitUICommands commands = new(services, module);
+            GitUIEventArgs? repositoryChanged = null;
+            commands.PostRepositoryChanged += (_, args) => repositoryChanged = args;
+            form = new FormBrowse(commands, new BrowseArguments());
             form.Show();
             await WaitUntilAsync(() => form.RevisionGrid.SelectedRevision?.ObjectId == module.GetCurrentCheckout()
                 && form.RevisionGrid.FindControl<TextBlock>("lblLoadingStatus")!.Text!.EndsWith(" revisions", StringComparison.Ordinal),
@@ -55,8 +66,8 @@ public sealed class BrowseRepositoryDropdownFocusTests
             form.Width = form.ToolStripMain.PreferredSize.Width + form.ToolStripFilters.Strip.PreferredSize.Width + 100;
             Settle(form);
             WorkingDirectoryToolStripSplitButton selector = form.FindControl<WorkingDirectoryToolStripSplitButton>("_NO_TRANSLATE_WorkingDir")!;
-            WorkingDirectoryToolStripSplitButton.TestAccessor popup = selector.GetTestAccessor();
-            ListBox revisions = form.RevisionGrid.GetTestAccessor().Revisions;
+            WorkingDirectoryTestSupport.Accessor popup = selector.GetTestAccessor();
+            ListBox revisions = form.RevisionGrid._gridView;
             if (dropdownOpen)
             {
                 Button primary = selector.GetVisualDescendants().OfType<Button>().Single(button => button.Name == "PART_PrimaryButton");
@@ -75,12 +86,40 @@ public sealed class BrowseRepositoryDropdownFocusTests
                 revisions.IsKeyboardFocusWithin.Should().BeFalse();
             }
 
+            repositoryChanged = null;
+            RevisionLoadEventArgs? revisionsLoading = null;
+            form.RevisionGrid.RevisionsLoading += (_, args) => revisionsLoading = args;
             TaskCompletionSource reloaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
             form.RevisionGrid.RevisionsLoaded += (_, _) => reloaded.TrySetResult();
-            form.ExecuteCommand(FormBrowse.Command.Refresh).Should().BeTrue();
-            await reloaded.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            Button refresh = form.FindControl<Button>("RefreshButton")!;
+            refresh.IsEnabled.Should().BeTrue();
+            int clicks = 0;
+            int notifications = 0;
+            refresh.Click += (_, _) => clicks++;
+            form.UICommands.PostRepositoryChanged += (_, _) => Interlocked.Increment(ref notifications);
             using CancellationTokenSource deadline = new(TimeSpan.FromSeconds(15));
+            if (backgroundNotification)
+            {
+                await Task.Run(commands.RepoChangedNotifier.Notify).WaitAsync(deadline.Token);
+            }
+            else
+            {
+                refresh.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            }
+
             await form.JoinLoadOperationsForTestAsync(deadline.Token);
+            await WaitUntilAsync(() => reloaded.Task.IsCompleted,
+                () => $"Refresh: clicks={clicks}, notifications={notifications}, selected={form.RevisionGrid.SelectedRevision?.ObjectId}, status={form.RevisionGrid.FindControl<TextBlock>("lblLoadingStatus")!.Text}");
+            reloaded.Task.IsCompletedSuccessfully.Should().BeTrue();
+            clicks.Should().Be(backgroundNotification ? 0 : 1);
+            notifications.Should().Be(1);
+            repositoryChanged.Should().NotBeNull();
+            revisionsLoading.Should().NotBeNull();
+            revisionsLoading!.ForceRefresh.Should().BeTrue();
+            IReadOnlyList<IGitRef> notifiedRefs = repositoryChanged!.GetRefs(RefsFilter.NoFilter);
+            notifiedRefs.Should().NotBeEmpty();
+            revisionsLoading.GetRefs(RefsFilter.NoFilter).Should().BeSameAs(notifiedRefs,
+                "Browse forwards the notification's lazy ref provider to its revision refresh");
             Settle(form);
             if (dropdownOpen)
             {

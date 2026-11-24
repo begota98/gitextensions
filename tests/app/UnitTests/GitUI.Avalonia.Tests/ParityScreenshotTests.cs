@@ -83,6 +83,8 @@ public sealed partial class ParityScreenshotTests
     private const string CaptureDeterministicRepositoryEnvironmentVariable = "GITEXT_CAPTURE_PARITY_DETERMINISTIC_REPOSITORY";
     // parity-scaffolding: Lets paired WinForms/Avalonia captures consume one externally-owned repository fixture.
     private const string CaptureRepositoryEnvironmentVariable = "GITEXT_CAPTURE_PARITY_REPOSITORY";
+    // parity-scaffolding: retain each requested comparison in a distinct evidence directory.
+    private const string CaptureOutputEnvironmentVariable = "GITEXT_CAPTURE_PARITY_OUTPUT";
     private const string AxamlExtension = ".axaml";
     private const string AppSourcePath = "src/App.cs";
     private const string FeatureBranchName = "feature/visual-parity";
@@ -103,6 +105,41 @@ public sealed partial class ParityScreenshotTests
         views.Select(view => view.ViewType).Should().OnlyHaveUniqueItems();
         views.Should().OnlyContain(view => typeof(Control).IsAssignableFrom(view.ViewType));
         views.Where(view => view.ViewType.GetConstructor(Type.EmptyTypes) is null).Should().BeEmpty();
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    [NonParallelizable]
+    public void Capture_output_should_preserve_existing_evidence(bool targetAlreadyExists)
+    {
+        string? previousOutput = Environment.GetEnvironmentVariable(CaptureOutputEnvironmentVariable);
+        string root = Path.Combine(Path.GetTempPath(), $"GitExtensions.CaptureOutput-{Guid.NewGuid():N}");
+        string target = Path.Combine(root, "avalonia");
+        string retained = Path.Combine(targetAlreadyExists ? target : root, "accepted.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(retained)!);
+        File.WriteAllText(retained, "retained capture evidence");
+        try
+        {
+            Environment.SetEnvironmentVariable(CaptureOutputEnvironmentVariable, root);
+            if (targetAlreadyExists)
+            {
+                Action capture = () => PrepareCaptureOutputDirectory();
+                capture.Should().Throw<IOException>().WithMessage("Capture evidence already exists*");
+            }
+            else
+            {
+                PrepareCaptureOutputDirectory().Should().Be(target);
+                Directory.Exists(target).Should().BeTrue();
+            }
+
+            File.ReadAllText(retained).Should().Be("retained capture evidence");
+            Directory.EnumerateFiles(root, "accepted.txt", SearchOption.AllDirectories).Should().ContainSingle();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(CaptureOutputEnvironmentVariable, previousOutput);
+            TestDirectory.Delete(root);
+        }
     }
 
     [AvaloniaTest]
@@ -176,15 +213,17 @@ public sealed partial class ParityScreenshotTests
 
                 form.Loading.IsVisible.Should().BeFalse();
                 form.Stashes.IsEnabled.Should().BeTrue();
-                form.Stashed.HasSelection.Should().Be(hasChanges);
+                form.Stashed.HasSelection.Should().BeTrue("the original selects a file or the first revision summary");
                 if (hasChanges)
                 {
                     form.Stashed.GitItemStatuses.Should().NotBeEmpty();
+                    form.Stashed.SelectedItem.Should().NotBeNull();
                     form.View.GetText().Should().NotBeEmpty();
                 }
                 else
                 {
                     form.Stashed.GitItemStatuses.Should().BeEmpty();
+                    form.Stashed.SelectedItem.Should().BeNull();
                     form.View.GetText().Should().BeNullOrEmpty();
                 }
             }
@@ -322,17 +361,19 @@ public sealed partial class ParityScreenshotTests
             else if (view is FileStatusList fileStatusList)
             {
                 FileStatusList.TestAccessor accessor = fileStatusList.GetTestAccessor();
-                if (accessor.List.IsVisible)
+                ListBox fileList = fileStatusList.FindControl<ListBox>("lstFiles")!;
+                TreeView fileTree = fileStatusList.FindControl<TreeView>("tvFiles")!;
+                if (fileList.IsVisible)
                 {
                     accessor.UpdateContextMenu();
-                    accessor.ContextMenu.Open(accessor.List);
+                    fileStatusList.FindControl<ContextMenu>("ItemContextMenu")!.Open(fileList);
                     Dispatcher.UIThread.RunJobs();
                 }
-                else if (accessor.Tree.IsVisible)
+                else if (fileTree.IsVisible)
                 {
                     for (int pass = 0; pass < 3; pass++)
                     {
-                        foreach (TreeViewItem item in accessor.Tree.GetVisualDescendants().OfType<TreeViewItem>())
+                        foreach (TreeViewItem item in fileTree.GetVisualDescendants().OfType<TreeViewItem>())
                         {
                             item.IsExpanded = true;
                         }
@@ -722,7 +763,7 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(FormBrowse))
         {
-            FormBrowse form = new(context.Commands);
+            FormBrowse form = new(context.Commands, new BrowseArguments());
             GetFieldValue<GitUI.CommitInfo.CommitInfo>(form, "RevisionInfo").ShowBranchesAsLinks = true;
             return form;
         }
@@ -813,26 +854,37 @@ public sealed partial class ParityScreenshotTests
 
         if (viewType == typeof(FormRecentReposSettings))
         {
-            return new FormRecentReposSettings(
-            [
-                new Repository(context.WorkingDirectory)
-                {
-                    Anchor = Repository.RepositoryAnchor.AnchoredInTop,
-                },
-                new Repository(Path.GetDirectoryName(context.WorkingDirectory)!),
-            ]);
+            ILocalRepositoryManager history = RepositoryHistoryManager.Locals;
+            IList<Repository> previous = ThreadHelper.JoinableTaskFactory.Run(history.LoadRecentHistoryAsync);
+            try
+            {
+                ThreadHelper.JoinableTaskFactory.Run(() => history.SaveRecentHistoryAsync(
+                [
+                    new Repository(context.WorkingDirectory)
+                    {
+                        Anchor = Repository.RepositoryAnchor.AnchoredInTop,
+                    },
+                    new Repository(Path.GetDirectoryName(context.WorkingDirectory)!),
+                ]));
+                return new FormRecentReposSettings();
+            }
+            finally
+            {
+                ThreadHelper.JoinableTaskFactory.Run(() => history.SaveRecentHistoryAsync(previous));
+            }
         }
 
         if (viewType == typeof(FormUpdates))
         {
             FormUpdates form = new(new Version(98, 0));
-            form.GetTestAccessor().DisplayReleases(
+            typeof(FormUpdates).GetMethod("CheckForNewerVersion", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(form, [
                 """
                 [Version "99.1"]
                     ReleaseType = Major
                     DownloadPage = https://github.com/gitextensions/gitextensions/releases/download/v99.1/GitExtensions-x64-99.1.msi
                     NetRuntimeVersion = 99.0.2
-                """);
+                """]);
+            typeof(FormUpdates).GetMethod("Done", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(form, null);
             return form;
         }
 
@@ -1462,9 +1514,9 @@ public sealed partial class ParityScreenshotTests
         {
             // parity-scaffolding: Use the same isolated repository-history seed and product
             // controller as the reference worker, not differently named synthetic repositories.
-            dashboard.Initialize(
-                context.Commands.GetRequiredService<IUserRepositoriesListController>(),
-                context.Commands.GetRequiredService<IRepositoryHistoryUIService>());
+            typeof(UserRepositoriesList).GetField("<Controller>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .SetValue(dashboard.userRepositoriesList, context.Commands.GetRequiredService<IUserRepositoriesListController>());
+            dashboard.userRepositoriesList.Initialize(context.Commands.GetRequiredService<IRepositoryHistoryUIService>());
             dashboard.RefreshContent();
             return;
         }
@@ -2217,7 +2269,8 @@ public sealed partial class ParityScreenshotTests
             loading.IsVisible.Should().BeFalse();
             stashes.IsEnabled.Should().BeTrue();
 
-            if (formStash.Stashed.HasSelection)
+            // FormStash starts a file preview from the selected file.
+            if (formStash.Stashed.SelectedItem is not null)
             {
                 FileViewer view = GetRequiredControl<FileViewer>(formStash, "View");
                 Stopwatch diffStopwatch = Stopwatch.StartNew();
@@ -2299,9 +2352,9 @@ public sealed partial class ParityScreenshotTests
 
         // The revision list and primary commit-details loaders complete independently.
         // Wait for the selected revision's header and message before recording it.
-        CommitInfo.TestAccessor commitInfo = formBrowse.RevisionInfo.GetTestAccessor();
+        CommitInfoTestSupport.Accessor commitInfo = formBrowse.RevisionInfo.GetNativeTestSupport();
         Stopwatch commitInfoStopwatch = Stopwatch.StartNew();
-        while ((!commitInfo.Header.GetTestAccessor().RevisionHeader.GetPlainText()
+        while ((!commitInfo.Header.GetRevisionHeader().GetPlainText()
             .Contains(revision.ObjectId.ToString(), StringComparison.Ordinal)
                 || string.IsNullOrWhiteSpace(commitInfo.CommitMessage.GetPlainText())
                 || string.IsNullOrWhiteSpace(commitInfo.RevisionInfo.GetPlainText()))
@@ -2311,7 +2364,7 @@ public sealed partial class ParityScreenshotTests
             await Task.Delay(10);
         }
 
-        commitInfo.Header.GetTestAccessor().RevisionHeader.GetPlainText()
+        commitInfo.Header.GetRevisionHeader().GetPlainText()
             .Should().Contain(revision.ObjectId.ToString());
         commitInfo.CommitMessage.GetPlainText().Should().NotBeNullOrWhiteSpace();
         commitInfo.RevisionInfo.GetPlainText().Should().NotBeNullOrWhiteSpace();
@@ -2962,7 +3015,30 @@ public sealed partial class ParityScreenshotTests
     }
 
     private static string GetOutputDirectory([CallerFilePath] string thisFilePath = "")
-        => Path.Combine(FindRepositoryRoot(thisFilePath), "eng", "avalonia", "parity-shots");
+    {
+        string? configuredPath = Environment.GetEnvironmentVariable(CaptureOutputEnvironmentVariable);
+        return string.IsNullOrWhiteSpace(configuredPath)
+            ? Path.Combine(FindRepositoryRoot(thisFilePath), "eng", "avalonia", "parity-shots")
+            : Path.GetFullPath(configuredPath);
+    }
+
+    // parity-scaffolding: explicit evidence roots refuse replacement; the default remains disposable staging.
+    private static string PrepareCaptureOutputDirectory()
+    {
+        string outputDirectory = Path.Combine(GetOutputDirectory(), "avalonia");
+        if (Directory.Exists(outputDirectory))
+        {
+            if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(CaptureOutputEnvironmentVariable)))
+            {
+                throw new IOException($"Capture evidence already exists at {outputDirectory}; choose a fresh output directory.");
+            }
+
+            TestDirectory.Delete(outputDirectory);
+        }
+
+        Directory.CreateDirectory(outputDirectory);
+        return outputDirectory;
+    }
 
     private static string FindRepositoryRoot(string startPath)
     {

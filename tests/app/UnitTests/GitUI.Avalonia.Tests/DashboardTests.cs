@@ -13,6 +13,7 @@ using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using GitCommands;
@@ -29,6 +30,7 @@ using GitUI.Compat;
 using GitUI.Theming;
 using Microsoft.VisualStudio.Threading;
 using NSubstitute;
+using Color = Avalonia.Media.Color;
 using WinFormsControls = GitUI.Compat.WinFormsControls;
 
 namespace GitExtensionsTests;
@@ -43,8 +45,8 @@ public sealed class DashboardTests
     public void Dashboard_flow_panels_should_clip_long_translated_link_pixels_to_their_native_client(string panelName, string translationField)
     {
         RepositoryHistorySnapshot snapshot = new([], []);
-        Dashboard dashboard = new();
-        dashboard.Initialize(CreateController(snapshot), CreateHistory(snapshot));
+        Dashboard dashboard = CreateDashboard();
+        Initialize(dashboard, CreateController(snapshot), CreateHistory(snapshot));
         Window window = new() { Width = 900, Height = 600, Content = dashboard };
         try
         {
@@ -101,8 +103,8 @@ public sealed class DashboardTests
     {
         GitExtensions.Shims.WinForms.Font originalFont = AppSettings.Font;
         RepositoryHistorySnapshot snapshot = new([], []);
-        Dashboard dashboard = new();
-        dashboard.Initialize(CreateController(snapshot), CreateHistory(snapshot));
+        Dashboard dashboard = CreateDashboard();
+        Initialize(dashboard, CreateController(snapshot), CreateHistory(snapshot));
         Window window = new() { Width = 686, Height = 250, Content = dashboard };
         try
         {
@@ -150,8 +152,8 @@ public sealed class DashboardTests
     public void Dashboard_capture_should_describe_runtime_docking_and_content_sizing_without_changing_pixels(int width, int height)
     {
         RepositoryHistorySnapshot snapshot = new([], []);
-        Dashboard dashboard = new();
-        dashboard.Initialize(CreateController(snapshot), CreateHistory(snapshot));
+        Dashboard dashboard = CreateDashboard();
+        Initialize(dashboard, CreateController(snapshot), CreateHistory(snapshot));
         Window window = new() { Width = width, Height = height, Content = dashboard };
         try
         {
@@ -210,7 +212,7 @@ public sealed class DashboardTests
         RepositoryHistorySnapshot snapshot = new([], [
             new RepositoryHistoryEntry(favourite, "favourite", "main", IsFavourite: true, IsAnchored: false)]);
         UserRepositoriesList list = new();
-        list.Initialize(CreateController(snapshot), CreateHistory(snapshot), () => Substitute.For<IGitUICommands>());
+        Initialize(list, CreateController(snapshot), CreateHistory(snapshot));
         list.ShowRecentRepositories(reloadData: false);
         Window window = new() { Width = 700, Height = 500, Content = list };
         ContextMenu categoryMenu = list.FindControl<ContextMenu>("contextMenuStripCategory")!;
@@ -273,7 +275,7 @@ public sealed class DashboardTests
         RepositoryHistorySnapshot snapshot = new(
             [new RepositoryHistoryEntry(recent, "recent", "main", IsFavourite: false, IsAnchored: false)], []);
         UserRepositoriesList list = new();
-        list.Initialize(CreateController(snapshot), CreateHistory(snapshot), () => Substitute.For<IGitUICommands>());
+        Initialize(list, CreateController(snapshot), CreateHistory(snapshot));
         list.ShowRecentRepositories(reloadData: false);
         Window window = new() { Width = 700, Height = 500, Content = list, RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Light };
         try
@@ -316,14 +318,14 @@ public sealed class DashboardTests
             [new RepositoryHistoryEntry(recent, "recent", "main", IsFavourite: false, IsAnchored: false)],
             [new RepositoryHistoryEntry(favourite, "favourite", "main", IsFavourite: true, IsAnchored: false)]);
         UserRepositoriesList list = new();
-        list.Initialize(CreateController(snapshot), CreateHistory(snapshot), () => Substitute.For<IGitUICommands>());
+        Initialize(list, CreateController(snapshot), CreateHistory(snapshot));
         list.ShowRecentRepositories(reloadData: false);
         Window window = new() { Width = 700, Height = 400, Content = list };
         try
         {
             window.Show();
             Dispatcher.UIThread.RunJobs();
-            list.GetTestAccessor().Search.Focus();
+            list.textBoxSearch.Focus();
             using AvaloniaControlStateDriver? driver = captureRoute
                 ? AvaloniaControlStateDriver.Apply(list, new CaptureStatePlan
                 {
@@ -336,7 +338,7 @@ public sealed class DashboardTests
             }
 
             Dispatcher.UIThread.RunJobs();
-            ListBox repositories = list.GetTestAccessor().List;
+            ListBox repositories = list.listView1;
             repositories.IsKeyboardFocusWithin.Should().BeTrue();
             repositories.FocusAdorner.Should().BeNull("the source ListView has BorderStyle.None and owner-drawn selection only");
             repositories.SelectedItem.Should().Be(repositories.Items.OfType<UserRepositoriesList.RepositoryListItem>().First());
@@ -349,7 +351,7 @@ public sealed class DashboardTests
             repositories.SelectedItem.Should().Be(repositories.Items.OfType<UserRepositoriesList.RepositoryListItem>().First());
             window.KeyPress(Key.Up, RawInputModifiers.None, PhysicalKey.ArrowUp, null);
             Dispatcher.UIThread.RunJobs();
-            list.GetTestAccessor().Search.IsFocused.Should().BeTrue();
+            list.textBoxSearch.IsFocused.Should().BeTrue();
             repositories.SelectedItem.Should().Be(repositories.Items.OfType<UserRepositoriesList.RepositoryListItem>().First());
         }
         finally
@@ -362,7 +364,7 @@ public sealed class DashboardTests
     [Category("P8.6i.126")]
     public void Dashboard_backdrop_should_tile_the_original_image_without_resizing_it()
     {
-        Dashboard dashboard = new();
+        Dashboard dashboard = CreateDashboard();
         Window window = new() { Width = 1500, Height = 1000, Content = dashboard };
         try
         {
@@ -391,14 +393,14 @@ public sealed class DashboardTests
     {
         UserRepositoriesList list = new();
         RepositoryHistorySnapshot snapshot = new([], []);
-        list.Initialize(CreateController(snapshot), CreateHistory(snapshot), () => Substitute.For<IGitUICommands>());
+        Initialize(list, CreateController(snapshot), CreateHistory(snapshot));
         TextBox other = new();
         Window window = new() { Width = 700, Height = 400, Content = new StackPanel { Children = { list, other } } };
         try
         {
             window.Show();
             Dispatcher.UIThread.RunJobs();
-            TextBox search = list.GetTestAccessor().Search;
+            TextBox search = list.textBoxSearch;
             Border rim = search.GetVisualDescendants().OfType<Border>().Single(border => border.Name == "NativeFrame");
             Border underline = search.GetVisualDescendants().OfType<Border>().Single(border => border.Name == "NativeUnderline");
             TextBlock placeholder = search.GetVisualDescendants().OfType<TextBlock>().Single(text => text.Name == "PART_Placeholder");
@@ -439,8 +441,8 @@ public sealed class DashboardTests
     public void Dashboard_should_focus_search_after_the_initial_window_activation(bool refreshBeforeShowing)
     {
         RepositoryHistorySnapshot snapshot = new([], []);
-        Dashboard dashboard = new();
-        dashboard.Initialize(CreateController(snapshot), CreateHistory(snapshot));
+        Dashboard dashboard = CreateDashboard();
+        Initialize(dashboard, CreateController(snapshot), CreateHistory(snapshot));
         if (refreshBeforeShowing)
         {
             dashboard.RefreshContent();
@@ -459,10 +461,10 @@ public sealed class DashboardTests
             }
 
             window.UpdateLayout();
-            dashboard.GetTestAccessor().Repositories.GetTestAccessor().Search.IsFocused.Should().BeTrue();
+            dashboard.GetTestAccessor().Repositories.textBoxSearch.IsFocused.Should().BeTrue();
             using AvaloniaControlStateDriver driver = AvaloniaControlStateDriver.Apply(dashboard,
                 new CaptureStatePlan { Id = "normal", Kind = CaptureStateKind.Normal });
-            dashboard.GetTestAccessor().Repositories.GetTestAccessor().Search.IsFocused.Should().BeTrue(
+            dashboard.GetTestAccessor().Repositories.textBoxSearch.IsFocused.Should().BeTrue(
                 "normal capture must preserve the product's visible-change focus");
         }
         finally
@@ -484,7 +486,7 @@ public sealed class DashboardTests
             [new RepositoryHistoryEntry(recent, "recent", "main", IsFavourite: false, IsAnchored: false)],
             [new RepositoryHistoryEntry(favourite, "favourite", "main", IsFavourite: true, IsAnchored: false)]);
         UserRepositoriesList list = new() { FontSize = fontSize };
-        list.Initialize(CreateController(snapshot), CreateHistory(snapshot), () => Substitute.For<IGitUICommands>());
+        Initialize(list, CreateController(snapshot), CreateHistory(snapshot));
         list.ShowRecentRepositories(reloadData: false);
         Window window = new() { Width = 700, Height = 500, Content = list };
         try
@@ -548,8 +550,8 @@ public sealed class DashboardTests
     public void Dashboard_should_recreate_anonymous_source_links_in_order_and_inherit_the_selected_font()
     {
         RepositoryHistorySnapshot snapshot = new([], []);
-        Dashboard dashboard = new();
-        dashboard.Initialize(CreateController(snapshot), CreateHistory(snapshot));
+        Dashboard dashboard = CreateDashboard();
+        Initialize(dashboard, CreateController(snapshot), CreateHistory(snapshot));
         Window window = new() { Width = 686, Height = 550, Content = dashboard };
         try
         {
@@ -613,8 +615,8 @@ public sealed class DashboardTests
     public async Task Dashboard_links_should_keep_chrome_transparent_in_hover_and_pressed_states()
     {
         RepositoryHistorySnapshot snapshot = new([], []);
-        Dashboard dashboard = new();
-        dashboard.Initialize(CreateController(snapshot), CreateHistory(snapshot));
+        Dashboard dashboard = CreateDashboard();
+        Initialize(dashboard, CreateController(snapshot), CreateHistory(snapshot));
         Window window = new() { Width = 686, Height = 550, Content = dashboard };
         try
         {
@@ -629,11 +631,11 @@ public sealed class DashboardTests
             window.MouseMove(point);
             Dispatcher.UIThread.RunJobs();
             link.IsPointerOver.Should().BeTrue();
-            ((Avalonia.Media.ISolidColorBrush)link.Foreground!).Color.Should().Be(DashboardTheme.Light.PrimaryText,
+            ((Avalonia.Media.ISolidColorBrush)link.Foreground!).Color.Should().Be(AvaloniaThemeResources.ToMediaColor(DashboardTheme.Light.PrimaryText),
                 "source MouseHover does not recolor a link immediately on entering its control");
             await Task.Delay(link.HoverDelay + TimeSpan.FromMilliseconds(50));
             Dispatcher.UIThread.RunJobs();
-            ((Avalonia.Media.ISolidColorBrush)link.Foreground!).Color.Should().Be(DashboardTheme.Light.AccentedText);
+            ((Avalonia.Media.ISolidColorBrush)link.Foreground!).Color.Should().Be(AvaloniaThemeResources.ToMediaColor(DashboardTheme.Light.AccentedText));
             ((Avalonia.Media.ISolidColorBrush)presenter.Background!).Color.A.Should().Be(0);
             point = link.TranslatePoint(link.CaptionHitBounds.Center, window)!.Value;
             window.MouseMove(point);
@@ -660,8 +662,8 @@ public sealed class DashboardTests
         GitExtensions.Shims.WinForms.Font originalFont = AppSettings.Font;
         AppSettings.Font = new GitExtensions.Shims.WinForms.Font("Segoe UI", fontPoints);
         RepositoryHistorySnapshot snapshot = new([], []);
-        Dashboard dashboard = new();
-        dashboard.Initialize(CreateController(snapshot), CreateHistory(snapshot));
+        Dashboard dashboard = CreateDashboard();
+        Initialize(dashboard, CreateController(snapshot), CreateHistory(snapshot));
         Window window = new() { Width = 900, Height = 900, Content = dashboard };
         try
         {
@@ -695,8 +697,8 @@ public sealed class DashboardTests
     public void Dashboard_link_should_limit_active_color_and_hand_cursor_to_its_caption()
     {
         RepositoryHistorySnapshot snapshot = new([], []);
-        Dashboard dashboard = new();
-        dashboard.Initialize(CreateController(snapshot), CreateHistory(snapshot));
+        Dashboard dashboard = CreateDashboard();
+        Initialize(dashboard, CreateController(snapshot), CreateHistory(snapshot));
         Window window = new() { Width = 686, Height = 550, Content = dashboard };
         try
         {
@@ -721,7 +723,7 @@ public sealed class DashboardTests
             ((Avalonia.Media.ISolidColorBrush)link.Foreground!).Color.Should().Be(Avalonia.Media.Colors.Red);
             window.MouseUp(new Point(1, 1), MouseButton.Left);
             Dispatcher.UIThread.RunJobs();
-            ((Avalonia.Media.ISolidColorBrush)link.Foreground!).Color.Should().Be(DashboardTheme.Light.PrimaryText);
+            ((Avalonia.Media.ISolidColorBrush)link.Foreground!).Color.Should().Be(AvaloniaThemeResources.ToMediaColor(DashboardTheme.Light.PrimaryText));
         }
         finally
         {
@@ -737,8 +739,8 @@ public sealed class DashboardTests
     public void Dashboard_caption_should_paint_active_for_nonleft_buttons_without_invoking_its_command(MouseButton button)
     {
         RepositoryHistorySnapshot snapshot = new([], []);
-        Dashboard dashboard = new();
-        dashboard.Initialize(CreateController(snapshot), CreateHistory(snapshot));
+        Dashboard dashboard = CreateDashboard();
+        Initialize(dashboard, CreateController(snapshot), CreateHistory(snapshot));
         Window window = new() { Width = 686, Height = 550, Content = dashboard };
         try
         {
@@ -779,7 +781,7 @@ public sealed class DashboardTests
             link.Cursor!.ToString().Should().Contain(nameof(StandardCursorType.Arrow));
             window.MouseUp(captionPoint, button);
             Dispatcher.UIThread.RunJobs();
-            ((ISolidColorBrush)link.Foreground!).Color.Should().Be(DashboardTheme.Light.PrimaryText);
+            ((ISolidColorBrush)link.Foreground!).Color.Should().Be(AvaloniaThemeResources.ToMediaColor(DashboardTheme.Light.PrimaryText));
             clicks.Should().Be(0);
             window.MouseDown(imagePoint, button);
             Dispatcher.UIThread.RunJobs();
@@ -805,8 +807,8 @@ public sealed class DashboardTests
         GitExtensions.Shims.WinForms.Font originalFont = AppSettings.Font;
         AppSettings.Font = new GitExtensions.Shims.WinForms.Font("Segoe UI", fontPoints);
         RepositoryHistorySnapshot snapshot = new([], []);
-        Dashboard dashboard = new();
-        dashboard.Initialize(CreateController(snapshot), CreateHistory(snapshot));
+        Dashboard dashboard = CreateDashboard();
+        Initialize(dashboard, CreateController(snapshot), CreateHistory(snapshot));
         Window window = new() { Width = 900, Height = 900, Content = dashboard, RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Light };
         Window? expectedWindow = null;
         try
@@ -892,11 +894,11 @@ public sealed class DashboardTests
     public void Dashboard_link_keyboard_focus_should_paint_only_the_native_caption_rectangle()
     {
         RepositoryHistorySnapshot snapshot = new([], []);
-        Dashboard dashboard = new();
+        Dashboard dashboard = CreateDashboard();
         // The headless App does not execute the desktop theme initialization.
         dashboard.Resources["GitExtensionsKnownColorControlTextBrush"] =
             new Avalonia.Media.SolidColorBrush(Avalonia.Media.Colors.Black);
-        dashboard.Initialize(CreateController(snapshot), CreateHistory(snapshot));
+        Initialize(dashboard, CreateController(snapshot), CreateHistory(snapshot));
         Window window = new() { Width = 686, Height = 550, Content = dashboard };
         try
         {
@@ -938,8 +940,8 @@ public sealed class DashboardTests
     public async Task Dashboard_link_hover_should_reset_on_exit_disable_and_source_refresh()
     {
         RepositoryHistorySnapshot snapshot = new([], []);
-        Dashboard dashboard = new();
-        dashboard.Initialize(CreateController(snapshot), CreateHistory(snapshot));
+        Dashboard dashboard = CreateDashboard();
+        Initialize(dashboard, CreateController(snapshot), CreateHistory(snapshot));
         Window window = new() { Width = 686, Height = 550, Content = dashboard };
         try
         {
@@ -953,7 +955,7 @@ public sealed class DashboardTests
             window.MouseMove(new Point(1, 1));
             await Task.Delay(link.HoverDelay + TimeSpan.FromMilliseconds(50));
             Dispatcher.UIThread.RunJobs();
-            ((Avalonia.Media.ISolidColorBrush)link.Foreground!).Color.Should().Be(DashboardTheme.Light.PrimaryText);
+            ((Avalonia.Media.ISolidColorBrush)link.Foreground!).Color.Should().Be(AvaloniaThemeResources.ToMediaColor(DashboardTheme.Light.PrimaryText));
             window.MouseMove(point);
             link.IsEnabled = false;
             await Task.Delay(link.HoverDelay + TimeSpan.FromMilliseconds(50));
@@ -985,8 +987,8 @@ public sealed class DashboardTests
         GitExtensions.Shims.WinForms.Font originalFont = AppSettings.Font;
         AppSettings.Font = new GitExtensions.Shims.WinForms.Font("Segoe UI", points);
         RepositoryHistorySnapshot snapshot = new([], []);
-        Dashboard dashboard = new();
-        dashboard.Initialize(CreateController(snapshot), CreateHistory(snapshot));
+        Dashboard dashboard = CreateDashboard();
+        Initialize(dashboard, CreateController(snapshot), CreateHistory(snapshot));
         Window window = new() { Width = 900, Height = 900, Content = dashboard };
         try
         {
@@ -1033,8 +1035,8 @@ public sealed class DashboardTests
     public void Dashboard_background_tile_should_stay_fixed_when_focus_scrolls_the_minimum_layout()
     {
         RepositoryHistorySnapshot snapshot = new([], []);
-        Dashboard dashboard = new();
-        dashboard.Initialize(CreateController(snapshot), CreateHistory(snapshot));
+        Dashboard dashboard = CreateDashboard();
+        Initialize(dashboard, CreateController(snapshot), CreateHistory(snapshot));
         Window window = new() { Width = 686, Height = 200, Content = dashboard };
         try
         {
@@ -1114,7 +1116,7 @@ public sealed class DashboardTests
     [TestCase(1000)]
     public void Dashboard_should_allocate_source_percentage_columns_in_whole_client_pixels(int width)
     {
-        Dashboard dashboard = new();
+        Dashboard dashboard = CreateDashboard();
         Window window = new() { Width = width, Height = 600, Content = dashboard };
         try
         {
@@ -1176,7 +1178,7 @@ public sealed class DashboardTests
     [Category("P8.6i.126")]
     public void Dashboard_logo_should_keep_the_authored_PictureBox_frame_while_zooming_its_image()
     {
-        Dashboard dashboard = new();
+        Dashboard dashboard = CreateDashboard();
         dashboard.Resources["GitExtensionsControlForegroundBrush"] = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Colors.Magenta);
         dashboard.Resources["GitExtensionsKnownColorControlTextBrush"] = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Colors.White);
         Window window = new() { Width = 686, Height = 600, Content = dashboard };
@@ -1228,8 +1230,8 @@ public sealed class DashboardTests
             table.Bounds.Width.Should().Be(width - 40);
             table.ClipToBounds.Should().BeTrue("native child HWNDs cannot paint outside the table's client rectangle");
             table.ColumnDefinitions[0].ActualWidth.Should().Be(columnWidth);
-            list.GetTestAccessor().List.Bounds.Width.Should().Be(columnWidth);
-            list.GetTestAccessor().Search.Bounds.Width.Should().Be(columnWidth - 6);
+            list.listView1.Bounds.Width.Should().Be(columnWidth);
+            list.textBoxSearch.Bounds.Width.Should().Be(columnWidth - 6);
         }
         finally
         {
@@ -1245,7 +1247,7 @@ public sealed class DashboardTests
         RepositoryHistorySnapshot snapshot = new(
             [new RepositoryHistoryEntry(repository, "recent", "main", IsFavourite: false, IsAnchored: false)], []);
         UserRepositoriesList list = new();
-        list.Initialize(CreateController(snapshot), CreateHistory(snapshot), () => Substitute.For<IGitUICommands>());
+        Initialize(list, CreateController(snapshot), CreateHistory(snapshot));
         list.ShowRecentRepositories(reloadData: false);
         TextBox otherInput = new();
         Window window = new() { Width = 700, Height = 400, Content = new StackPanel { Children = { list, otherInput } } };
@@ -1264,7 +1266,7 @@ public sealed class DashboardTests
             tile.IsPointerOver.Should().BeTrue();
             ((Avalonia.Media.SolidColorBrush)paintedBounds.Background!).Color.Should().Be(Avalonia.Media.Colors.Cyan);
             window.MouseMove(new Point(699, 399));
-            list.GetTestAccessor().List.SelectedItem = tile.Content;
+            list.listView1.SelectedItem = tile.Content;
             tile.Focus();
             Dispatcher.UIThread.RunJobs();
             ((Avalonia.Media.SolidColorBrush)paintedBounds.Background!).Color.Should().Be(Avalonia.Media.Colors.Cyan);
@@ -1352,8 +1354,8 @@ public sealed class DashboardTests
     public void Dashboard_should_scroll_the_source_minimum_layout_instead_of_clipping_commands()
     {
         RepositoryHistorySnapshot snapshot = new([], []);
-        Dashboard dashboard = new();
-        dashboard.Initialize(CreateController(snapshot), CreateHistory(snapshot));
+        Dashboard dashboard = CreateDashboard();
+        Initialize(dashboard, CreateController(snapshot), CreateHistory(snapshot));
         Window window = new() { Width = 686, Height = 358, Content = dashboard };
         try
         {
@@ -1414,10 +1416,10 @@ public sealed class DashboardTests
             Dispatcher.UIThread.RunJobs();
             // Focus is forwarded to the first child, so the container itself loses focus.
             list.Focus();
-            list.GetTestAccessor().Search.IsFocused.Should().BeTrue();
-            list.GetTestAccessor().Search.PlaceholderText.Should().BeNull();
+            list.textBoxSearch.IsFocused.Should().BeTrue();
+            list.textBoxSearch.PlaceholderText.Should().BeNull();
             otherInput.Focus();
-            list.GetTestAccessor().Search.PlaceholderText.Should().Be("Search repositories...");
+            list.textBoxSearch.PlaceholderText.Should().Be("Search repositories...");
             Avalonia.Media.Color foreground = Avalonia.Media.Color.FromRgb(12, 34, 56);
             list.ForeColor = foreground;
             ((Avalonia.Media.SolidColorBrush)list.Foreground!).Color.Should().Be(foreground);
@@ -1429,8 +1431,27 @@ public sealed class DashboardTests
     }
 
     [AvaloniaTest]
+    public void Repository_list_should_create_the_original_controller_lazily_from_its_owning_form()
+    {
+        IGitUICommands commands = Substitute.For<IGitUICommands>();
+        IRepositoryCurrentBranchNameCache cache = Substitute.For<IRepositoryCurrentBranchNameCache>();
+        commands.GetService(typeof(IRepositoryCurrentBranchNameCache)).Returns(cache);
+        using RepositoryListOwner owner = new(commands);
+        UserRepositoriesList list = new();
+        owner.Content = list;
+        PropertyInfo controller = typeof(UserRepositoriesList).GetProperty("Controller", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+        object? first = controller.GetValue(list);
+        object? second = controller.GetValue(list);
+
+        first.Should().BeOfType<UserRepositoriesListController>();
+        second.Should().BeSameAs(first);
+        commands.Received(1).GetService(typeof(IRepositoryCurrentBranchNameCache));
+    }
+
+    [AvaloniaTest]
     [Category("P4.5")]
-    public void Repository_list_should_show_shared_recent_favourite_and_branch_data()
+    public async Task Repository_list_should_show_shared_recent_favourite_and_branch_data()
     {
         Repository recent = new(@"C:\repos\recent");
         Repository favourite = new(@"C:\repos\favourite") { Category = "Team" };
@@ -1442,18 +1463,18 @@ public sealed class DashboardTests
         IRepositoryHistoryUIService history = CreateHistory(snapshot);
         UserRepositoriesList list = new();
 
-        list.Initialize(controller, history, () => Substitute.For<IGitUICommands>());
+        Initialize(list, controller, history);
         list.ShowRecentRepositories(reloadData: false);
 
-        UserRepositoriesList.TestAccessor accessor = list.GetTestAccessor();
-        accessor.List.Items.OfType<UserRepositoriesList.RepositoryGroupItem>().Select(row => row.Name)
+        list.listView1.Items.OfType<UserRepositoriesList.RepositoryGroupItem>().Select(row => row.Name)
             .Should().Contain("Recent repositories", "Team");
-        accessor.List.Items.OfType<UserRepositoriesList.RepositoryListItem>().Select(row => row.BranchName)
+        await WaitForBranchesAsync(list, "main", "feature");
+        list.listView1.Items.OfType<UserRepositoriesList.RepositoryListItem>().Select(row => row.BranchName)
             .Should().Contain("main", "feature");
 
-        accessor.Search.Text = "feature";
+        list.textBoxSearch.Text = "feature";
 
-        accessor.List.Items.OfType<UserRepositoriesList.RepositoryListItem>()
+        list.listView1.Items.OfType<UserRepositoriesList.RepositoryListItem>()
             .Should().ContainSingle(row => row.Repository.Repo.Path == favourite.Path);
     }
 
@@ -1466,7 +1487,7 @@ public sealed class DashboardTests
             [],
             [new RepositoryHistoryEntry(favourite, "favourite", "main", IsFavourite: true, IsAnchored: false)]);
         UserRepositoriesList list = new();
-        list.Initialize(CreateController(snapshot), CreateHistory(snapshot), () => Substitute.For<IGitUICommands>());
+        Initialize(list, CreateController(snapshot), CreateHistory(snapshot));
         list.ShowRecentRepositories(reloadData: false);
         Window window = new() { Content = list };
 
@@ -1518,6 +1539,40 @@ public sealed class DashboardTests
 
     [AvaloniaTest]
     [Category("P8.6i.126")]
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase(" ")]
+    public void Repository_list_should_keep_favorites_without_a_named_group(string? category)
+    {
+        Repository recent = new(@"C:\repos\recent");
+        Repository favourite = new(@"C:\repos\favourite") { Category = category };
+        Repository uncategorized = new(@"C:\repos\uncategorized");
+        Repository emptyCategory = new(@"C:\repos\empty") { Category = string.Empty };
+        Repository categorized = new(@"C:\repos\categorized") { Category = "Team" };
+        RepositoryHistorySnapshot snapshot = new(
+            [new RepositoryHistoryEntry(recent, "recent", "main", IsFavourite: false, IsAnchored: false)],
+            [new RepositoryHistoryEntry(favourite, "favourite", "main", IsFavourite: true, IsAnchored: false),
+             new RepositoryHistoryEntry(uncategorized, "uncategorized", "main", IsFavourite: true, IsAnchored: false),
+             new RepositoryHistoryEntry(emptyCategory, "empty", "main", IsFavourite: true, IsAnchored: false),
+             new RepositoryHistoryEntry(categorized, "categorized", "main", IsFavourite: true, IsAnchored: false)]);
+        UserRepositoriesList list = new();
+        Initialize(list, CreateController(snapshot), CreateHistory(snapshot));
+
+        list.ShowRecentRepositories(reloadData: false);
+
+        UserRepositoriesList.RepositoryListItem[] items = [.. list.listView1.Items.OfType<UserRepositoriesList.RepositoryListItem>()];
+        items.Should().HaveCount(5);
+        UserRepositoriesList.RepositoryListItem unmatched = items.Single(item => ReferenceEquals(item.Repository.Repo, favourite));
+        unmatched.IsFavourite.Should().BeTrue();
+        unmatched.Group.IsRecentGroup.Should().BeFalse();
+        items.Single(item => ReferenceEquals(item.Repository.Repo, uncategorized)).Group.Should().BeSameAs(unmatched.Group);
+        items.Single(item => ReferenceEquals(item.Repository.Repo, emptyCategory)).Group.Should().BeSameAs(unmatched.Group);
+        items.Single(item => ReferenceEquals(item.Repository.Repo, recent)).Group.IsRecentGroup.Should().BeTrue();
+        items.Single(item => ReferenceEquals(item.Repository.Repo, categorized)).Group.Name.Should().Be("Team");
+    }
+
+    [AvaloniaTest]
+    [Category("P8.6i.126")]
     [TestCase("main")]
     [TestCase("")]
     public void Categorized_repository_should_use_the_source_tile_geometry_and_star_overlay(string branchName)
@@ -1527,7 +1582,7 @@ public sealed class DashboardTests
             [],
             [new RepositoryHistoryEntry(favourite, "favourite", branchName, IsFavourite: true, IsAnchored: false)]);
         UserRepositoriesList list = new();
-        list.Initialize(CreateController(snapshot), CreateHistory(snapshot), () => Substitute.For<IGitUICommands>());
+        Initialize(list, CreateController(snapshot), CreateHistory(snapshot));
         list.ShowRecentRepositories(reloadData: false);
         Window window = new() { Content = list };
 
@@ -1576,16 +1631,15 @@ public sealed class DashboardTests
             [new RepositoryHistoryEntry(repository, "recent", "main", IsFavourite: false, IsAnchored: false)], []);
         IUserRepositoriesListController controller = CreateController(snapshot);
         UserRepositoriesList list = new();
-        list.Initialize(controller, CreateHistory(snapshot), () => Substitute.For<IGitUICommands>());
+        Initialize(list, controller, CreateHistory(snapshot));
         list.ShowRecentRepositories(reloadData: false);
         Window window = new() { Content = list };
         try
         {
             window.Show();
             Dispatcher.UIThread.RunJobs();
-            UserRepositoriesList.TestAccessor accessor = list.GetTestAccessor();
-            accessor.List.SelectedItem = accessor.List.Items.OfType<UserRepositoriesList.RepositoryListItem>().Single();
-            object selected = accessor.List.SelectedItem;
+            list.listView1.SelectedItem = list.listView1.Items.OfType<UserRepositoriesList.RepositoryListItem>().Single();
+            object selected = list.listView1.SelectedItem;
             TextBlock caption = list.GetVisualDescendants().OfType<TextBlock>().Single(text => text.Text == "recent");
             TextBlock branch = list.GetVisualDescendants().OfType<TextBlock>().Single(text => text.Text == "main");
             controller.ClearReceivedCalls();
@@ -1595,7 +1649,7 @@ public sealed class DashboardTests
             list.FavouriteColor = Avalonia.Media.Colors.Gold;
             list.HoverColor = Avalonia.Media.Colors.Cyan;
 
-            accessor.List.SelectedItem.Should().BeSameAs(selected);
+            list.listView1.SelectedItem.Should().BeSameAs(selected);
             ((Avalonia.Media.SolidColorBrush)caption.Foreground!).Color.Should().Be(Avalonia.Media.Colors.Red);
             ((Avalonia.Media.SolidColorBrush)branch.Foreground!).Color.Should().Be(Avalonia.Media.Colors.Green);
             controller.DidNotReceive().PreRenderRepositories(Arg.Any<string>());
@@ -1617,8 +1671,8 @@ public sealed class DashboardTests
         TextBlock heading = list.FindControl<TextBlock>("lblRecentRepositories")!;
 
         ((Avalonia.Media.SolidColorBrush)list.Background!).Color.Should().Be(list.MainBackColor);
-        ((Avalonia.Media.SolidColorBrush)list.GetTestAccessor().List.Background!).Color.Should().Be(list.MainBackColor);
-        ((Avalonia.Media.SolidColorBrush)list.GetTestAccessor().Search.Background!).Color.Should().Be(list.SearchBackColor);
+        ((Avalonia.Media.SolidColorBrush)list.listView1.Background!).Color.Should().Be(list.MainBackColor);
+        ((Avalonia.Media.SolidColorBrush)list.textBoxSearch.Background!).Color.Should().Be(list.SearchBackColor);
         ((Avalonia.Media.SolidColorBrush)heading.Foreground!).Color.Should().Be(list.HeaderColor);
         heading.FontFamily.Name.Should().Be(AppSettings.Font.Name);
         heading.FontSize.Should().Be(AvaloniaFontSettings.ToDeviceIndependentPixels(AppSettings.Font.Size + 5.5F));
@@ -1639,7 +1693,7 @@ public sealed class DashboardTests
                 [new RepositoryHistoryEntry(repository, caption, "main", IsFavourite: false, IsAnchored: false)],
                 []);
             UserRepositoriesList list = new();
-            list.Initialize(CreateController(snapshot), CreateHistory(snapshot), () => Substitute.For<IGitUICommands>());
+            Initialize(list, CreateController(snapshot), CreateHistory(snapshot));
             list.ShowRecentRepositories(reloadData: false);
             Window window = new() { Width = 900, Height = 260, Content = list };
 
@@ -1689,17 +1743,17 @@ public sealed class DashboardTests
             [new RepositoryHistoryEntry(recent, "recent", "main", IsFavourite: false, IsAnchored: false)],
             [new RepositoryHistoryEntry(favourite, "favourite", "main", IsFavourite: true, IsAnchored: false)]);
         UserRepositoriesList list = new();
-        list.Initialize(CreateController(snapshot), CreateHistory(snapshot), () => commands);
+        Initialize(list, CreateController(snapshot), CreateHistory(snapshot));
         list.ShowRecentRepositories(reloadData: false);
         int opened = 0;
         list.GitModuleChanged += (_, _) => opened++;
-        Window window = new() { Content = list, Width = 700, Height = 500 };
+        RepositoryListOwner window = new(commands) { Content = list, Width = 700, Height = 500 };
         try
         {
             window.Show();
             Dispatcher.UIThread.RunJobs();
             using var frame = window.CaptureRenderedFrame();
-            ListBox repositories = list.GetTestAccessor().List;
+            ListBox repositories = list.listView1;
             var selected = repositories.Items.OfType<UserRepositoriesList.RepositoryListItem>()
                 .Single(item => item.IsFavourite != recentGroup);
             repositories.SelectedItem = selected;
@@ -1749,6 +1803,40 @@ public sealed class DashboardTests
     }
 
     [AvaloniaTest]
+    [TestCase("")]
+    [TestCase(" ")]
+    public void Repository_list_should_ignore_a_selected_repository_with_a_blank_path(string path)
+    {
+        Repository repository = new(path);
+        RepositoryHistorySnapshot snapshot = new(
+            [new RepositoryHistoryEntry(repository, "invalid", string.Empty, IsFavourite: false, IsAnchored: false)], []);
+        IUserRepositoriesListController controller = CreateController(snapshot);
+        UserRepositoriesList list = new();
+        Initialize(list, controller, CreateHistory(snapshot));
+        list.ShowRecentRepositories(reloadData: false);
+        Window window = new() { Width = 700, Height = 500, Content = list };
+        int opened = 0;
+        list.GitModuleChanged += (_, _) => opened++;
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            list.listView1.Focus();
+            list.listView1.SelectedItem.Should().BeOfType<UserRepositoriesList.RepositoryListItem>();
+            controller.ClearReceivedCalls();
+
+            window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+
+            opened.Should().Be(0);
+            controller.DidNotReceive().IsValidGitWorkingDir(Arg.Any<string>());
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
     [Category("P4.5")]
     public void Selecting_a_valid_dashboard_repository_should_raise_the_module_transition()
     {
@@ -1770,14 +1858,18 @@ public sealed class DashboardTests
         UserRepositoriesList list = new();
         GitModuleEventArgs? transition = null;
         list.GitModuleChanged += (_, e) => transition = e;
-        list.Initialize(controller, history, () => commands);
+        Initialize(list, controller, history);
+        using RepositoryListOwner owner = new(commands) { Content = list };
         list.ShowRecentRepositories(reloadData: false);
-        UserRepositoriesList.TestAccessor accessor = list.GetTestAccessor();
-        accessor.List.SelectedItem = accessor.List.Items
+        list.listView1.SelectedItem = list.listView1.Items
             .OfType<UserRepositoriesList.RepositoryListItem>()
             .Single();
 
-        accessor.OpenSelected();
+        list.listView1.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = InputElement.KeyDownEvent,
+            Key = Key.Enter,
+        });
 
         transition.Should().NotBeNull();
         Path.TrimEndingDirectorySeparator(transition!.GitModule.WorkingDir)
@@ -1806,9 +1898,9 @@ public sealed class DashboardTests
         UserRepositoriesList list = new();
         GitModuleEventArgs? transition = null;
         list.GitModuleChanged += (_, e) => transition = e;
-        list.Initialize(controller, history, () => commands);
+        Initialize(list, controller, history);
         list.ShowRecentRepositories(reloadData: false);
-        Window window = new()
+        RepositoryListOwner window = new(commands)
         {
             Width = 560,
             Height = 260,
@@ -1843,7 +1935,72 @@ public sealed class DashboardTests
 
     [AvaloniaTest]
     [Category("P4.5")]
-    public void Attached_repository_list_should_replace_rows_after_branch_cache_refresh()
+    public void Dashboard_should_forward_one_repository_transition_after_history_reinitialization()
+    {
+        string repositoryPath = FindRepositoryRoot();
+        Repository repository = new(repositoryPath);
+        RepositoryHistorySnapshot snapshot =
+            new RepositoryHistorySnapshot(
+                [new RepositoryHistoryEntry(repository, "selected", "main", IsFavourite: false, IsAnchored: false)],
+                []);
+        IUserRepositoriesListController controller = CreateController(snapshot);
+        IRepositoryHistoryUIService history = CreateHistory(snapshot);
+        IGitExecutorProvider executorProvider = Substitute.For<IGitExecutorProvider>();
+        IGitExecutor executor = Substitute.For<IGitExecutor>();
+        executor.WorkingDir.Returns(repositoryPath);
+        executor.GetGitDirectory().Returns(Path.Join(repositoryPath, ".git"));
+        executorProvider.GetExecutor(repositoryPath).Returns(executor);
+        IGitUICommands commands = Substitute.For<IGitUICommands>();
+        commands.GetService(typeof(IGitExecutorProvider)).Returns(executorProvider);
+        Dashboard dashboard = new();
+        GitModuleEventArgs? transition = null;
+        int transitionCount = 0;
+        dashboard.GitModuleChanged += (_, e) =>
+        {
+            transition = e;
+            transitionCount++;
+        };
+        Initialize(dashboard, controller, history);
+        dashboard.userRepositoriesList.Initialize(history);
+        dashboard.RefreshContent();
+        UserRepositoriesList list = dashboard.userRepositoriesList;
+        RepositoryListOwner window = new(commands)
+        {
+            Width = 960,
+            Height = 700,
+            Content = dashboard,
+        };
+
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            ListBoxItem repositoryRow = list.GetVisualDescendants()
+                .OfType<ListBoxItem>()
+                .Single(item => item.Content is UserRepositoriesList.RepositoryListItem);
+            Avalonia.Point clickPoint = Avalonia.VisualExtensions.TranslatePoint(
+                repositoryRow,
+                new Avalonia.Point(repositoryRow.Bounds.Width / 2, repositoryRow.Bounds.Height / 2),
+                window) ?? throw new InvalidOperationException("The repository row position was not available.");
+
+            window.MouseDown(clickPoint, MouseButton.Left, RawInputModifiers.None);
+            window.MouseUp(clickPoint, MouseButton.Left, RawInputModifiers.None);
+            Dispatcher.UIThread.RunJobs();
+
+            transitionCount.Should().Be(1);
+            transition.Should().NotBeNull();
+            Path.TrimEndingDirectorySeparator(transition!.GitModule.WorkingDir)
+                .Should().Be(Path.TrimEndingDirectorySeparator(repositoryPath));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    [Category("P4.5")]
+    public async Task Attached_repository_list_should_replace_rows_after_history_changes()
     {
         Repository repository = new(@"C:\repos\recent");
         RepositoryHistorySnapshot initial =
@@ -1856,7 +2013,7 @@ public sealed class DashboardTests
         IUserRepositoriesListController controller = CreateController(initial);
         IRepositoryHistoryUIService history = CreateHistory(initial);
         UserRepositoriesList list = new();
-        list.Initialize(controller, history, () => Substitute.For<IGitUICommands>());
+        Initialize(list, controller, history);
         list.ShowRecentRepositories(reloadData: false);
         Window window = new() { Content = list };
         try
@@ -1867,8 +2024,9 @@ public sealed class DashboardTests
 
             history.HistoryChanged += Raise.Event<EventHandler>();
             Dispatcher.UIThread.RunJobs();
+            await WaitForBranchesAsync(list, "main");
 
-            list.GetTestAccessor().List.Items
+            list.listView1.Items
                 .OfType<UserRepositoriesList.RepositoryListItem>()
                 .Select(item => item.BranchName)
                 .Should().Contain("main");
@@ -1879,12 +2037,26 @@ public sealed class DashboardTests
         }
     }
 
+    private static async Task WaitForBranchesAsync(UserRepositoriesList list, params string[] expectedBranches)
+    {
+        for (int attempt = 0; attempt < 400; attempt++)
+        {
+            string[] branches = [.. list.listView1.Items.OfType<UserRepositoriesList.RepositoryListItem>().Select(item => item.BranchName)];
+            if (expectedBranches.All(branches.Contains))
+            {
+                return;
+            }
+
+            await Task.Delay(10);
+        }
+    }
+
     [AvaloniaTest]
     [Category("P4.5")]
     public void Dashboard_should_preserve_the_original_translation_strings()
     {
         ITranslation translation = Substitute.For<ITranslation>();
-        Dashboard dashboard = new();
+        Dashboard dashboard = CreateDashboard();
 
         dashboard.AddTranslationItems(translation);
 
@@ -1916,11 +2088,11 @@ public sealed class DashboardTests
     [Category("P4.5")]
     public void Dashboard_repository_settings_should_remain_a_source_owned_menu_item()
     {
-        Dashboard dashboard = new();
+        Dashboard dashboard = CreateDashboard();
         RepositoryHistorySnapshot snapshot = new([], []);
-        dashboard.Initialize(CreateController(snapshot), CreateHistory(snapshot));
+        Initialize(dashboard, CreateController(snapshot), CreateHistory(snapshot));
 
-        MenuItem configure = dashboard.GetTestAccessor().Repositories.GetTestAccessor().Configure;
+        MenuItem configure = dashboard.GetTestAccessor().Repositories.mnuConfigure;
 
         configure.Header.Should().Be("Recent repositories _settings");
         dashboard.GetVisualDescendants().OfType<Button>()
@@ -1938,18 +2110,43 @@ public sealed class DashboardTests
             [new RepositoryHistoryEntry(categorized, "categorized", "feature", IsFavourite: true, IsAnchored: false)]);
         IUserRepositoriesListController controller = CreateController(snapshot);
         UserRepositoriesList list = new();
-        list.Initialize(controller, CreateHistory(snapshot), () => Substitute.For<IGitUICommands>());
+        Initialize(list, controller, CreateHistory(snapshot));
         list.ShowRecentRepositories(reloadData: false);
-        UserRepositoriesList.TestAccessor accessor = list.GetTestAccessor();
-        accessor.List.SelectedItem = accessor.List.Items.OfType<UserRepositoriesList.RepositoryListItem>().First();
+        list.listView1.SelectedItem = list.listView1.Items.OfType<UserRepositoriesList.RepositoryListItem>().First();
 
-        accessor.UpdateContextMenu().Should().BeTrue();
-        accessor.OpenCategories();
-        accessor.CategoryAdd.IsEnabled.Should().BeTrue();
-        MenuItem team = accessor.Categories.Items.OfType<MenuItem>().Single(item => Equals(item.Tag, "Team"));
-        team.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
+        Window window = new() { Width = 700, Height = 500, Content = list };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            ListBoxItem tile = list.GetVisualDescendants().OfType<ListBoxItem>()
+                .Single(item => item.Content is UserRepositoriesList.RepositoryListItem { IsFavourite: false });
+            Point point = tile.TranslatePoint(new Point(20, 10), window)!.Value;
+            window.MouseDown(point, MouseButton.Right);
+            window.MouseUp(point, MouseButton.Right);
+            Dispatcher.UIThread.RunJobs();
+            list.contextMenuStripRepository.IsOpen.Should().BeTrue();
+            list.tsmiCategories.IsSubMenuOpen = true;
+            Dispatcher.UIThread.RunJobs();
+            list.tsmiCategoryAdd.IsEnabled.Should().BeTrue();
+            list.listView1.SelectedItem = list.listView1.Items.OfType<UserRepositoriesList.RepositoryListItem>()
+                .Single(item => item.IsFavourite);
+            MenuItem team = list.tsmiCategories.Items.OfType<MenuItem>().Single(item => Equals(item.Tag, "Team"));
+            TopLevel popup = TopLevel.GetTopLevel(team)
+                ?? throw new InvalidOperationException("The category popup is not attached.");
+            Point target = team.TranslatePoint(new Point(team.Bounds.Width / 2, team.Bounds.Height / 2), popup)!.Value;
+            popup.MouseDown(target, MouseButton.Left);
+            popup.MouseUp(target, MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+            list.contextMenuStripRepository.IsOpen.Should().BeFalse();
 
-        controller.Received(1).AssignCategoryAsync(selected, "Team");
+            controller.Received(1).AssignCategoryAsync(selected, "Team");
+        }
+        finally
+        {
+            list.contextMenuStripRepository.Close();
+            window.Close();
+        }
     }
 
     [AvaloniaTest]
@@ -1957,13 +2154,13 @@ public sealed class DashboardTests
     public void Category_title_should_disable_unchanged_names_and_accept_a_new_name()
     {
         FormDashboardCategoryTitle form = new(["Team", "Personal"], "Team");
-        FormDashboardCategoryTitle.TestAccessor accessor = form.GetTestAccessor();
+        Button ok = form.FindControl<Button>("btnOk")!;
 
-        accessor.Ok.IsEnabled.Should().BeFalse();
-        accessor.CategoryName.Text = "Release";
+        ok.IsEnabled.Should().BeFalse();
+        form.FindControl<TextBox>("txtCategoryName")!.Text = "Release";
         Dispatcher.UIThread.RunJobs();
-        accessor.Ok.IsEnabled.Should().BeTrue();
-        accessor.Ok.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        ok.IsEnabled.Should().BeTrue();
+        ok.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
 
         form.Category.Should().Be("Release");
         form.DialogResult.Should().Be(GitExtensions.Shims.WinForms.DialogResult.OK);
@@ -1975,20 +2172,40 @@ public sealed class DashboardTests
     {
         string directory = TestContext.CurrentContext.WorkDirectory;
 
-        UserRepositoriesList.CanDropRepositoryDirectory([directory]).Should().BeTrue();
-        UserRepositoriesList.CanDropRepositoryDirectory([]).Should().BeFalse();
-        UserRepositoriesList.CanDropRepositoryDirectory([directory, directory]).Should().BeFalse();
-        UserRepositoriesList.CanDropRepositoryDirectory([Path.Join(directory, "missing")]).Should().BeFalse();
+        UserRepositoriesList list = new();
+        Check([directory], DragDropEffects.Copy);
+        Check([], DragDropEffects.None);
+        Check([directory, directory], DragDropEffects.None);
+        Check([Path.Join(directory, "missing")], DragDropEffects.None);
+        return;
+
+        void Check(string[] paths, DragDropEffects expected)
+        {
+            using DataTransfer data = new();
+            foreach (string path in paths)
+            {
+                IStorageFile file = Substitute.For<IStorageFile>();
+                file.Path.Returns(new Uri(path));
+                data.Add(DataTransferItem.CreateFile(file));
+            }
+
+            DragEventArgs enter = new(DragDrop.DragEnterEvent, data, list, default, KeyModifiers.None)
+            {
+                DragEffects = DragDropEffects.Move,
+            };
+            list.RaiseEvent(enter);
+            enter.DragEffects.Should().Be(expected);
+        }
     }
 
     [AvaloniaTest]
     [Category("P4.5")]
     public void Dashboard_theme_should_preserve_the_original_light_palette()
     {
-        DashboardTheme.Light.LogoBackColor.Should().Be(Avalonia.Media.Color.FromRgb(19, 122, 212));
-        DashboardTheme.Light.StartBackColor.Should().Be(Avalonia.Media.Color.FromRgb(219, 235, 248));
-        DashboardTheme.Light.ContributeBackColor.Should().Be(Avalonia.Media.Color.FromRgb(230, 241, 250));
-        DashboardTheme.Light.SearchBackColor.Should().Be(Avalonia.Media.Color.FromRgb(248, 248, 255));
+        DashboardTheme.Light.LogoBackColor.Should().Be(System.Drawing.Color.FromArgb(19, 122, 212));
+        DashboardTheme.Light.StartBackColor.Should().Be(System.Drawing.Color.FromArgb(219, 235, 248));
+        DashboardTheme.Light.ContributeBackColor.Should().Be(System.Drawing.Color.FromArgb(230, 241, 250));
+        DashboardTheme.Light.SearchBackColor.Should().Be(System.Drawing.Color.FromArgb(248, 248, 255));
     }
 
     [AvaloniaTest]
@@ -2013,19 +2230,13 @@ public sealed class DashboardTests
             AppSettings.UseSystemVisualStyle = false;
             ThemeModule.TestAccessor.ReloadThemeSettings(repository);
             DashboardTheme dark = DashboardTheme.Dark;
-            dark.StartBackColor.Should().Be(Avalonia.Media.Color.FromRgb(12, 34, 56));
-            AssertSystemColors(dark);
-            Dashboard dashboard = new();
+            Dashboard dashboard = CreateDashboard();
             dashboard.RefreshContent();
-            ((Avalonia.Media.SolidColorBrush)dashboard.FindControl<Border>("flpnlStart")!.Background!).Color
-                .Should().Be(dark.StartBackColor);
+            AssertSystemColors(dashboard, dark, Color.FromRgb(12, 34, 56));
 
             ThemeModule.TestAccessor.ReloadThemeSettings(repository);
-            dark.StartBackColor.Should().Be(Avalonia.Media.Color.FromRgb(65, 43, 21));
-            AssertSystemColors(dark);
             dashboard.RefreshContent();
-            ((Avalonia.Media.SolidColorBrush)dashboard.FindControl<Border>("flpnlStart")!.Background!).Color
-                .Should().Be(dark.StartBackColor);
+            AssertSystemColors(dashboard, dark, Color.FromRgb(65, 43, 21));
         }
         finally
         {
@@ -2052,7 +2263,7 @@ public sealed class DashboardTests
                     .ToDictionary(pair => pair.color, pair => pair.value),
                 themeId);
 
-        static void AssertSystemColors(DashboardTheme dark)
+        static void AssertSystemColors(Dashboard dashboard, DashboardTheme dark, Color expectedControl)
         {
             SearchControl<string> search = new(_ => [], _ => { })
             {
@@ -2061,21 +2272,30 @@ public sealed class DashboardTests
             };
             TextBox input = search.FindControl<TextBox>("txtSearchBox")!;
             ((Avalonia.Media.SolidColorBrush)((Border)input.Parent!).BorderBrush!).Color
-                .Should().Be(dark.StartBackColor);
-            (System.Drawing.KnownColor Name, Avalonia.Media.Color Actual)[] colors =
+                .Should().Be(expectedControl);
+            Color start = ((ISolidColorBrush)dashboard.FindControl<Border>("flpnlStart")!.Background!).Color;
+            start.Should().Be(expectedControl);
+            UserRepositoriesList repositories = dashboard.FindControl<UserRepositoriesList>("userRepositoriesList")!;
+            (System.Drawing.KnownColor Name, System.Drawing.Color Palette, Color Applied)[] colors =
             [
-                (System.Drawing.KnownColor.Control, dark.SearchBackColor),
-                (System.Drawing.KnownColor.Control, dark.StartBackColor),
-                (System.Drawing.KnownColor.ControlLight, dark.ContributeBackColor),
-                (System.Drawing.KnownColor.ControlDark, dark.HeaderBackColor),
-                (System.Drawing.KnownColor.ControlDarkDark, dark.LogoBackColor),
-                (System.Drawing.KnownColor.WindowText, dark.PrimaryText),
-                (System.Drawing.KnownColor.ControlText, dark.PrimaryHeadingText),
-                (System.Drawing.KnownColor.GrayText, dark.SecondaryHeadingText),
+                (System.Drawing.KnownColor.Control, dark.SearchBackColor, repositories.SearchBackColor),
+                (System.Drawing.KnownColor.Control, dark.StartBackColor, start),
+                (System.Drawing.KnownColor.ControlLight, dark.ContributeBackColor,
+                    ((ISolidColorBrush)dashboard.FindControl<Border>("flpnlContribute")!.Background!).Color),
+                (System.Drawing.KnownColor.ControlDark, dark.HeaderBackColor, repositories.HeaderBackColor),
+                (System.Drawing.KnownColor.ControlDarkDark, dark.LogoBackColor,
+                    ((ISolidColorBrush)dashboard.FindControl<WinFormsControls.Panel>("pnlLogo")!.Background!).Color),
+                (System.Drawing.KnownColor.WindowText, dark.PrimaryText, repositories.ForeColor),
+                (System.Drawing.KnownColor.ControlText, dark.PrimaryHeadingText, AvaloniaThemeResources.ToMediaColor(
+                    AvaloniaThemeResources.ResolveSystemColor(ThemeModule.Settings, dark.PrimaryHeadingText.ToKnownColor()))),
+                (System.Drawing.KnownColor.GrayText, dark.SecondaryHeadingText,
+                    ((ISolidColorBrush)dashboard.FindControl<TextBlock>("lblContribute")!.Foreground!).Color),
             ];
-            foreach ((System.Drawing.KnownColor name, Avalonia.Media.Color actual) in colors)
+            foreach ((System.Drawing.KnownColor name, System.Drawing.Color palette, Color applied) in colors)
             {
-                actual.Should().Be(AvaloniaThemeResources.ToMediaColor(ThemeModule.Settings.Theme.GetColor(name)));
+                palette.IsSystemColor.Should().BeTrue();
+                palette.ToKnownColor().Should().Be(name);
+                applied.Should().Be(AvaloniaThemeResources.ToMediaColor(ThemeModule.Settings.Theme.GetColor(name)));
             }
         }
     }
@@ -2084,7 +2304,7 @@ public sealed class DashboardTests
     [Category("P4.5")]
     public void Dashboard_layout_should_use_designer_authored_96_dpi_metrics()
     {
-        Dashboard dashboard = new();
+        Dashboard dashboard = CreateDashboard();
         WinFormsControls.TableLayoutPanel layout = dashboard.FindControl<WinFormsControls.TableLayoutPanel>("tableLayoutPanel1")!;
         WinFormsControls.Panel logo = dashboard.FindControl<WinFormsControls.Panel>("pnlLogo")!;
 
@@ -2176,9 +2396,38 @@ public sealed class DashboardTests
     private static IRepositoryHistoryUIService CreateHistory(RepositoryHistorySnapshot snapshot)
     {
         IRepositoryHistoryUIService history = Substitute.For<IRepositoryHistoryUIService>();
-        history.LoadSnapshot().Returns(snapshot);
+        RepositoryHistoryTestHelper.SetSnapshot(history, snapshot);
         return history;
     }
+
+    private static Dashboard CreateDashboard()
+    {
+        Dashboard dashboard = new();
+        SetController(dashboard.userRepositoriesList, CreateController(new RepositoryHistorySnapshot([], [])));
+        return dashboard;
+    }
+
+    private static void Initialize(Dashboard dashboard, IUserRepositoriesListController controller, IRepositoryHistoryUIService history)
+    {
+        SetController(dashboard.userRepositoriesList, controller);
+        dashboard.userRepositoriesList.Initialize(history);
+    }
+
+    private static void Initialize(UserRepositoriesList list, IUserRepositoriesListController controller,
+        IRepositoryHistoryUIService history)
+    {
+        SetController(list, controller);
+        list.Initialize(history);
+    }
+
+    private static void SetController(UserRepositoriesList list, IUserRepositoriesListController controller)
+    {
+        // parity-scaffolding: Replace the original lazy controller without adding a production injection API.
+        typeof(UserRepositoriesList).GetField("<Controller>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(list, controller);
+    }
+
+    private sealed class RepositoryListOwner(IGitUICommands commands) : GitModuleForm(commands, enablePositionRestore: false);
 
     private static IUserRepositoriesListController CreateController(RepositoryHistorySnapshot snapshot)
     {

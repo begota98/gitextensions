@@ -90,7 +90,7 @@ public sealed class HotkeyTests
             IReadOnlyList<HotkeyCommand> hotkeys = loader.LoadHotkeys(FormBrowse.HotkeySettingsName);
 
             hotkeys.Should().HaveCount(49);
-            hotkeys.Should().NotContain(command => command.CommandCode == (int)FormBrowse.Command.Refresh);
+            hotkeys.Should().OnlyContain(command => Enum.IsDefined(typeof(FormBrowse.Command), command.CommandCode));
             hotkeys.Should().ContainSingle(command =>
                 command.CommandCode == (int)FormBrowse.Command.Commit
                 && command.KeyData == (WinFormsShims.Keys.Control | WinFormsShims.Keys.Space));
@@ -404,13 +404,9 @@ public sealed class HotkeyTests
     }
 
     [AvaloniaTest]
-    public void FormBrowse_F5_should_dispatch_refresh_through_the_hotkey_command()
+    public void FormBrowse_F5_should_dispatch_refresh_through_the_original_menu_gesture()
     {
-        (FormBrowse form, IGitUICommands commands, ILockableNotifier notifier) = CreateBrowseForm(
-            new HotkeyCommand((int)FormBrowse.Command.Refresh, nameof(FormBrowse.Command.Refresh))
-            {
-                KeyData = WinFormsShims.Keys.F5,
-            });
+        (FormBrowse form, IGitUICommands commands, ILockableNotifier notifier) = CreateBrowseForm();
         form.Show();
         try
         {
@@ -783,7 +779,7 @@ public sealed class HotkeyTests
             ]);
         FileStatusList fileStatusList = form.fileTree.FileStatusList;
         int stageInvocations = 0;
-        fileStatusList.GetTestAccessor().StageMenuItem.Click += (_, _) => stageInvocations++;
+        fileStatusList.FindControl<MenuItem>("tsmiStageFile")!.Click += (_, _) => stageInvocations++;
 
         fileStatusList.ProcessHotkey(WinFormsShims.Keys.None).Should().BeFalse();
 
@@ -806,11 +802,11 @@ public sealed class HotkeyTests
         try
         {
             form.FindControl<Grid>("mainContentGrid")!.IsVisible = true;
-            form.RevisionGrid.GetTestAccessor().SetRevisions(
+            form.RevisionGrid.GetNativeTestAccessor().SetRevisions(
                 [new GitRevision(ObjectId.Random()) { Subject = "Selected revision" }]);
             form.RevisionGrid.FocusRevisionGrid();
             Dispatcher.UIThread.RunJobs();
-            form.RevisionGrid.GetTestAccessor().Revisions.IsKeyboardFocusWithin.Should().BeTrue();
+            form.RevisionGrid._gridView.IsKeyboardFocusWithin.Should().BeTrue();
 
             form.KeyPress(Key.LeftAlt, RawInputModifiers.Alt, PhysicalKey.AltLeft, keySymbol: null);
 
@@ -1076,11 +1072,33 @@ public sealed class HotkeyTests
             form.Show();
             form.CommitInfoTabControl.SelectedItem = form.TreeTabPage;
             int stageInvocations = 0;
-            form.fileTree.FileStatusList.GetTestAccessor().StageMenuItem.Click += (_, _) => stageInvocations++;
+            form.fileTree.FileStatusList.FindControl<MenuItem>("tsmiStageFile")!.Click += (_, _) => stageInvocations++;
 
             form.ProcessHotkey(WinFormsShims.Keys.F6).Should().BeTrue();
 
             stageInvocations.Should().Be(1);
+            form.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    public void RevisionGrid_should_display_the_Browse_commit_shortcut_from_the_runtime_provider()
+    {
+        (FormBrowse form, _, _) = CreateBrowseForm(
+            new HotkeyCommand((int)FormBrowse.Command.Commit, nameof(FormBrowse.Command.Commit))
+            {
+                KeyData = WinFormsShims.Keys.F7,
+            });
+        try
+        {
+            form.Show();
+            Dispatcher.UIThread.RunJobs();
+            MenuItem commit = form.RevisionGrid.FindControl<MenuItem>("commitToolStripMenuItem")!;
+
+            commit.InputGesture.Should().Be(new KeyGesture(Key.F7));
+        }
+        finally
+        {
             form.Close();
         }
     }
@@ -1142,11 +1160,12 @@ public sealed class HotkeyTests
         commands.GetService(typeof(IHotkeySettingsLoader)).Returns(loader);
         commands.GetService(typeof(IRepositoryHistoryUIService)).Returns(repositoryHistory);
         commands.GetService(typeof(IUserRepositoriesListController)).Returns(repositoriesController);
+        commands.GetService(typeof(GitUI.IRepositoryCurrentBranchNameCache)).Returns(Substitute.For<GitUI.IRepositoryCurrentBranchNameCache>());
         commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
         commands.GetService(typeof(IScriptsManager)).Returns(scriptsManager);
         commands.GetService(typeof(IScriptsRunner)).Returns(scriptsRunner);
 
-        return (new FormBrowse(commands), commands, notifier);
+        return (new FormBrowse(commands, new BrowseArguments()), commands, notifier);
     }
 
     private static IGitUICommands CreateHotkeyCommands(IReadOnlyList<HotkeyCommand> hotkeys)

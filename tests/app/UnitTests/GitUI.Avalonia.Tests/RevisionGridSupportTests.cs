@@ -171,8 +171,8 @@ public sealed class RevisionGridSupportTests
         IGitUICommandsSource source = CreateUICommandsSource();
         RevisionGridControl control = new() { UICommandsSource = source };
         GitRevision previousSelection = Revision('1', "previous selection");
-        control.GetTestAccessor().SetRevisions([previousSelection]);
-        control.GetTestAccessor().Revisions.SelectedItem = previousSelection;
+        control.GetNativeTestAccessor().SetRevisions([previousSelection]);
+        control._gridView.SelectedItem = previousSelection;
         int loadingCount = 0;
         control.RevisionsLoading += (_, _) => loadingCount++;
         ObjectId requestedSelection = Id('2');
@@ -186,8 +186,9 @@ public sealed class RevisionGridSupportTests
                 selectedObjectId: requestedSelection,
                 getRefs: _ => []);
 
+            control.GetNativeTestAccessor().JoinBackgroundOperations();
             loadingCount.Should().Be(2);
-            control.GetTestAccessor().PendingSelectedObjectId.Should().Be(requestedSelection);
+            control.GetNativeTestAccessor().PendingSelectedObjectId.Should().Be(requestedSelection);
         }
         finally
         {
@@ -207,7 +208,7 @@ public sealed class RevisionGridSupportTests
         {
             Dispatcher.UIThread.RunJobs();
 
-            control.GetTestAccessor().CurrentPage.Should().BeSameAs(control.GetTestAccessor().Revisions);
+            control.revisionPage.Content.Should().BeSameAs(control._gridView);
             control.GetVisualDescendants().OfType<LoadingControl>().Should().ContainSingle();
         }
         finally
@@ -221,7 +222,7 @@ public sealed class RevisionGridSupportTests
     public void Revision_grid_should_preserve_rows_populated_before_first_attachment()
     {
         RevisionGridControl control = new() { UICommandsSource = CreateUICommandsSource() };
-        control.GetTestAccessor().SetRevisions([Revision('1', "already loaded")]);
+        control.GetNativeTestAccessor().SetRevisions([Revision('1', "already loaded")]);
         Window window = new() { Width = 500, Height = 240, Content = control };
 
         window.Show();
@@ -229,8 +230,8 @@ public sealed class RevisionGridSupportTests
         {
             Dispatcher.UIThread.RunJobs();
 
-            control.GetTestAccessor().CurrentPage.Should().BeSameAs(control.GetTestAccessor().Revisions);
-            control.GetTestAccessor().Revisions.ItemCount.Should().Be(1);
+            control.revisionPage.Content.Should().BeSameAs(control._gridView);
+            control._gridView.ItemCount.Should().Be(1);
         }
         finally
         {
@@ -247,7 +248,7 @@ public sealed class RevisionGridSupportTests
         window.Show();
         try
         {
-            control.GetTestAccessor().SetRevisions(
+            control.GetNativeTestAccessor().SetRevisions(
             [
                 Revision('1', "first"),
                 Revision('2', "second"),
@@ -257,7 +258,7 @@ public sealed class RevisionGridSupportTests
 
             int selectionChangedCount = 0;
             control.SelectionChanged += (_, _) => selectionChangedCount++;
-            ListBox revisions = control.GetTestAccessor().Revisions;
+            ListBox revisions = control._gridView;
 
             revisions.SelectedIndex = 0;
             revisions.SelectedIndex = 1;
@@ -317,7 +318,7 @@ public sealed class RevisionGridSupportTests
     public void SetSelectedRevision_should_focus_the_grid_and_replace_an_existing_selection()
     {
         RevisionGridControl control = new() { UICommandsSource = CreateUICommandsSource() };
-        RevisionGridControl.TestAccessor accessor = control.GetTestAccessor();
+        RevisionGridTestSupport.Accessor accessor = control.GetNativeTestAccessor();
         GitRevision[] revisions = [Revision(1), Revision(2), Revision(3)];
         accessor.SetRevisions(revisions);
         TextBox otherControl = new();
@@ -468,7 +469,7 @@ public sealed class RevisionGridSupportTests
     [Category("P8.6h.3a")]
     public void Menu_caption_and_multiline_indicator_should_use_native_noninteractive_controls()
     {
-        MenuItem caption = new();
+        GitUI.Compat.WinFormsControls.ToolStripMenuItem caption = new();
         MenuItem owner = new();
 
         MenuUtil.SetAsCaptionMenuItem(caption, owner);
@@ -688,9 +689,9 @@ public sealed class RevisionGridSupportTests
         item.RaiseEvent(new RoutedEventArgs(MenuItem.SubmenuOpenedEvent));
 
         item.Items.Should().HaveCount(10);
-        item.Items[0].Should().BeOfType<MenuItem>().Which.Header.Should().Be(TranslatedStrings.Branches);
+        item.Items[0].Should().BeOfType<GitUI.Compat.WinFormsControls.ToolStripMenuItem>().Which.Header.Should().Be(TranslatedStrings.Branches);
         item.Items[1].Should().BeOfType<MenuItem>().Which.Header.Should().Be("_1:   branch1");
-        item.Items[3].Should().BeOfType<MenuItem>().Which.Header.Should().Be(TranslatedStrings.Tags);
+        item.Items[3].Should().BeOfType<GitUI.Compat.WinFormsControls.ToolStripMenuItem>().Which.Header.Should().Be(TranslatedStrings.Tags);
         item.Items[4].Should().BeOfType<MenuItem>().Which.Header.Should().Be("_2:   tag1");
         item.Items[6].Should().BeOfType<MenuItem>().Which.Header!.ToString().Should().StartWith("_Commit hash");
         item.Items.OfType<MenuItem>().Select(menuItem => menuItem.Width).Distinct().Should().ContainSingle();
@@ -819,14 +820,14 @@ public sealed class RevisionGridSupportTests
             revision.Notes = "review note";
             revision.Refs = [new GitRef(null!, revision.ObjectId, "refs/heads/branch1")];
 
-            provider.TryGetToolTip(revision, out string? toolTip).Should().BeTrue();
+            provider.TryGetToolTip(x: null, revision, highlightRef: null, out string? toolTip).Should().BeTrue();
 
             toolTip.Should().Contain("body detail");
             toolTip.Should().Contain("Notes:");
             toolTip.Should().Contain("review note");
             toolTip.Should().Contain("[branch1]");
 
-            provider.TryGetToolTip(revision, revision.Refs[0], out string? refToolTip).Should().BeTrue();
+            provider.TryGetToolTip(x: null, revision, revision.Refs[0], out string? refToolTip).Should().BeTrue();
             refToolTip.Should().Contain("[branch1]");
         }
         finally
@@ -850,7 +851,7 @@ public sealed class RevisionGridSupportTests
             provider.ApplySettings();
             GitRevision revision = Revision('a', "subject", multiline: true);
 
-            provider.TryGetToolTip(revision, out string? toolTip).Should().BeTrue();
+            provider.TryGetToolTip(x: null, revision, highlightRef: null, out string? toolTip).Should().BeTrue();
 
             toolTip.Should().Be("subject" + TranslatedStrings.BodyNotLoaded);
             commitDataManager.Received(1).InitiateDelayedLoadingOfDetails(revision);
@@ -1074,7 +1075,7 @@ public sealed class RevisionGridSupportTests
     public void Revision_grid_should_preserve_selection_and_scroll_anchor_while_streaming_rows()
     {
         RevisionGridControl control = new() { UICommandsSource = CreateUICommandsSource() };
-        RevisionGridControl.TestAccessor accessor = control.GetTestAccessor();
+        RevisionGridTestSupport.Accessor accessor = control.GetNativeTestAccessor();
         GitRevision[] initial = [.. Enumerable.Range(1, 80).Select(Revision)];
         accessor.SetRevisions(initial);
         Window window = new()
@@ -1114,7 +1115,7 @@ public sealed class RevisionGridSupportTests
     public void Revision_grid_should_preserve_pointer_focus_when_streamed_rows_receive_their_final_order()
     {
         RevisionGridControl control = new() { UICommandsSource = CreateUICommandsSource() };
-        RevisionGridControl.TestAccessor accessor = control.GetTestAccessor();
+        RevisionGridTestSupport.Accessor accessor = control.GetNativeTestAccessor();
         GitRevision[] revisions = [Revision(1), Revision(2), Revision(3)];
         accessor.SetRevisions(revisions);
         TextBox otherControl = new();
@@ -1160,7 +1161,7 @@ public sealed class RevisionGridSupportTests
     public void Revision_grid_should_preserve_home_end_copy_and_patch_drop_routes()
     {
         RevisionGridControl control = new() { UICommandsSource = CreateUICommandsSource() };
-        RevisionGridControl.TestAccessor accessor = control.GetTestAccessor();
+        RevisionGridTestSupport.Accessor accessor = control.GetNativeTestAccessor();
         GitRevision[] revisions = [Revision(1), Revision(2), Revision(3)];
         accessor.SetRevisions(revisions);
         Window window = new() { Width = 900, Height = 160, Content = control };
@@ -1225,7 +1226,9 @@ public sealed class RevisionGridSupportTests
     {
         IGitUICommandsSource source = Substitute.For<IGitUICommandsSource>();
         IGitUICommands commands = Substitute.For<IGitUICommands>();
-        commands.Module.Returns(Substitute.For<IGitModule>());
+        IGitModule module = Substitute.For<IGitModule>();
+        module.ConfigureCancelledRevisionRead();
+        commands.Module.Returns(module);
         commands.GetService(typeof(IHotkeySettingsLoader)).Returns(Substitute.For<IHotkeySettingsLoader>());
         source.UICommands.Returns(commands);
         return source;

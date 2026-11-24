@@ -146,17 +146,7 @@ internal sealed class RevisionGridToolTipProvider
                     return highlightText;
                 }
 
-                string? toolTip;
-                bool hasToolTip = provider switch
-                {
-                    MessageColumnProvider => provider.TryGetToolTip(state.Revision, highlightRef, out toolTip),
-
-                    // A graph tooltip identifies the actual lane beneath this pixel,
-                    // not merely the revision represented by its recycled row.
-                    RevisionGraphColumnProvider graph => graph.TryGetToolTip(state.Revision, e.GetPosition(cell).X, out toolTip),
-                    _ => provider.TryGetToolTip(state.Revision, out toolTip),
-                };
-                if (hasToolTip
+                if (provider.TryGetToolTip(e.GetPosition(cell).X, state.Revision, highlightRef, out string? toolTip)
                     && !string.IsNullOrWhiteSpace(toolTip))
                 {
                     return toolTip;
@@ -186,7 +176,6 @@ internal sealed class RevisionGridToolTipProvider
         // Retained controls must not outlive their recycled rows after a repository reload.
         foreach (Control cell in _cellStates.Keys)
         {
-            cell.PointerMoved -= OnCellPointerMoved;
             ToolTip.SetTip(cell, null);
         }
 
@@ -207,11 +196,6 @@ internal sealed class RevisionGridToolTipProvider
 
     public void UpdateCell(Control cell, int columnIndex, int rowIndex, GitRevision revision)
     {
-        if (!_cellStates.ContainsKey(cell))
-        {
-            cell.PointerMoved += OnCellPointerMoved;
-        }
-
         if (_cellStates.TryGetValue(cell, out CellState? previous)
             && (previous.ColumnIndex != columnIndex || previous.RowIndex != rowIndex || !ReferenceEquals(previous.Revision, revision)))
         {
@@ -229,14 +213,6 @@ internal sealed class RevisionGridToolTipProvider
         _cellStates[cell] = new CellState(columnIndex, rowIndex, revision);
         TextBlock? textBlock = cell as TextBlock ?? cell.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault();
         SetTruncation(columnIndex, rowIndex, IsTruncated(textBlock));
-    }
-
-    private void OnCellPointerMoved(object? sender, PointerEventArgs e)
-    {
-        if (sender is Control cell)
-        {
-            OnCellMouseMove(cell, e);
-        }
     }
 
     private static string GetCellText(Control cell)

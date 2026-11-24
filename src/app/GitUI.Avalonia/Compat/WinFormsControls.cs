@@ -700,11 +700,35 @@ public class ToolStripPanel : Avalonia.Controls.Panel
 /// </summary>
 public class ToolStripDropDownItem : MenuItem
 {
+    /// <summary>
+    ///  Gets the effective menu font in the source API's point units.
+    /// </summary>
+    public GitExtensions.Shims.WinForms.Font Font => new(FontFamily.Name, (float)(FontSize * 72 / 96),
+        (FontWeight >= FontWeight.Bold ? GitExtensions.Shims.WinForms.FontStyle.Bold : GitExtensions.Shims.WinForms.FontStyle.Regular)
+        | (FontStyle == FontStyle.Italic ? GitExtensions.Shims.WinForms.FontStyle.Italic : GitExtensions.Shims.WinForms.FontStyle.Regular));
+
+    // Avalonia's native popup owns item layout and mnemonic dispatch, unlike the generic menu.
+    internal virtual bool UseSourceMnemonicRouting { get; set; }
+
+    internal virtual ToolStripMenuItem CreateMenuItem() => new();
+
+    internal virtual Separator CreateSeparator() => new ToolStripSeparator();
+
+    /// <summary>
+    ///  Gets whether the generic popup sizer supplies this menu's layout.
+    /// </summary>
+    protected virtual bool UseDefaultDropDownLayout => true;
+
     protected override Type StyleKeyOverride => typeof(MenuItem);
 
     protected override void OnSubmenuOpened(RoutedEventArgs e)
     {
         base.OnSubmenuOpened(e);
+
+        if (!UseDefaultDropDownLayout)
+        {
+            return;
+        }
 
         // Framework constraint: Avalonia measures each popup from its own template. WinForms
         // instead gives every item the widest ToolStrip text-and-shortcut layout when it opens.

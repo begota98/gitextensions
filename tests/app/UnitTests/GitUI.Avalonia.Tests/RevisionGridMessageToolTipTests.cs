@@ -88,7 +88,7 @@ public sealed class RevisionGridMessageToolTipTests
             TextBlock subject = fixture.Subject(fixture.Plain);
             subject.TextLayout.TextLines.Any(line => line.HasCollapsed || line.HasOverflowed).Should().BeTrue(
                 "the plain message must exercise the source's actual truncation fallback");
-            provider.TryGetToolTip(fixture.Plain, out _).Should().BeFalse();
+            provider.TryGetToolTip(x: null, fixture.Plain, highlightRef: null, out _).Should().BeFalse();
             string? plainTip = tooltips ? fixture.Plain.Subject : null;
             MoveSubject(fixture.Plain, "plain-first", plainTip);
             MoveSubject(fixture.Plain, "plain-repeat", plainTip, alternate: true);
@@ -128,12 +128,12 @@ public sealed class RevisionGridMessageToolTipTests
                 AppSettings.ShowGitNotesColumn.Value = false;
                 provider.ApplySettings();
                 string ordinaryExpected = SourceSummary(fixture.Referenced, includeNotes: true);
-                bool ordinaryFound = provider.TryGetToolTip(fixture.Referenced, out string? ordinaryActual);
+                bool ordinaryFound = provider.TryGetToolTip(x: null, fixture.Referenced, highlightRef: null, out string? ordinaryActual);
                 string? highlightedExpected = tooltips
                     ? "[main]" + Environment.NewLine + GitUI.TranslatedStrings.IsLocalBranch
                         + Environment.NewLine + Environment.NewLine + ordinaryExpected
                     : null;
-                bool highlightedFound = provider.TryGetToolTip(fixture.Referenced, fixture.Referenced.Refs.Single(), out string? highlightedActual);
+                bool highlightedFound = provider.TryGetToolTip(x: null, fixture.Referenced, fixture.Referenced.Refs.Single(), out string? highlightedActual);
                 notesContent = new NotesContentObservation("actualMessageColumnProviderWithoutRenderingInlineNotes",
                     ordinaryFound, ordinaryActual, ordinaryExpected, highlightedFound, highlightedActual, highlightedExpected);
                 ordinaryFound.Should().BeTrue("the ordinary provider exposes its loaded content independently of the central tooltip gate");
@@ -306,7 +306,7 @@ public sealed class RevisionGridMessageToolTipTests
             source.UICommands.Returns(commands);
             Grid = new RevisionGridControl(Substitute.For<ICommitDataManager>()) { UICommandsSource = source };
             Referenced.Refs = [new GitRef(module, Referenced.ObjectId, "refs/heads/main")];
-            Grid.GetTestAccessor().SetRevisions([Plain, Multiline, Referenced]);
+            Grid.GetNativeTestAccessor().SetRevisions([Plain, Multiline, Referenced]);
             DockPanel host = new();
             DockPanel.SetDock(FocusTarget, Dock.Bottom);
             host.Children.Add(FocusTarget);
@@ -430,7 +430,7 @@ public sealed class RevisionGridMessageToolTipTests
         {
             ExceptionDispatchInfo? failure = null;
             TryCleanup(Grid.CancelBackgroundTasks, ref failure);
-            TryCleanup(() => Grid.GetTestAccessor().SetRevisions([]), ref failure);
+            TryCleanup(() => Grid.GetNativeTestAccessor().SetRevisions([]), ref failure);
             TryCleanup(Window.Close, ref failure);
             TryCleanup(() => Dispatcher.UIThread.RunJobs(), ref failure);
             failure?.Throw();

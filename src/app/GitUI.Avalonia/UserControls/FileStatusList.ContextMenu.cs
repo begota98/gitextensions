@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using GitCommands;
 using GitCommands.Git;
 using GitCommands.Git.Extended;
@@ -146,7 +147,7 @@ partial class FileStatusList
     /// </summary>
     public void BindContextMenu(
         Action? blame,
-        Action? cherryPickChanges,
+        Action cherryPickChanges,
         Action filterFileInGrid,
         Action refreshParent,
         Action<bool>? openInFileTreeTab_AsBlame,
@@ -157,13 +158,13 @@ partial class FileStatusList
     {
         _blame = blame;
         _cherryPickChanges = cherryPickChanges;
-        _getSupportLinePatching = getSupportLinePatching;
         _filterFileInGrid = filterFileInGrid;
         _openInFileTreeTab_AsBlame = openInFileTreeTab_AsBlame;
         _refreshParent = refreshParent;
         _getCurrentRevision = getCurrentRevision;
         _getLineNumber = getLineNumber;
         _getSelectedText = getSelectedText;
+        _getSupportLinePatching = getSupportLinePatching;
     }
 
     private void Blame_Click(object sender, EventArgs e)
@@ -401,7 +402,7 @@ partial class FileStatusList
 
         bool AddFileToGitIgnore()
         {
-            if (!IsKeyboardFocusWithin)
+            if (!Focused)
             {
                 return false;
             }
@@ -412,7 +413,7 @@ partial class FileStatusList
 
         bool ResetSelectedFilesWithConfirmation()
         {
-            if (!IsKeyboardFocusWithin)
+            if (!Focused)
             {
                 return false;
             }
@@ -431,7 +432,7 @@ partial class FileStatusList
 
         bool SelectFirstGroupChangesIfFocused()
         {
-            if (!IsKeyboardFocusWithin)
+            if (!Focused)
             {
                 return false;
             }
@@ -1066,7 +1067,9 @@ partial class FileStatusList
     {
         bool visible = tsmiShowFindInCommitFilesGitGrep.IsChecked == true;
         AppSettings.ShowFindInCommitFilesGitGrep.Value = visible;
-        SetFindInCommitFilesGitGrepVisibility(visible);
+
+        // The native context menu returns keyboard focus to the list when its popup closes.
+        Dispatcher.UIThread.Post(() => SetFindInCommitFilesGitGrepVisibility(visible));
     }
 
     private void ShowInFileTree_Click(object sender, EventArgs e)

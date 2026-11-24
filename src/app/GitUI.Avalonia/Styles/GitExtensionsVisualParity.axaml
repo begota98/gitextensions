@@ -454,6 +454,7 @@
           <SolidColorBrush x:Key="GitExtensionsHighlightBackgroundBrush" Color="#0078D7" />
           <SolidColorBrush x:Key="GitExtensionsHighlightForegroundBrush" Color="#FFFFFF" />
           <SolidColorBrush x:Key="GitExtensionsFileStatusSelectionForegroundBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="GitExtensionsFileStatusSelectionDecorationBrush" Color="#C0C0C0" />
           <SolidColorBrush x:Key="GitExtensionsInactiveSelectionForegroundBrush" Color="#000000" />
           <SolidColorBrush x:Key="GitExtensionsSystemInactiveSelectionBackgroundBrush" Color="#BFCDDB" />
           <SolidColorBrush x:Key="GitExtensionsToolTipBackgroundBrush" Color="#FFFFE1" />
@@ -665,6 +666,7 @@
           <SolidColorBrush x:Key="GitExtensionsHighlightBackgroundBrush" Color="#2864B4" />
           <SolidColorBrush x:Key="GitExtensionsHighlightForegroundBrush" Color="#000000" />
           <SolidColorBrush x:Key="GitExtensionsFileStatusSelectionForegroundBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="GitExtensionsFileStatusSelectionDecorationBrush" Color="#969696" />
           <SolidColorBrush x:Key="GitExtensionsInactiveSelectionForegroundBrush" Color="#BEBEBE" />
           <SolidColorBrush x:Key="GitExtensionsSystemInactiveSelectionBackgroundBrush" Color="#374B5A" />
           <SolidColorBrush x:Key="GitExtensionsToolTipBackgroundBrush" Color="#50503C" />
@@ -1620,6 +1622,20 @@
     <Setter Property="FontStyle" Value="{DynamicResource GitExtensionsMonospaceFontStyle}" />
     <Setter Property="FontWeight" Value="{DynamicResource GitExtensionsMonospaceFontWeight}" />
   </Style>
+  <Style Selector="TextBlock.revision-build-status-cell">
+    <Setter Property="FontFamily" Value="{DynamicResource GitExtensionsGenericMonospaceFontFamily}" />
+    <Setter Property="FontSize" Value="{DynamicResource GitExtensionsUiFontSize}" />
+    <Setter Property="FontStyle" Value="Normal" />
+    <Setter Property="FontWeight" Value="Normal" />
+  </Style>
+  <Style Selector="TextBlock.revision-emphasized">
+    <Setter Property="FontStyle" Value="Normal" />
+    <Setter Property="FontWeight" Value="Bold" />
+  </Style>
+  <Style Selector=":is(TemplatedControl).revision-emphasized">
+    <Setter Property="FontStyle" Value="Normal" />
+    <Setter Property="FontWeight" Value="Bold" />
+  </Style>
   <Style Selector="SelectableTextBlock.gitextensions-commit-message">
     <Setter Property="FontFamily" Value="{DynamicResource GitExtensionsCommitFontFamily}" />
     <Setter Property="FontSize" Value="{DynamicResource GitExtensionsCommitFontSize}" />
@@ -1760,10 +1776,10 @@
                 <Panel x:Name="PART_ExpandCollapseChevronContainer"
                        Width="12"
                        Margin="{StaticResource GitExtensionsTreeViewChevronMargin}">
-                  <ToggleButton x:Name="PART_ExpandCollapseChevron"
-                                Theme="{StaticResource FluentTreeViewExpandCollapseChevron}"
-                                Focusable="False"
-                                IsChecked="{TemplateBinding IsExpanded, Mode=TwoWay}" />
+                  <compat:NativeTreeExpander x:Name="PART_ExpandCollapseChevron"
+                                             Theme="{StaticResource FluentTreeViewExpandCollapseChevron}"
+                                             Focusable="False"
+                                             IsChecked="{TemplateBinding IsExpanded, Mode=TwoWay}" />
                 </Panel>
                 <Grid Grid.Column="1">
                   <Border x:Name="PART_NativeSelectionBorder">

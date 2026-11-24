@@ -22,6 +22,9 @@ namespace GitExtensionsTests;
 [Category("P8.6i.126")]
 public sealed class WorkingDirectoryPopupPaintTests
 {
+    [TearDown]
+    public void TearDown() => WorkingDirectoryTestSupport.Reset();
+
     [AvaloniaTest]
     [TestCase(false, false)]
     [TestCase(true, false)]
@@ -31,7 +34,7 @@ public sealed class WorkingDirectoryPopupPaintTests
     {
         ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
         WorkingDirectoryToolStripSplitButton selector = new();
-        WorkingDirectoryToolStripSplitButton.TestAccessor accessor = selector.GetTestAccessor();
+        WorkingDirectoryTestSupport.Accessor accessor = selector.GetTestAccessor();
         Repository favouriteRepository = new(Path.Combine(Path.GetTempPath(), "GitExtensions.WorkingDirectoryPaint")) { Category = "Paint probe" };
         accessor.PrepareDropDown([favouriteRepository], []);
         Window window = new()

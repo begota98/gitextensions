@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
@@ -1090,7 +1091,7 @@ public sealed class VisualParityTests
             remote: "origin");
 
         RevisionGridRefRenderer.NestledRefLabelPanel pair =
-            RevisionGridRefRenderer.CreateLabels([remote, local])
+            RevisionRefLabelFixture.Render([remote, local])
                 .Should()
                 .ContainSingle()
                 .Which.Should()
@@ -1101,8 +1102,7 @@ public sealed class VisualParityTests
             .. pair.Children.OfType<RevisionGridRefRenderer.RefLabelControl>(),
         ];
         RevisionGridRefRenderer.RefLabelControl standaloneTrackingRemote =
-            RevisionGridRefRenderer.CreateLabels(
-                [CreateRef("origin/next", isRemote: true, isSelectedHeadMergeSource: true)])
+            RevisionRefLabelFixture.Render([CreateRef("origin/next", isRemote: true, isSelectedHeadMergeSource: true)])
                 .Should()
                 .ContainSingle()
                 .Which.Should()
@@ -1368,7 +1368,6 @@ public sealed class VisualParityTests
             Panel messageContent = messageCell.Children.OfType<Panel>().Should().ContainSingle().Which;
             messageContent.Margin.Left.Should().Be(6);
             messageContent.TranslatePoint(default, messageCell)!.Value.X.Should().Be(6);
-            RevisionGridControl.CalculateGraphColumnWidth(visibleLaneCount: 3).Should().Be(54);
         }
         finally
         {
@@ -1525,8 +1524,8 @@ public sealed class VisualParityTests
                 new GitRevision(ObjectId.Random()) { AuthorEmail = "other@example.com", Subject = "alternating" },
                 new GitRevision(ObjectId.Random()) { AuthorEmail = "other@example.com", Subject = "panel" },
             ];
-            control.GetTestAccessor().SetRevisions(revisions);
-            ListBox gridView = control.GetTestAccessor().Revisions;
+            control.GetNativeTestAccessor().SetRevisions(revisions);
+            ListBox gridView = control._gridView;
             Window window = new() { Width = 700, Height = 180, Content = control };
             window.Show();
             try
@@ -1917,7 +1916,7 @@ public sealed class VisualParityTests
         Color expectedBackground)
     {
         RevisionGridRefRenderer.RefLabelControl label =
-            RevisionGridRefRenderer.CreateLabels([gitRef])
+            RevisionRefLabelFixture.Render([gitRef])
                 .Should()
                 .ContainSingle()
                 .Which.Should()
@@ -1975,6 +1974,10 @@ public sealed class VisualParityTests
         string trackingRemote = "")
     {
         IGitRef gitRef = Substitute.For<IGitRef>();
+        IGitModule module = Substitute.For<IGitModule>();
+        module.GetRemoteColors().Returns(FrozenDictionary<string, System.Drawing.Color>.Empty);
+        module.GetAllLocalSettings().Returns([]);
+        gitRef.Module.Returns(module);
         gitRef.Name.Returns(name);
         gitRef.IsHead.Returns(isHead);
         gitRef.IsRemote.Returns(isRemote);

@@ -22,6 +22,9 @@ public sealed class WorkingDirPopupCaptureTreeTests
     [SetUp]
     public void SetUp() => ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
 
+    [TearDown]
+    public void TearDown() => WorkingDirectoryTestSupport.Reset();
+
     [AvaloniaTest]
     [TestCase(false, false)]
     [TestCase(true, false)]
@@ -41,7 +44,7 @@ public sealed class WorkingDirPopupCaptureTreeTests
             UseNativeToolStripLayout = true,
             Width = 140,
         };
-        WorkingDirectoryToolStripSplitButton.TestAccessor accessor = selector.GetTestAccessor();
+        WorkingDirectoryTestSupport.Accessor accessor = selector.GetTestAccessor();
         accessor.PrepareDropDown([], []);
         strip.Items.Add(selector);
         Window window = new()

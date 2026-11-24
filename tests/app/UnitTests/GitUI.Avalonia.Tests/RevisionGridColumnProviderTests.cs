@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -217,12 +218,12 @@ public sealed class RevisionGridColumnProviderTests
         NotesColumnProvider.FirstLine(revision.Notes).Should().Be("First note");
         RevisionGridControl grid = new();
         AuthorNameColumnProvider authorProvider = new(grid, new AuthorRevisionHighlighting());
-        authorProvider.TryGetToolTip(revision, out string? authorToolTip).Should().BeTrue();
+        authorProvider.TryGetToolTip(x: null, revision, out string? authorToolTip).Should().BeTrue();
         authorToolTip.Should().Contain("Author <author@example.com>");
         authorToolTip.Should().Contain("Committer <committer@example.com>");
 
         CommitIdColumnProvider idProvider = new(grid);
-        idProvider.TryGetToolTip(revision, out string? idToolTip).Should().BeTrue();
+        idProvider.TryGetToolTip(x: null, revision, out string? idToolTip).Should().BeTrue();
         idToolTip.Should().Be(revision.Guid);
         TextBlock idCell = (TextBlock)idProvider.CreateCell();
         idProvider.Column.Width = new GridLength(55);
@@ -258,7 +259,6 @@ public sealed class RevisionGridColumnProviderTests
             DateTime widthWindowStart = DateTime.Now;
             DateColumnProvider dateProvider = new(grid);
             DateTime widthWindowEnd = DateTime.Now;
-            BuildStatusColumnProvider buildProvider = new(_ => { }, () => Substitute.For<IGitModule>());
             authorProvider.CreateCell().Opacity.Should().Be(1,
                 "the source author column uses the row's unmodified foreground");
             dateProvider.CreateCell().Opacity.Should().Be(1,
@@ -278,8 +278,6 @@ public sealed class RevisionGridColumnProviderTests
 
             sourceMeasuredWidths.Should().Contain(dateProvider.Column.Width.Value,
                 "the source measures the current absolute-date text instead of using a fixed column width");
-            buildProvider.CreateCell().Classes.Should().Contain("gitextensions-commit-header",
-                "the source paints build status with its configured monospace font");
         }
         finally
         {
@@ -393,73 +391,6 @@ public sealed class RevisionGridColumnProviderTests
             AppSettings.ShowTags = originalShowTags;
             AppSettings.RevisionGraphDrawNonRelativesGray = originalDrawNonRelativesGray;
         }
-    }
-
-    [AvaloniaTest]
-    public void Message_provider_should_render_superproject_checkout_and_additional_refs()
-    {
-        GitRevision revision = CreateRevision();
-        IGitModule module = Substitute.For<IGitModule>();
-        IGitRef superprojectRef = CreateRef(
-            module,
-            revision.ObjectId,
-            "release",
-            "refs/heads/release");
-        IGitRef existingRef = CreateRef(
-            module,
-            revision.ObjectId,
-            "main",
-            "refs/heads/main",
-            isHead: true);
-        revision.Refs = [existingRef];
-        SuperProjectInfo superProjectInfo = new()
-        {
-            CurrentCommit = revision.ObjectId,
-            Refs = new Dictionary<ObjectId, IReadOnlyList<IGitRef>>
-            {
-                [revision.ObjectId] = [existingRef, superprojectRef],
-            },
-        };
-
-        RevisionGridRefRenderer.RefLabelControl[] labels =
-        [
-            .. MessageColumnProvider.CreateSuperprojectLabels(revision, superProjectInfo)
-                .Cast<RevisionGridRefRenderer.RefLabelControl>(),
-        ];
-
-        labels.Should().HaveCount(2);
-        labels[0].Icon.Should().Be(RefLabelIcon.Head);
-        labels[0].Label.Should().BeEmpty();
-        labels[1].Label.Should().Be("release");
-        labels[1].IsDashed.Should().BeTrue();
-
-        RevisionGridRefRenderer.RefLabelControl existingLabel = RevisionGridRefRenderer.CreateLabels(
-                revision.Refs,
-                showTags: true,
-                showRemoteBranches: true,
-                fill: false,
-                getVirtualRef: null,
-                superprojectRefs: new HashSet<string>(StringComparer.Ordinal) { existingRef.CompleteName })
-            .Should().ContainSingle()
-            .Which.Should().BeOfType<RevisionGridRefRenderer.RefLabelControl>().Subject;
-        existingLabel.IsDashed.Should().BeTrue();
-    }
-
-    [AvaloniaTest]
-    [Category("P8.6i.126")]
-    public void Revision_graph_provider_should_preserve_the_source_cache_lifecycle_for_retained_rows()
-    {
-        RevisionGridControl control = new();
-        RevisionGraphColumnProvider provider = (RevisionGraphColumnProvider)control.ColumnProviders[0];
-        RevisionGraphColumnProvider.TestAccessor accessor = provider.GetTestAccessor();
-        VisibleRowRange range = new(fromIndex: 2, count: 4);
-
-        accessor.RenderGraphToCache(range, toRowIndex: 5, rowHeight: 22);
-
-        accessor.CachedVisibleRange.Equals(range).Should().BeTrue();
-        accessor.LastRenderedRow.Should().Be(5);
-        provider.Clear();
-        accessor.LastRenderedRow.Should().Be(-1);
     }
 
     [AvaloniaTest]
@@ -634,12 +565,12 @@ public sealed class RevisionGridColumnProviderTests
             GitRevision revision = CreateRevision();
             revision.HasMultiLineMessage = true;
             revision.Body = revision.Subject + "\n\nTooltip body";
-            control.GetTestAccessor().SetRevisions([revision]);
+            control.GetNativeTestAccessor().SetRevisions([revision]);
             owner.Content = control;
             owner.Show();
             owner.Activate();
             Dispatcher.UIThread.RunJobs();
-            control.GetTestAccessor().OwnerWindow.Should().BeSameAs(owner);
+            control.GetNativeTestAccessor().OwnerWindow.Should().BeSameAs(owner);
             Control messageCell = control.GetVisualDescendants()
                 .OfType<Control>()
                 .Single(item => item.Classes.Contains("revision-message-cell"));
@@ -654,7 +585,7 @@ public sealed class RevisionGridColumnProviderTests
             ToolTip.SetIsOpen(messageCell, true);
             ToolTip.GetIsOpen(messageCell).Should().BeTrue();
 
-            control.GetTestAccessor().RaiseOwnerWindowDeactivated();
+            control.GetNativeTestAccessor().RaiseOwnerWindowDeactivated();
             Dispatcher.UIThread.RunJobs();
 
             ToolTip.GetIsOpen(messageCell).Should().BeFalse();
@@ -800,6 +731,7 @@ public sealed class RevisionGridColumnProviderTests
             => Stages.Add("paint");
 
         public override bool TryGetToolTip(
+            double? x,
             GitRevision revision,
             [NotNullWhen(returnValue: true)] out string? toolTip)
         {

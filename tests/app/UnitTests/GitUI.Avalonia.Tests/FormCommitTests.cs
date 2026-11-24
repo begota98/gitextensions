@@ -1,10 +1,13 @@
-﻿using System.ComponentModel.Design;
+using System.ComponentModel.Design;
 using System.Diagnostics;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Platform;
 using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
+using Avalonia.Input;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using AvaloniaEdit;
@@ -88,6 +91,79 @@ public sealed class FormCommitTests
     }
 
     [AvaloniaTest]
+    [TestCase(WindowState.Normal)]
+    [TestCase(WindowState.Maximized)]
+    public void Commit_should_request_the_saved_bounds_before_opening(WindowState state)
+    {
+        GitModule module = CreateCleanRepository();
+        WindowPositionList positions = WindowPositionList.Load()!;
+        positions.AddOrUpdate(new WindowPosition(new System.Drawing.Rectangle(20, 30, 1420, 810), 96, state, nameof(FormCommit)));
+        positions.Save();
+        _settingsScope.ReloadWindowPositions();
+
+        using FormCommit form = new(new GitUICommands(_serviceContainer, module));
+
+        form.IsVisible.Should().BeFalse();
+        form.Width.Should().Be(1420);
+        form.Height.Should().Be(810);
+        form.WindowState.Should().Be(state);
+    }
+
+    [AvaloniaTest]
+    [TestCase(false, false)]
+    [TestCase(true, false)]
+    [TestCase(true, true)]
+    public async Task FormCommit_should_save_draft_and_splitters_only_when_visible_at_close(bool show, bool hideBeforeClose)
+    {
+        const string originalDraft = "The saved draft";
+        const string editedDraft = "The updated draft";
+        const string splitterSizeKey = "splitMain_Size";
+        GitModule module = CreateCleanRepository();
+        string draftPath = Path.Combine(module.WorkingDirGitDir, "COMMITMESSAGE");
+        await File.WriteAllTextAsync(draftPath, originalDraft, module.CommitEncoding);
+
+        GitCommands.AppSettingsPath settings = new("CommitDialog");
+        string? originalSize = settings.GetValue(splitterSizeKey);
+        bool visibleAtClose = show && !hideBeforeClose;
+        try
+        {
+            FormCommit form = new(new GitUICommands(_serviceContainer, module));
+            FormCommit.TestAccessor accessor = form.GetTestAccessor();
+            try
+            {
+                if (show)
+                {
+                    form.Show();
+                    await WaitUntilAsync(() => accessor.Message.Text == originalDraft);
+                    form.UpdateLayout();
+                }
+
+                accessor.Message.Text = editedDraft;
+                if (hideBeforeClose)
+                {
+                    form.Hide();
+                }
+
+                form.IsVisible.Should().Be(visibleAtClose);
+                settings.SetValue(splitterSizeKey, null);
+            }
+            finally
+            {
+                form.Close();
+                await accessor.ClosePersistenceTask;
+            }
+
+            string draft = await File.ReadAllTextAsync(draftPath, module.CommitEncoding);
+            draft.Should().Be(visibleAtClose ? editedDraft : originalDraft);
+            (settings.GetValue(splitterSizeKey) is not null).Should().Be(visibleAtClose);
+        }
+        finally
+        {
+            settings.SetValue(splitterSizeKey, originalSize);
+        }
+    }
+
+    [AvaloniaTest]
     public async Task Commit_splitter_should_retry_saved_distance_after_the_real_window_reaches_its_final_size()
     {
         GitModule module = CreateCleanRepository();
@@ -128,10 +204,10 @@ public sealed class FormCommitTests
             await first.GetTestAccessor().ClosePersistenceTask;
             settings.GetValue("splitMain_Distance").Should().Be("1000");
 
-            FormCommit restored = new(new GitUICommands(_serviceContainer, module));
             File.Exists(_settingsScope.WindowPositionPath).Should().BeTrue();
             File.Delete(_settingsScope.WindowPositionPath);
             _settingsScope.ReloadWindowPositions();
+            FormCommit restored = new(new GitUICommands(_serviceContainer, module));
             try
             {
                 restored.Show();
@@ -344,6 +420,106 @@ public sealed class FormCommitTests
 
             list.HasSelection.Should().Be(!byMouse,
                 "the pointer click selects its hit item after the Enter notification, while keyboard Enter restores selection");
+        }
+        finally
+        {
+            form.Close();
+            await form.GetTestAccessor().ClosePersistenceTask;
+        }
+    }
+
+    [AvaloniaTest]
+    [TestCase(false, 2, 2)]
+    [TestCase(true, 3, 3)]
+    public async Task Unstage_button_should_report_rename_aware_batch_progress_from_the_real_index(bool rename, int maximum, int unstagedCount)
+    {
+        GitModule module = CreateCleanRepository();
+        string second = Path.Combine(_workingDirectory, "second.txt");
+        File.WriteAllText(second, "second file\n");
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("add") { "--", "second.txt" });
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("commit") { "--quiet", "-m", "second file".Quote() });
+        if (rename)
+        {
+            module.GitExecutable.RunCommand(new GitArgumentBuilder("mv") { "tracked.txt", "renamed.txt" });
+        }
+        else
+        {
+            File.AppendAllText(Path.Combine(_workingDirectory, "tracked.txt"), "modified\n");
+            module.GitExecutable.RunCommand(new GitArgumentBuilder("add") { "--", "tracked.txt" });
+        }
+
+        File.AppendAllText(second, "modified\n");
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("add") { "--", "second.txt" });
+        FormCommit form = new(new GitUICommands(_serviceContainer, module));
+        try
+        {
+            form.Show();
+            FileStatusList unstaged = form.FindControl<FileStatusList>("Unstaged")!;
+            FileStatusList staged = form.FindControl<FileStatusList>("Staged")!;
+            await WaitForCountsAsync(unstaged, 0, staged, 2);
+            staged.GitItemStatuses.Count(item => item.IsRenamed).Should().Be(rename ? 1 : 0);
+            staged.SelectAll();
+            await WaitUntilAsync(() => staged.SelectedGitItems.Count == 2);
+            ProgressBar progress = form.FindControl<ProgressBar>("toolStripProgressBar1")!;
+            List<(double Maximum, double Value, bool OnUIThread)> updates = [];
+            progress.PropertyChanged += (_, _) =>
+            {
+                if (progress.IsVisible)
+                {
+                    updates.Add((progress.Maximum, progress.Value, Dispatcher.UIThread.CheckAccess()));
+                }
+            };
+            Button unstage = form.FindControl<Button>("toolUnstageItem")!;
+            unstage.IsEnabled.Should().BeTrue();
+            unstage.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            await WaitForCountsAsync(unstaged, unstagedCount, staged, 0);
+            await WaitUntilAsync(() => !progress.IsVisible);
+
+            updates.Should().Contain(update => update.Maximum == maximum && update.Value == maximum - 1);
+            updates.Should().OnlyContain(update => update.OnUIThread);
+            progress.Maximum.Should().Be(maximum);
+            progress.Value.Should().Be(maximum);
+            module.GitExecutable.GetOutput(new GitArgumentBuilder("diff") { "--cached", "--name-only" }).Should().BeEmpty();
+        }
+        finally
+        {
+            form.Close();
+            await form.GetTestAccessor().ClosePersistenceTask;
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task Stage_button_should_display_preparation_and_completion_progress_for_the_real_index()
+    {
+        FormCommit form = new(new GitUICommands(_serviceContainer, CreateRepositoryWithTwoUnstagedChanges()));
+        try
+        {
+            form.Show();
+            FileStatusList unstaged = form.FindControl<FileStatusList>("Unstaged")!;
+            FileStatusList staged = form.FindControl<FileStatusList>("Staged")!;
+            await WaitForCountsAsync(unstaged, 2, staged, 0);
+            unstaged.SelectAll();
+            ProgressBar progress = form.FindControl<ProgressBar>("toolStripProgressBar1")!;
+            List<(double Maximum, double Value, bool OnUIThread)> updates = [];
+            progress.PropertyChanged += (_, _) =>
+            {
+                if (progress.IsVisible)
+                {
+                    updates.Add((progress.Maximum, progress.Value, Dispatcher.UIThread.CheckAccess()));
+                }
+            };
+
+            Button stage = form.FindControl<Button>("toolStageItem")!;
+            stage.IsEnabled.Should().BeTrue();
+            stage.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            await WaitForCountsAsync(unstaged, 0, staged, 2);
+            await WaitUntilAsync(() => !progress.IsVisible);
+
+            updates.Where(update => update.Maximum == 4).Select(update => update.Value).Distinct()
+                .Should().ContainInOrder(0d, 1d, 2d, 4d);
+            updates.Should().OnlyContain(update => update.OnUIThread);
+            progress.Maximum.Should().Be(4);
+            progress.Value.Should().Be(4);
         }
         finally
         {
@@ -727,6 +903,140 @@ public sealed class FormCommitTests
     }
 
     [AvaloniaTest]
+    public async Task FormCommit_should_keep_the_existing_title_when_HEAD_becomes_detached()
+    {
+        GitModule module = CreateCleanRepository();
+        GitUICommands commands = new(_serviceContainer, module);
+        FormCommit form = new(commands);
+        try
+        {
+            form.Show();
+            TextBlock branch = form.FindControl<TextBlock>("branchNameLabel")!;
+            HyperlinkButton remote = form.FindControl<HyperlinkButton>("remoteNameLabel")!;
+            await WaitUntilAsync(() => branch.Text?.EndsWith("\u2192", StringComparison.Ordinal) == true);
+            string? trackedTitle = form.Title;
+            trackedTitle.Should().Contain(module.GetSelectedBranch());
+            (remote.Content as string).Should().NotBeNullOrEmpty();
+
+            commands.DoActionOnRepo(() =>
+            {
+                module.GitExecutable.RunCommand(new GitArgumentBuilder("checkout") { "--quiet", "--detach", "HEAD" });
+                return true;
+            }).Should().BeTrue();
+
+            string detachedName = module.GetSelectedBranch();
+            await WaitUntilAsync(() => branch.Text == detachedName && Equals(remote.Content, string.Empty));
+            form.Title.Should().Be(trackedTitle);
+        }
+        finally
+        {
+            form.Close();
+            await form.GetTestAccessor().ClosePersistenceTask;
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task FormCommit_should_refresh_the_remote_label_after_the_remotes_dialog()
+    {
+        GitModule module = CreateCleanRepository();
+        string currentBranch = module.GetSelectedBranch();
+        string remoteDirectory = Path.Combine(_workingDirectory, "remote");
+        Directory.CreateDirectory(remoteDirectory);
+        module.AddRemote("origin", remoteDirectory).Should().BeEmpty();
+        GitUICommands commands = new(_serviceContainer, module);
+        FormCommit form = new(commands);
+        try
+        {
+            form.Show();
+            HyperlinkButton remote = form.FindControl<HyperlinkButton>("remoteNameLabel")!;
+            await WaitUntilAsync(() => (remote.Content as string)?.StartsWith($"origin/{currentBranch}", StringComparison.Ordinal) == true);
+
+            string? preselectedBranch = null;
+            using IDisposable observer = Window.WindowOpenedEvent.AddClassHandler<Window>((window, _) =>
+            {
+                if (window is FormRemotes dialog)
+                {
+                    dialog.Opened += (_, _) =>
+                    {
+                        preselectedBranch = dialog.PreselectLocalOnLoad;
+                        module.SetSetting($"branch.{currentBranch}.remote", "origin");
+                        module.SetSetting($"branch.{currentBranch}.merge", "refs/heads/integration");
+                        Dispatcher.UIThread.Post(dialog.Close);
+                    };
+                }
+            });
+
+            commands.RepoChangedNotifier.Lock();
+            try
+            {
+                form.UpdateLayout();
+                Point point = remote.TranslatePoint(new Point(remote.Bounds.Width / 2, remote.Bounds.Height / 2), form)!.Value;
+                form.MouseMove(point, RawInputModifiers.None);
+                form.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+                form.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+
+                await WaitUntilAsync(() => preselectedBranch is not null);
+                preselectedBranch.Should().Be(currentBranch);
+                await WaitUntilAsync(() => Equals(remote.Content, "origin/integration"),
+                    () => "closing the remotes dialog refreshes the label while notification is deferred");
+            }
+            finally
+            {
+                commands.RepoChangedNotifier.UnLock(requestNotify: false);
+            }
+        }
+        finally
+        {
+            form.Close();
+            await form.GetTestAccessor().ClosePersistenceTask;
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task FormCommit_should_apply_the_original_message_from_the_history_flyout()
+    {
+        const string previous = "  Restored subject  \n\n  body \t  ";
+        AppSettings.CommitDialogShowOnlyMyMessages = false;
+        FormCommit form = new(new GitUICommands(_serviceContainer, CreateCleanRepository()));
+        try
+        {
+            form.Show();
+            AppSettings.LastCommitMessage = previous;
+            DropDownButton history = form.FindControl<DropDownButton>("commitMessageToolStripMenuItem")!;
+            form.UpdateLayout();
+            Click(history);
+            Dispatcher.UIThread.RunJobs();
+
+            MenuFlyout flyout = (MenuFlyout)history.Flyout!;
+            flyout.IsOpen.Should().BeTrue();
+            MenuItem saved = flyout.Items.OfType<MenuItem>().Single(item => Equals(item.Tag, previous));
+            Click(saved);
+            Dispatcher.UIThread.RunJobs();
+
+            using AwesomeAssertions.Execution.AssertionScope assertions = new();
+            form.GetTestAccessor().Message.Text.Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Should().Be("Restored subject  \n\n  body");
+            flyout.Items.OfType<Control>().TakeLast(3).Select(item => item.Name).Should().Equal(
+                "toolStripMenuItem1", "generateListOfChangesInSubmodulesChangesToolStripMenuItem", "ShowOnlyMyMessagesToolStripMenuItem");
+        }
+        finally
+        {
+            form.Close();
+            await form.GetTestAccessor().ClosePersistenceTask;
+        }
+
+        static void Click(Control target)
+        {
+            TopLevel root = TopLevel.GetTopLevel(target)
+                ?? throw new InvalidOperationException("The visible item must belong to a top level.");
+            Point point = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), root)!.Value;
+            root.MouseMove(point, RawInputModifiers.None);
+            root.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+            root.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+        }
+    }
+
+    [AvaloniaTest]
     public async Task FormCommit_should_load_message_history_and_saved_templates()
     {
         string lastCommitMessage = AppSettings.LastCommitMessage;
@@ -751,9 +1061,11 @@ public sealed class FormCommitTests
             AppSettings.LastCommitMessage = "Last message from another repository";
             AppSettings.CommitDialogShowOnlyMyMessages = false;
             CommitTemplateItem.SaveToSettings([new CommitTemplateItem("Saved template", "Template body", icon: null, isRegex: false)]);
+            MenuFlyout messageHistory = (MenuFlyout)form.FindControl<DropDownButton>("commitMessageToolStripMenuItem")!.Flyout!;
+            MenuFlyout templates = (MenuFlyout)form.FindControl<DropDownButton>("commitTemplatesToolStripMenuItem")!.Flyout!;
 
             accessor.PopulateCommitMessageHistory();
-            MenuItem lastMessage = accessor.CommitMessageFlyout.Items
+            MenuItem lastMessage = messageHistory.Items
                 .OfType<MenuItem>()
                 .First(item => Equals(item.Header, "Last message from another repository"));
             lastMessage.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
@@ -761,18 +1073,18 @@ public sealed class FormCommitTests
             form.GetTestAccessor().Message.Text.Should().Be("Last message from another repository");
 
             accessor.PopulateCommitTemplates();
-            MenuItem savedTemplate = accessor.CommitTemplatesFlyout.Items
+            MenuItem savedTemplate = templates.Items
                 .OfType<MenuItem>()
                 .First(item => Equals(item.Header, "Saved template"));
             savedTemplate.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
             Dispatcher.UIThread.RunJobs();
             form.GetTestAccessor().Message.Text.Should().Be("Template body");
 
-            MenuItem conventional = accessor.CommitTemplatesFlyout.Items.OfType<MenuItem>().Last(item => item.Items.OfType<MenuItem>().Any());
+            MenuItem conventional = templates.Items.OfType<MenuItem>().Last(item => item.Items.OfType<MenuItem>().Any());
             conventional.Items.OfType<MenuItem>().Select(item => item.Header).Should().Contain(FeatCommitTypeForTest);
 
             // The commit-message settings entry follows the conventional-commits submenu.
-            accessor.CommitTemplatesFlyout.Items.OfType<MenuItem>().Last().Header
+            templates.Items.OfType<MenuItem>().Last().Header
                 .Should().Be("_Edit commit message templates and settings...");
         }
         finally
@@ -865,6 +1177,65 @@ public sealed class FormCommitTests
     }
 
     [AvaloniaTest]
+    public async Task FormCommit_should_keep_a_matching_empty_term_in_selection_filter_history()
+    {
+        bool selectionFilterVisible = AppSettings.CommitDialogSelectionFilter;
+        AppSettings.CommitDialogSelectionFilter = true;
+        try
+        {
+            FormCommit form = new(new GitUICommands(_serviceContainer, CreateRepositoryWithTwoUnstagedChanges()));
+            try
+            {
+                form.Show();
+                ComboBox selectionFilter = form.FindControl<ComboBox>("selectionFilter")!;
+                FileStatusList unstaged = form.FindControl<FileStatusList>("Unstaged")!;
+                await WaitUntilAsync(() => unstaged.GitItemStatuses.Count == 2);
+                TextBox editor = selectionFilter.GetVisualDescendants().OfType<TextBox>()
+                    .Single(part => part.Name == "PART_EditableTextBox");
+                editor.Focus().Should().BeTrue();
+
+                TypeFilter("^tracked");
+                await WaitUntilAsync(() => selectionFilter.Items.Count == 1
+                    && unstaged.SelectedGitItems.Select(item => item.Name).SequenceEqual(["tracked.txt"]));
+                selectionFilter.Items.Cast<string>().Should().Equal("^tracked");
+
+                ClearFilter();
+                await WaitUntilAsync(() => unstaged.SelectedGitItems.Count() == 2);
+                selectionFilter.Text.Should().BeEmpty();
+                selectionFilter.Items.Cast<string>().Should().Equal(string.Empty, "^tracked");
+
+                TypeFilter("^untracked");
+                await WaitUntilAsync(() => unstaged.SelectedGitItems.Select(item => item.Name).SequenceEqual(["untracked.txt"]));
+                ClearFilter();
+                await WaitUntilAsync(() => unstaged.SelectedGitItems.Count() == 2);
+                selectionFilter.Items.Cast<string>().Should().Equal("^untracked", string.Empty, "^tracked");
+
+                void TypeFilter(string text)
+                {
+                    editor.SelectAll();
+                    form.KeyTextInput(text);
+                }
+
+                void ClearFilter()
+                {
+                    editor.SelectAll();
+                    form.KeyPress(Key.Back, RawInputModifiers.None, PhysicalKey.Backspace, keySymbol: null);
+                    form.KeyRelease(Key.Back, RawInputModifiers.None, PhysicalKey.Backspace, keySymbol: null);
+                }
+            }
+            finally
+            {
+                form.Close();
+                await form.GetTestAccessor().ClosePersistenceTask;
+            }
+        }
+        finally
+        {
+            AppSettings.CommitDialogSelectionFilter = selectionFilterVisible;
+        }
+    }
+
+    [AvaloniaTest]
     public async Task FormCommit_should_restore_selection_filter_and_visibility_settings()
     {
         bool selectionFilterVisible = AppSettings.CommitDialogSelectionFilter;
@@ -882,24 +1253,26 @@ public sealed class FormCommitTests
             {
                 form.Show();
                 FormCommit.TestAccessor accessor = form.GetTestAccessor();
+                ComboBox selectionFilter = form.FindControl<ComboBox>("selectionFilter")!;
+                StackPanel toolbarSelectionFilter = form.FindControl<StackPanel>("toolbarSelectionFilter")!;
                 FileStatusList unstaged = form.FindControl<FileStatusList>("Unstaged")!;
                 await WaitUntilAsync(() => unstaged.GitItemStatuses.Count == 2);
 
-                accessor.SelectionFilterVisible.Should().BeTrue();
+                toolbarSelectionFilter.IsVisible.Should().BeTrue();
                 form.FindControl<Button>("btnResetAllChanges")!.IsVisible.Should().BeFalse();
                 form.FindControl<Button>("btnResetUnstagedChanges")!.IsVisible.Should().BeFalse();
                 form.FindControl<Button>("CommitAndPush")!.IsVisible.Should().BeFalse();
 
-                accessor.SelectionFilter.Text = "tracked";
+                selectionFilter.Text = "tracked";
                 accessor.ApplySelectionFilter();
                 unstaged.SelectedGitItems.Should().ContainSingle(item => item.Name == "tracked.txt");
 
-                accessor.SelectionFilter.Text = "[";
+                selectionFilter.Text = "[";
                 accessor.ApplySelectionFilter();
-                accessor.SelectionFilter.Classes.Should().Contain("file-filter-invalid");
+                selectionFilter.Classes.Should().Contain("file-filter-invalid");
 
                 accessor.ExecuteCommand(FormCommit.Command.ToggleSelectionFilter).Should().BeTrue();
-                accessor.SelectionFilterVisible.Should().BeFalse();
+                toolbarSelectionFilter.IsVisible.Should().BeFalse();
             }
             finally
             {
@@ -1090,6 +1463,215 @@ public sealed class FormCommitTests
     }
 
     [AvaloniaTest]
+    public async Task FormCommit_should_keep_the_file_filter_editable_when_no_file_matches()
+    {
+        GitModule module = CreateRepositoryWithTwoUnstagedChanges();
+        FormCommit form = new(new GitUICommands(_serviceContainer, module));
+        try
+        {
+            form.Show();
+            FileStatusList unstaged = form.FindControl<FileStatusList>("Unstaged")!;
+            FileStatusList staged = form.FindControl<FileStatusList>("Staged")!;
+            await WaitForCountsAsync(unstaged, 2, staged, 0);
+            form.UpdateLayout();
+
+            ComboBox filter = unstaged.FindControl<ComboBox>("cboFilterComboBox")!;
+            TextBox editor = filter.GetVisualDescendants().OfType<TextBox>()
+                .Single(control => control.Name == "PART_EditableTextBox");
+            editor.Focus().Should().BeTrue();
+            editor.SelectAll();
+            form.KeyTextInput("^does-not-match$");
+            await WaitUntilAsync(() => unstaged.GitItemFilteredStatuses.Count == 0);
+
+            filter.IsEffectivelyVisible.Should().BeTrue();
+            editor.IsFocused.Should().BeTrue();
+            unstaged.FindControl<TextBlock>("NoFiles")!.IsVisible.Should().BeFalse();
+
+            editor.SelectAll();
+            form.KeyTextInput(@"^tracked\.txt$");
+            await WaitUntilAsync(() => unstaged.GitItemFilteredStatuses.Count == 1);
+            unstaged.GitItemFilteredStatuses.Select(item => item.Name).Should().Equal("tracked.txt");
+        }
+        finally
+        {
+            form.Close();
+            await form.GetTestAccessor().ClosePersistenceTask;
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task FormCommit_reset_should_get_its_delete_choice_from_filtered_files()
+    {
+        AppSettings.ShowResetWorkTreeChanges = true;
+        GitModule module = CreateRepositoryWithTwoUnstagedChanges();
+        FormCommit form = new(new GitUICommands(_serviceContainer, module));
+        try
+        {
+            form.Show();
+            FileStatusList unstaged = form.FindControl<FileStatusList>("Unstaged")!;
+            FileStatusList staged = form.FindControl<FileStatusList>("Staged")!;
+            await WaitForCountsAsync(unstaged, 2, staged, 0);
+            unstaged.SetFilter(@"^tracked\.txt$");
+            unstaged.GitItemFilteredStatuses.Select(item => item.Name).Should().Equal("tracked.txt");
+
+            int dialogCount = 0;
+            bool? canDelete = null;
+            bool? deleteSelected = null;
+            using IDisposable observer = Window.WindowOpenedEvent.AddClassHandler<Window>((window, _) =>
+            {
+                if (window is FormResetChanges dialog)
+                {
+                    dialog.Opened += (_, _) =>
+                    {
+                        dialogCount++;
+                        canDelete = dialog.cbDeleteNewFilesAndDirectories.IsEnabled;
+                        deleteSelected = dialog.cbDeleteNewFilesAndDirectories.IsChecked;
+                        Dispatcher.UIThread.Post(dialog.Close);
+                    };
+                }
+            });
+
+            Button reset = form.FindControl<Button>("btnResetUnstagedChanges")!;
+            form.UpdateLayout();
+            reset.IsEffectivelyVisible.Should().BeTrue();
+            reset.IsEffectivelyEnabled.Should().BeTrue();
+            Point point = reset.TranslatePoint(new Point(reset.Bounds.Width / 2, reset.Bounds.Height / 2), form)!.Value;
+            form.MouseMove(point, Avalonia.Input.RawInputModifiers.None);
+            form.MouseDown(point, Avalonia.Input.MouseButton.Left, Avalonia.Input.RawInputModifiers.None);
+            form.MouseUp(point, Avalonia.Input.MouseButton.Left, Avalonia.Input.RawInputModifiers.None);
+
+            dialogCount.Should().Be(1);
+            canDelete.Should().BeFalse();
+            deleteSelected.Should().BeFalse();
+            File.Exists(Path.Combine(_workingDirectory, "untracked.txt")).Should().BeTrue();
+        }
+        finally
+        {
+            form.Close();
+            await form.GetTestAccessor().ClosePersistenceTask;
+        }
+    }
+
+    [AvaloniaTest]
+    [TestCase(DiffListSortType.FilePath)]
+    [TestCase(DiffListSortType.FilePathFlat)]
+    public async Task FormCommit_should_start_file_drag_only_from_the_file_presenter(DiffListSortType sort)
+    {
+        GitModule module = CreateRepositoryWithTwoUnstagedChanges();
+        IStorageProvider storage = Substitute.For<IStorageProvider>();
+        storage.TryGetFileFromPathAsync(Arg.Any<Uri>()).Returns(Task.FromResult<IStorageFile?>(null));
+        IStorageProviderFactory factory = Substitute.For<IStorageProviderFactory>();
+        factory.CreateProvider(Arg.Any<TopLevel>()).Returns(storage);
+        using IDisposable storageScope = FileRevealTests.InstallStorageFactory(factory);
+
+        DiffListSortType previousSort = DiffListSortService.Instance.DiffListSorting;
+        DiffListSortService.Instance.DiffListSorting = sort;
+        FormCommit form = new(new GitUICommands(_serviceContainer, module)) { Width = 1200, Height = 800 };
+        try
+        {
+            form.Show();
+            FileStatusList unstaged = form.FindControl<FileStatusList>("Unstaged")!;
+            FileStatusList staged = form.FindControl<FileStatusList>("Staged")!;
+            await WaitForCountsAsync(unstaged, 2, staged, 0);
+            form.UpdateLayout();
+
+            Control files = sort == DiffListSortType.FilePath
+                ? unstaged.FindControl<TreeView>("tvDiffFiles")!
+                : unstaged.FindControl<ListBox>("lstFiles")!;
+            TextBlock row = files.GetVisualDescendants().OfType<TextBlock>().Single(label => label.Text == "tracked.txt");
+            Point rowStart = row.TranslatePoint(new Point(row.Bounds.Width / 2, row.Bounds.Height / 2), form)!.Value;
+            form.MouseMove(rowStart, Avalonia.Input.RawInputModifiers.None);
+            form.MouseDown(rowStart, Avalonia.Input.MouseButton.Left, Avalonia.Input.RawInputModifiers.None);
+            form.MouseUp(rowStart, Avalonia.Input.MouseButton.Left, Avalonia.Input.RawInputModifiers.None);
+            unstaged.SelectedItem!.Item.Name.Should().Be("tracked.txt");
+
+            StackPanel toolbar = unstaged.FindControl<StackPanel>("Toolbar")!;
+            Point toolbarStart = toolbar.TranslatePoint(new Point(toolbar.Bounds.Width - 20, toolbar.Bounds.Height / 2), form)!.Value;
+            form.InputHitTest(toolbarStart).Should().BeSameAs(toolbar);
+            Drag(toolbarStart);
+            await storage.DidNotReceive().TryGetFileFromPathAsync(Arg.Any<Uri>());
+
+            Drag(rowStart);
+            string trackedPath = Path.Combine(_workingDirectory, "tracked.txt");
+            await storage.Received(1).TryGetFileFromPathAsync(Arg.Is<Uri>(uri => uri.LocalPath == trackedPath));
+
+            void Drag(Point start)
+            {
+                Point end = start.WithX(start.X + 10);
+                form.MouseMove(start, Avalonia.Input.RawInputModifiers.None);
+                form.MouseDown(start, Avalonia.Input.MouseButton.Left, Avalonia.Input.RawInputModifiers.None);
+                form.MouseMove(end, Avalonia.Input.RawInputModifiers.LeftMouseButton);
+                Dispatcher.UIThread.RunJobs();
+                form.MouseUp(end, Avalonia.Input.MouseButton.Left, Avalonia.Input.RawInputModifiers.None);
+            }
+        }
+        finally
+        {
+            form.Close();
+            await form.GetTestAccessor().ClosePersistenceTask;
+            DiffListSortService.Instance.DiffListSorting = previousSort;
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task FormCommit_should_stage_files_when_a_folder_row_is_double_clicked()
+    {
+        GitModule module = CreateRepositoryWithTwoUnstagedChanges();
+        string directory = Path.Combine(_workingDirectory, "selected");
+        Directory.CreateDirectory(directory);
+        string first = Path.Combine(directory, "first.cs");
+        string second = Path.Combine(directory, "second.cs");
+        File.WriteAllText(first, "first\n");
+        File.WriteAllText(second, "second\n");
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("add") { "--all" }).Should().BeTrue();
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("commit") { "--quiet", "-m", "prepare" }).Should().BeTrue();
+        File.AppendAllText(first, "modified\n");
+        File.AppendAllText(second, "modified\n");
+
+        DiffListSortType previousSort = DiffListSortService.Instance.DiffListSorting;
+        DiffListSortService.Instance.DiffListSorting = DiffListSortType.FilePath;
+        try
+        {
+            FormCommit form = new(new GitUICommands(_serviceContainer, module));
+            try
+            {
+                form.Show();
+                FileStatusList unstaged = form.FindControl<FileStatusList>("Unstaged")!;
+                FileStatusList staged = form.FindControl<FileStatusList>("Staged")!;
+                await WaitForCountsAsync(unstaged, 2, staged, 0);
+                form.UpdateLayout();
+
+                TreeView tree = unstaged.FindControl<TreeView>("tvDiffFiles")!;
+                TextBlock header = tree.GetVisualDescendants().OfType<TextBlock>().Single(label => label.Text == "selected");
+                int doubleTaps = 0;
+                tree.AddHandler(Avalonia.Input.InputElement.DoubleTappedEvent, (_, _) => doubleTaps++,
+                    Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
+
+                Point point = header.TranslatePoint(new Point(header.Bounds.Width / 2, header.Bounds.Height / 2), form)!.Value;
+                form.MouseMove(point, Avalonia.Input.RawInputModifiers.None);
+                form.MouseDown(point, Avalonia.Input.MouseButton.Left, Avalonia.Input.RawInputModifiers.None);
+                form.MouseUp(point, Avalonia.Input.MouseButton.Left, Avalonia.Input.RawInputModifiers.None);
+                unstaged.SelectedItems.Select(item => item.Item.Name).Should().Equal("selected/first.cs", "selected/second.cs");
+                form.MouseDown(point, Avalonia.Input.MouseButton.Left, Avalonia.Input.RawInputModifiers.None);
+                form.MouseUp(point, Avalonia.Input.MouseButton.Left, Avalonia.Input.RawInputModifiers.None);
+
+                doubleTaps.Should().Be(1);
+                await WaitForCountsAsync(unstaged, 0, staged, 2);
+                staged.GitItemStatuses.Select(item => item.Name).Should().Equal("selected/first.cs", "selected/second.cs");
+            }
+            finally
+            {
+                form.Close();
+                await form.GetTestAccessor().ClosePersistenceTask;
+            }
+        }
+        finally
+        {
+            DiffListSortService.Instance.DiffListSorting = previousSort;
+        }
+    }
+
+    [AvaloniaTest]
     public async Task FormCommit_should_stage_and_unstage_selected_and_all_files()
     {
         GitModule module = CreateRepositoryWithTwoUnstagedChanges();
@@ -1113,10 +1695,10 @@ public sealed class FormCommitTests
 
             await WaitForCountsAsync(unstaged, 2, staged, 0);
 
-            await DoubleClickSelectedItemAsync(unstaged);
+            ClickFileRow(form, unstaged, unstaged.GitItemStatuses[0].Name, doubleClick: true);
             await WaitForCountsAsync(unstaged, 1, staged, 1);
 
-            await DoubleClickSelectedItemAsync(staged);
+            ClickFileRow(form, staged, staged.GitItemStatuses[0].Name, doubleClick: true);
             await WaitForCountsAsync(unstaged, 2, staged, 0);
 
             unstaged.SelectedGitItems = [unstaged.GitItemStatuses[0]];
@@ -1136,6 +1718,207 @@ public sealed class FormCommitTests
             await WaitForCountsAsync(unstaged, 2, staged, 0);
 
             module.GetAllChangedFilesWithSubmodulesStatus().Should().OnlyContain(item => item.Staged == StagedStatus.WorkTree);
+        }
+        finally
+        {
+            form.Close();
+            await form.GetTestAccessor().ClosePersistenceTask;
+        }
+    }
+
+    [AvaloniaTest]
+    [TestCase(true, false)]
+    [TestCase(false, false)]
+    [TestCase(true, true)]
+    [TestCase(false, true)]
+    public async Task FormCommit_should_restore_the_source_pane_selection_after_an_index_operation(bool stage, bool emptySource)
+    {
+        GitModule module = CreateCleanRepository();
+        string[] fileNames = ["a.txt", "b.txt", "c.txt", "d.txt"];
+        foreach (string fileName in fileNames)
+        {
+            File.WriteAllText(Path.Combine(_workingDirectory, fileName), "initial content\n");
+        }
+
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("add") { "--all" }).Should().BeTrue();
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("commit") { "--quiet", "-m", "prepare" }).Should().BeTrue();
+        foreach (string fileName in fileNames)
+        {
+            File.AppendAllText(Path.Combine(_workingDirectory, fileName), $"changed content for {fileName}\n");
+        }
+
+        if (!stage)
+        {
+            module.GitExecutable.RunCommand(new GitArgumentBuilder("add") { "--all" }).Should().BeTrue();
+        }
+
+        FormCommit form = new(new GitUICommands(_serviceContainer, module));
+        try
+        {
+            form.Show();
+            FileStatusList unstaged = form.FindControl<FileStatusList>("Unstaged")!;
+            FileStatusList staged = form.FindControl<FileStatusList>("Staged")!;
+            FileStatusList source = stage ? unstaged : staged;
+            FileStatusList destination = stage ? staged : unstaged;
+            await WaitForCountsAsync(unstaged, stage ? 4 : 0, staged, stage ? 0 : 4);
+            ClickFileRow(form, source, "b.txt");
+            await WaitUntilAsync(() => ReferenceEquals(form.GetTestAccessor().CurrentFilesList, source));
+            string[] selectedNames = emptySource ? fileNames : ["b.txt", "c.txt"];
+            source.SelectedGitItems = [.. source.GitItemStatuses.Where(item => selectedNames.Contains(item.Name))];
+            source.SelectedGitItems.Select(item => item.Name).Should().Equal(selectedNames);
+            form.GetTestAccessor().CurrentFilesList.Should().BeSameAs(source);
+
+            Button action = form.FindControl<Button>(stage ? "toolStageItem" : "toolUnstageItem")!;
+            action.IsEnabled.Should().BeTrue();
+            action.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            int moved = selectedNames.Length;
+            await WaitForCountsAsync(unstaged, stage ? 4 - moved : moved, staged, stage ? moved : 4 - moved);
+
+            destination.GitItemStatuses.Select(item => item.Name).Should().Equal(selectedNames);
+            if (emptySource)
+            {
+                form.GetTestAccessor().CurrentFilesList.Should().BeSameAs(destination);
+                destination.SelectedGitItems.Select(item => item.Name).Should().Equal(selectedNames);
+                if (!stage)
+                {
+                    destination.IsKeyboardFocusWithin.Should().BeTrue();
+                }
+            }
+            else
+            {
+                form.GetTestAccessor().CurrentFilesList.Should().BeSameAs(source);
+                source.SelectedGitItems.Select(item => item.Name).Should().Equal("d.txt");
+                FileViewer viewer = form.FindControl<FileViewer>("SelectedDiff")!;
+                await WaitUntilAsync(() => viewer.TextEditor.Text.Contains("changed content for d.txt", StringComparison.Ordinal));
+            }
+        }
+        finally
+        {
+            form.Close();
+            await form.GetTestAccessor().ClosePersistenceTask;
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task FormCommit_should_preview_the_focused_selected_file_or_clear_the_diff([Values] bool staged, [Values] bool clearSelection)
+    {
+        GitModule module = CreateRepositoryWithTwoUnstagedChanges();
+        if (staged)
+        {
+            module.GitExecutable.RunCommand(new GitArgumentBuilder("add") { "--all" }).Should().BeTrue();
+        }
+
+        FormCommit form = new(new GitUICommands(_serviceContainer, module));
+        try
+        {
+            form.Show();
+            FileStatusList unstaged = form.FindControl<FileStatusList>("Unstaged")!;
+            FileStatusList stagedList = form.FindControl<FileStatusList>("Staged")!;
+            FileStatusList list = staged ? stagedList : unstaged;
+            FileViewer viewer = form.FindControl<FileViewer>("SelectedDiff")!;
+            await WaitForCountsAsync(unstaged, staged ? 0 : 2, stagedList, staged ? 2 : 0);
+
+            ClickFileRow(form, list, "tracked.txt");
+            await WaitUntilAsync(() => viewer.TextEditor.Text.Contains("modified line", StringComparison.Ordinal));
+            if (clearSelection)
+            {
+                list.ClearSelected();
+                list.HasSelection.Should().BeFalse();
+                await WaitUntilAsync(() => viewer.TextEditor.Text.Length == 0, () => $"the cleared selection should empty the diff, actual: {viewer.TextEditor.Text}");
+                viewer.SupportLinePatching.Should().BeFalse();
+            }
+            else
+            {
+                ClickFileRow(form, list, "untracked.txt", modifiers: RawInputModifiers.Control);
+                list.SelectedGitItems.Select(item => item.Name).Should().BeEquivalentTo(["tracked.txt", "untracked.txt"]);
+                list.FocusedItem?.Item.Name.Should().Be("untracked.txt");
+                await WaitUntilAsync(() => viewer.TextEditor.Text.Contains("new line", StringComparison.Ordinal),
+                    () => $"the focused selection should supply the diff, actual: {viewer.TextEditor.Text}");
+            }
+        }
+        finally
+        {
+            form.Close();
+            await form.GetTestAccessor().ClosePersistenceTask;
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task FormCommit_should_preview_the_first_selected_file_when_a_folder_is_selected()
+    {
+        GitModule module = CreateCleanRepository();
+        string folder = Path.Combine(_workingDirectory, "folder");
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "first.txt"), "initial first\n");
+        File.WriteAllText(Path.Combine(folder, "second.txt"), "initial second\n");
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("add") { "--all" }).Should().BeTrue();
+        module.GitExecutable.RunCommand(new GitArgumentBuilder("commit") { "--quiet", "-m", "prepare" }).Should().BeTrue();
+        File.AppendAllText(Path.Combine(_workingDirectory, "tracked.txt"), "root modification\n");
+        File.AppendAllText(Path.Combine(folder, "first.txt"), "first folder modification\n");
+        File.AppendAllText(Path.Combine(folder, "second.txt"), "second folder modification\n");
+
+        DiffListSortType previousSort = DiffListSortService.Instance.DiffListSorting;
+        DiffListSortService.Instance.DiffListSorting = DiffListSortType.FilePath;
+        FormCommit? form = null;
+        try
+        {
+            form = new FormCommit(new GitUICommands(_serviceContainer, module));
+            form.Show();
+            FileStatusList unstaged = form.FindControl<FileStatusList>("Unstaged")!;
+            FileStatusList staged = form.FindControl<FileStatusList>("Staged")!;
+            FileViewer viewer = form.FindControl<FileViewer>("SelectedDiff")!;
+            await WaitForCountsAsync(unstaged, 3, staged, 0);
+            ClickFileRow(form, unstaged, "tracked.txt");
+            await WaitUntilAsync(() => viewer.TextEditor.Text.Contains("root modification", StringComparison.Ordinal));
+
+            unstaged.SelectFileOrFolder(RelativePath.From("folder")).Should().BeTrue();
+            unstaged.SelectedGitItems.Select(item => item.Name).Should().Equal("folder/first.txt", "folder/second.txt");
+            await WaitUntilAsync(() => viewer.TextEditor.Text.Contains("first folder modification", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DiffListSortService.Instance.DiffListSorting = previousSort;
+            if (form is not null)
+            {
+                form.Close();
+                await form.GetTestAccessor().ClosePersistenceTask;
+            }
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task FormCommit_should_move_focus_when_a_rescan_empties_the_active_pane([Values] bool initiallyStaged)
+    {
+        GitModule module = CreateCleanRepository();
+        File.AppendAllText(Path.Combine(_workingDirectory, "tracked.txt"), "rescanned modification\n");
+        if (initiallyStaged)
+        {
+            module.GitExecutable.RunCommand(new GitArgumentBuilder("add") { "--", "tracked.txt" }).Should().BeTrue();
+        }
+
+        FormCommit form = new(new GitUICommands(_serviceContainer, module));
+        try
+        {
+            form.Show();
+            FileStatusList unstaged = form.FindControl<FileStatusList>("Unstaged")!;
+            FileStatusList staged = form.FindControl<FileStatusList>("Staged")!;
+            FileStatusList source = initiallyStaged ? staged : unstaged;
+            FileStatusList destination = initiallyStaged ? unstaged : staged;
+            await WaitForCountsAsync(unstaged, initiallyStaged ? 0 : 1, staged, initiallyStaged ? 1 : 0);
+            ClickFileRow(form, source);
+            source.IsKeyboardFocusWithin.Should().BeTrue();
+
+            GitArgumentBuilder operation = initiallyStaged
+                ? new GitArgumentBuilder("restore") { "--staged", "--", "tracked.txt" }
+                : new GitArgumentBuilder("add") { "--", "tracked.txt" };
+            module.GitExecutable.RunCommand(operation).Should().BeTrue();
+            form.KeyPress(Key.F5, RawInputModifiers.None, PhysicalKey.F5, keySymbol: null);
+            form.KeyRelease(Key.F5, RawInputModifiers.None, PhysicalKey.F5, keySymbol: null);
+            await WaitForCountsAsync(unstaged, initiallyStaged ? 1 : 0, staged, initiallyStaged ? 0 : 1);
+
+            destination.IsKeyboardFocusWithin.Should().BeTrue();
+            form.GetTestAccessor().CurrentFilesList.Should().BeSameAs(destination);
+            destination.SelectedGitItem?.Name.Should().Be("tracked.txt");
         }
         finally
         {
@@ -1240,7 +2023,8 @@ public sealed class FormCommitTests
                 () => $"staged current={ReferenceEquals(form.GetTestAccessor().CurrentFilesList, staged)}; selected={staged.SelectedItem}; diff={diffEditor.Document?.Text}");
             staged.SelectedItem.Should().NotBeNull();
             unstaged.SelectedItem.Should().BeNull();
-            selectedDiff.GetTestAccessor().OpenWithDifftool.Should().NotBeNull(
+            FileViewerInternal selectedEditor = selectedDiff.FindControl<FileViewerInternal>("internalFileViewer")!;
+            selectedEditor.OpenWithDifftool.Should().NotBeNull(
                 "FormCommit should retain its external-difftool consumer action in FileViewer");
 
             Border toolbar = selectedDiff.FindControl<Border>("fileviewerToolbar")
@@ -1296,7 +2080,13 @@ public sealed class FormCommitTests
             toolbar.IsVisible.Should().BeTrue("the toolbar remains visible while the pointer enters it");
             Point outside = staged.TranslatePoint(new Point(staged.Bounds.Width / 2, staged.Bounds.Height / 2), form)!.Value;
             form.MouseMove(outside, Avalonia.Input.RawInputModifiers.None);
-            toolbar.IsVisible.Should().BeFalse("leaving the viewer hides its hover toolbar");
+            toolbar.IsVisible.Should().BeTrue("leaving the toolbar itself does not run the original editor leave handler");
+
+            Point backOverEditor = textView.TranslatePoint(new Point(textView.Bounds.Width / 2, textView.Bounds.Height / 2), form)!.Value;
+            form.MouseMove(backOverEditor, Avalonia.Input.RawInputModifiers.None);
+            textView.IsPointerOver.Should().BeTrue("the pointer has returned to the exposed text area");
+            form.MouseMove(outside, Avalonia.Input.RawInputModifiers.None);
+            toolbar.IsVisible.Should().BeFalse("leaving the editor for another control hides its hover toolbar");
         }
         finally
         {
@@ -1305,14 +2095,19 @@ public sealed class FormCommitTests
         }
     }
 
-    private static void ClickFileRow(FormCommit form, FileStatusList list, string fileName = "tracked.txt")
+    private static void ClickFileRow(
+        FormCommit form,
+        FileStatusList list,
+        string fileName = "tracked.txt",
+        bool doubleClick = false,
+        RawInputModifiers modifiers = RawInputModifiers.None)
     {
         form.UpdateLayout();
-        FileStatusList.TestAccessor accessor = list.GetTestAccessor();
-        Control row = accessor.DiffTree.IsEffectivelyVisible
-            ? accessor.DiffTree.GetVisualDescendants().OfType<TreeViewItem>()
+        TreeView diffTree = list.FindControl<TreeView>("tvDiffFiles")!;
+        Control row = diffTree.IsEffectivelyVisible
+            ? diffTree.GetVisualDescendants().OfType<TreeViewItem>()
                 .Single(container => container.DataContext is FileStatusList.DiffTreeNode node && node.Item?.Item.Name == fileName)
-            : accessor.List.GetVisualDescendants().OfType<ListBoxItem>()
+            : list.FindControl<ListBox>("lstFiles")!.GetVisualDescendants().OfType<ListBoxItem>()
                 .Single(container => container.DataContext is FileStatusItem item && item.Item.Name == fileName);
         FileStatusItem? item = row.DataContext switch
         {
@@ -1325,9 +2120,15 @@ public sealed class FormCommitTests
         row.IsEffectivelyVisible.Should().BeTrue();
         row.Bounds.Height.Should().BeGreaterThan(0);
         Point point = row.TranslatePoint(new Point(row.Bounds.Width / 2, row.Bounds.Height / 2), form)!.Value;
-        form.MouseMove(point, Avalonia.Input.RawInputModifiers.None);
-        form.MouseDown(point, Avalonia.Input.MouseButton.Left, Avalonia.Input.RawInputModifiers.None);
-        form.MouseUp(point, Avalonia.Input.MouseButton.Left, Avalonia.Input.RawInputModifiers.None);
+        form.MouseMove(point, modifiers);
+        form.MouseDown(point, Avalonia.Input.MouseButton.Left, modifiers);
+        form.MouseUp(point, Avalonia.Input.MouseButton.Left, modifiers);
+        if (doubleClick)
+        {
+            list.SelectedGitItem.Should().BeSameAs(item.Item);
+            form.MouseDown(point, Avalonia.Input.MouseButton.Left, modifiers);
+            form.MouseUp(point, Avalonia.Input.MouseButton.Left, modifiers);
+        }
     }
 
     private GitModule CreateRepositoryWithStagedAndUnstagedChanges()
@@ -1376,13 +2177,6 @@ public sealed class FormCommitTests
         File.AppendAllText(trackedFileName, "modified line\n");
         File.WriteAllText(Path.Combine(_workingDirectory, "untracked.txt"), "new line\n");
         return module;
-    }
-
-    private static async Task DoubleClickSelectedItemAsync(FileStatusList fileStatusList)
-    {
-        fileStatusList.SelectedGitItems = [fileStatusList.GitItemStatuses[0]];
-        await WaitUntilAsync(() => fileStatusList.SelectedGitItems.Count > 0);
-        fileStatusList.GetTestAccessor().DoubleClick();
     }
 
     private static IEnumerable<CaptureNode> Flatten(CaptureNode node)

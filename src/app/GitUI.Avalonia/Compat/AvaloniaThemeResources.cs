@@ -317,6 +317,7 @@ internal static class AvaloniaThemeResources
         SetBrush(resources, "GitExtensionsHighlightForegroundBrush", highlightText);
         SetBrush(resources, "GitExtensionsDataGridViewSelectionBackgroundBrush", dataGridViewSelectionBackground);
         SetBrush(resources, "GitExtensionsFileStatusSelectionForegroundBrush", isDark ? controlText : highlightText);
+        SetBrush(resources, "GitExtensionsFileStatusSelectionDecorationBrush", isDark ? grayText : DrawingColor.Silver);
         SetBrush(resources, "GitExtensionsInactiveSelectionForegroundBrush", inactiveSelectionText);
         SetBrush(resources, "GitExtensionsSystemInactiveSelectionBackgroundBrush", inactiveSelection);
         SetBrush(resources, "GitExtensionsToolTipBackgroundBrush", info);
@@ -356,6 +357,9 @@ internal static class AvaloniaThemeResources
         SetBrush(resources, "GitExtensionsNativeTreeInactiveSelectionCornerBrush", treeInactiveSelection.Corner);
         SetBrush(resources, "GitExtensionsNativeTreeInactiveSelectionAdjacentEdgeBrush", treeInactiveSelection.AdjacentEdge);
         SetBrush(resources, "GitExtensionsNativeTreeInactiveSelectionInnerCornerBrush", treeInactiveSelection.InnerCorner);
+
+        // Revision nodes hidden from the grid use GrayText in dark mode and Silver otherwise.
+        SetBrush(resources, "GitExtensionsRepoNodeInvisibleBrush", isDark ? ResolveSystemColor(settings, KnownColor.GrayText) : DrawingColor.Silver);
 
         // The Professional checked gradient is Color.Empty at both ends, preserving
         // the owner's actual backdrop. It is not Explorer/ListView selection paint.

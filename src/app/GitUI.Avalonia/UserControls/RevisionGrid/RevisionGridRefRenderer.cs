@@ -44,7 +44,7 @@ internal static class RevisionGridRefRenderer
 
     // Pixel width of the highlight frame drawn around a hovered ref label,
     // and the left-side offset used when drawing the nestled remote label.
-    private static int RefLabelHighlightWidth => 1;
+    private static float RefLabelHighlightWidth => 1F;
 
     private static int PointWidth(int height) => height / 2;
 
@@ -174,99 +174,6 @@ internal static class RevisionGridRefRenderer
         });
 
     /// <summary>
-    ///  Creates the ordered controls for a revision's refs, nesting a local branch with its
-    ///  tracked remote when both point at the same commit.
-    /// </summary>
-    public static IReadOnlyList<Control> CreateLabels(IReadOnlyList<IGitRef> refs)
-        => CreateLabels(
-            refs,
-            showTags: true,
-            showRemoteBranches: true,
-            fill: false,
-            getVirtualRef: null,
-            superprojectRefs: null);
-
-    internal static IReadOnlyList<Control> CreateLabels(
-        IReadOnlyList<IGitRef> refs,
-        bool showTags,
-        bool showRemoteBranches,
-        bool fill,
-        Func<IGitRef, (IGitRef GitRef, string Name)?>? getVirtualRef,
-        IReadOnlySet<string>? superprojectRefs,
-        Func<IGitRef, (string Label, string? HighlightedLabel)>? getLabel = null)
-    {
-        IReadOnlyList<IGitRef> sortedRefs = SortRefs(
-            refs.Where(gitRef => (!gitRef.IsTag || showTags)
-                && (!gitRef.IsRemote || showRemoteBranches)));
-        Dictionary<string, IGitRef> trackedRemotes = BuildTrackedRemoteMap(sortedRefs);
-        List<Control> labels = [];
-
-        foreach (IGitRef gitRef in sortedRefs)
-        {
-            if (trackedRemotes.ContainsValue(gitRef))
-            {
-                continue;
-            }
-
-            if (gitRef.IsHead && trackedRemotes.TryGetValue(gitRef.Name, out IGitRef? remote))
-            {
-                RefLabelControl localLabel = CreateLabel(
-                    gitRef,
-                    gitRef.Name,
-                    RefLabelShape.PointRight,
-                    fill,
-                    dashed: superprojectRefs?.Contains(gitRef.CompleteName) == true);
-                RefLabelControl remoteLabel = CreateLabel(
-                    remote,
-                    remote.Remote,
-                    RefLabelShape.NotchLeft,
-                    fill,
-                    showHeadIndicator: false,
-                    dashed: superprojectRefs?.Contains(remote.CompleteName) == true);
-                labels.Add(new NestledRefLabelPanel(localLabel, remoteLabel));
-                continue;
-            }
-
-            if (getVirtualRef?.Invoke(gitRef) is { } virtualRefData)
-            {
-                IGitRef virtualRef = virtualRefData.GitRef;
-                (RefLabelShape refShape, RefLabelShape virtualShape) = gitRef.IsRemote
-                    ? (RefLabelShape.NotchRight, RefLabelShape.PointLeft)
-                    : (RefLabelShape.PointRight, RefLabelShape.NotchLeft);
-                labels.Add(new NestledRefLabelPanel(
-                    CreateLabel(
-                        gitRef,
-                        gitRef.Name,
-                        refShape,
-                        fill,
-                        dashed: superprojectRefs?.Contains(gitRef.CompleteName) == true),
-                    CreateLabel(
-                        virtualRef,
-                        virtualRefData.Name,
-                        virtualShape,
-                        fill,
-                        showHeadIndicator: false,
-                        dashed: true,
-                        fontWeight: virtualRef is NestledVirtualRef { TrackingBranchIsGone: true }
-                            ? FontWeight.Bold
-                            : FontWeight.Normal)));
-                continue;
-            }
-
-            (string label, string? highlightedLabel) = getLabel?.Invoke(gitRef) ?? (gitRef.Name, null);
-            labels.Add(CreateLabel(
-                gitRef,
-                label,
-                gitRef.IsTag ? RefLabelShape.PointLeft : RefLabelShape.Rect,
-                fill,
-                dashed: superprojectRefs?.Contains(gitRef.CompleteName) == true,
-                highlightedLabel: highlightedLabel));
-        }
-
-        return labels;
-    }
-
-    /// <summary>
     ///  Arranges the tracked remote's notch over the local branch's point. This is the
     ///  layout equivalent of the WinForms renderer resetting its drawing offset.
     /// </summary>
@@ -288,6 +195,7 @@ internal static class RevisionGridRefRenderer
 
             // Avalonia paints a parent's Render before its children. A visual-only,
             // noninteractive final sibling preserves the source's deferred pair frames.
+            // Draw highlight frames last so neither capsule overwrites the other's highlight edge.
             VisualChildren.Add(_highlightOverlay);
         }
 
@@ -317,6 +225,8 @@ internal static class RevisionGridRefRenderer
 
             // The source resets offset from the actual clipped branch rectangle,
             // then clips the remote to the remaining cell width, not its ideal width.
+            // Compute the geometry to align the nestled notch/point exactly against the branch point/notch.
+            // Position the NotchLeft rect so its notch tip (rect.X + pointWidth) aligns with the branch point tip (branchRect.Right), cancelling the inter-label margin.
             double remoteX = Math.Max(0, _localLabel.CapsuleBounds.Right - PointWidth + RefLabelHighlightWidth);
             double remainingWidth = Math.Max(0, finalSize.Width - remoteX);
             _remoteLabel.Arrange(new Rect(
@@ -352,29 +262,6 @@ internal static class RevisionGridRefRenderer
         }
     }
 
-    private static Dictionary<string, IGitRef> BuildTrackedRemoteMap(IReadOnlyList<IGitRef> refs)
-    {
-        IReadOnlyList<IGitRef> localBranches = [.. refs.Where(gitRef => gitRef.IsHead)];
-        Dictionary<string, IGitRef> remoteByLocal = [];
-
-        foreach (IGitRef remote in refs.Where(gitRef => gitRef.IsRemote))
-        {
-            foreach (IGitRef local in localBranches)
-            {
-                if (local.IsTrackingRemote(remote))
-                {
-                    if (!remoteByLocal.TryAdd(local.LocalName, remote))
-                    {
-                        throw new InvalidOperationException(
-                            $"Multiple remote refs claim they are tracked by local branch '{local.LocalName}'.");
-                    }
-                }
-            }
-        }
-
-        return remoteByLocal;
-    }
-
     internal static RefLabelControl CreateLabel(
         IGitRef gitRef,
         string label,
@@ -384,13 +271,17 @@ internal static class RevisionGridRefRenderer
         bool dashed = false,
         FontWeight? fontWeight = null,
         string? highlightedLabel = null,
-        RefLabelIcon? icon = null)
-        => new(
-            gitRef,
+        RefLabelIcon? icon = null,
+        bool isSuperprojectOnly = false)
+    {
+        RefLabelControl control = new(
+            isSuperprojectOnly ? null : gitRef,
             label,
             GetBrushResourceKey(gitRef),
             icon is { } explicitIcon
-                ? GetEffectiveIcon(explicitIcon)
+                ? explicitIcon is RefLabelIcon.Head or RefLabelIcon.HeadMergeSource or RefLabelIcon.RemoteForced
+                    ? explicitIcon
+                    : RefLabelIcon.None
                 : showHeadIndicator && gitRef.IsSelected
                     ? RefLabelIcon.Head
                     : showHeadIndicator && gitRef.IsSelectedHeadMergeSource
@@ -399,17 +290,17 @@ internal static class RevisionGridRefRenderer
             shape,
             fill,
             dashed,
-            GetRemoteRefBrush(gitRef),
+            isSuperprojectOnly ? null : GetRemoteRefBrush(gitRef),
             highlightedLabel)
         {
-            // Explicit Normal denotes the source NormalFont, which may itself be bold.
-            // Its selected/forced BoldFont replaces configured Italic rather than adding Bold.
-            FontWeight = fontWeight == FontWeight.Bold || (fontWeight is null && gitRef.IsSelected) || AppSettings.Font.Bold
-                ? FontWeight.Bold : FontWeight.Normal,
-            FontStyle = fontWeight != FontWeight.Bold && (fontWeight is not null || !gitRef.IsSelected) && AppSettings.Font.Italic
-                ? FontStyle.Italic : FontStyle.Normal,
             VerticalAlignment = VerticalAlignment.Center,
         };
+
+        // Explicit Normal denotes the source NormalFont, which may itself be bold.
+        // Its selected/forced BoldFont replaces configured Italic rather than adding Bold.
+        control.Classes.Set("revision-emphasized", fontWeight == FontWeight.Bold || (fontWeight is null && gitRef.IsSelected));
+        return control;
+    }
 
     /// <summary>
     ///  Draws a ref label and returns the retained label.
@@ -541,51 +432,6 @@ internal static class RevisionGridRefRenderer
         return "GitExtensionsOtherRefBrush";
     }
 
-    private static IReadOnlyList<IGitRef> SortRefs(IEnumerable<IGitRef> refs)
-    {
-        List<IGitRef> sortedRefs = [.. refs];
-        sortedRefs.Sort(CompareRefs);
-        return sortedRefs;
-
-        static int CompareRefs(IGitRef left, IGitRef right)
-        {
-            int result = GetRank(left).CompareTo(GetRank(right));
-            return result == 0
-                ? string.Compare(left.Name, right.Name, StringComparison.Ordinal)
-                : result;
-        }
-
-        static int GetRank(IGitRef gitRef)
-        {
-            if (gitRef.IsBisect)
-            {
-                return 0;
-            }
-
-            if (gitRef.IsSelected)
-            {
-                return 1;
-            }
-
-            if (gitRef.IsSelectedHeadMergeSource)
-            {
-                return 2;
-            }
-
-            if (gitRef.IsHead)
-            {
-                return 3;
-            }
-
-            if (gitRef.IsRemote)
-            {
-                return 4;
-            }
-
-            return 5;
-        }
-    }
-
     private static StreamGeometry CreatePath(Action<StreamGeometryContext> draw)
     {
         StreamGeometry geometry = new();
@@ -685,11 +531,6 @@ internal static class RevisionGridRefRenderer
         return _ascent;
     }
 
-    private static RefLabelIcon GetEffectiveIcon(RefLabelIcon icon)
-        => icon is RefLabelIcon.Head or RefLabelIcon.HeadMergeSource or RefLabelIcon.RemoteForced
-            ? icon
-            : RefLabelIcon.None;
-
     /// <summary>
     ///  Computes the point width for the given font, which is needed to calculate the ideal capsule
     ///  size for Notch and Point shapes.
@@ -721,6 +562,7 @@ internal static class RevisionGridRefRenderer
         private bool _isHighlighted;
         private int _labelWidth;
         private double _literalTextWidth;
+        private int _paintTextWidth;
         private Size _textSize;
         private int _textOffsetY;
         private RefLabelIconRenderer? _iconRenderer;
@@ -864,9 +706,19 @@ internal static class RevisionGridRefRenderer
         {
             // The source measures prefixes with NoPadding but paints the literal caption
             // with NoPrefix. Empty labels retain the font's space height and zero width.
-            (_textSize, _backgroundHeight, _textOffsetY, _iconRenderer, _iconAreaWidth) = MeasureContent(this, Label, GetEffectiveIcon(Icon));
+            (_textSize, _backgroundHeight, _textOffsetY, _iconRenderer, _iconAreaWidth) = MeasureContent(this, Label, Icon);
             _literalTextWidth = WinFormsTextMeasurer.MeasureSize(FontFamily, FontStyle, FontWeight,
                 FontSize, Label, singleLine: false, useTextRendererPadding: false).Width;
+
+            // Avalonia's shaped advance can exceed a fitting GDI allocation. Keep
+            // source prefix underallocation and let the cell set the final clip.
+            _paintTextWidth = (int)_textSize.Width;
+            if (_paintTextWidth > 0 && _literalTextWidth <= _paintTextWidth)
+            {
+                using TextLayout layout = new(Label, new Typeface(FontFamily, FontStyle, FontWeight),
+                    FontSize, foreground: null, textWrapping: TextWrapping.NoWrap, flowDirection: FlowDirection.LeftToRight);
+                _paintTextWidth = Math.Max(_paintTextWidth, (int)Math.Ceiling(layout.WidthIncludingTrailingWhitespace));
+            }
 
             // Nestled hits share the first font's space height, not a multiline
             // caption's height. Cache it with layout rather than querying GDI per move.
@@ -886,7 +738,7 @@ internal static class RevisionGridRefRenderer
             // before the text, so only a small extra nudge (instead of a second full paddingLeftRight) is added.
             int leadingPadding = _iconRenderer is null ? PaddingLeftRight(Label) : 1;
 
-            _labelWidth = (int)_textSize.Width
+            _labelWidth = _paintTextWidth
                 + _iconAreaWidth
                 + leadingPadding + PaddingLeftRight(Label)
                 + extraWidth
@@ -904,7 +756,6 @@ internal static class RevisionGridRefRenderer
             }
 
             IBrush refBrush = RefBrush;
-            RefLabelIcon effectiveIcon = GetEffectiveIcon(Icon);
             Rect capsuleBounds = CapsuleBounds;
             if (capsuleBounds.Width <= 0 || capsuleBounds.Height <= 0)
             {
@@ -945,7 +796,7 @@ internal static class RevisionGridRefRenderer
             // so the icon and text must be shifted right by pointWidth.
             int iconXOffset = Shape is RefLabelShape.NotchLeft or RefLabelShape.PointLeft
                 ? PointWidth
-                : effectiveIcon == RefLabelIcon.None ? 0 : 1;
+                : _iconRenderer is null ? 0 : 1;
 
             _iconRenderer?.Draw(context,
                 (int)capsuleBounds.X + iconXOffset + IconPaddingLeftRight,
@@ -960,7 +811,7 @@ internal static class RevisionGridRefRenderer
                 + leadingPadding
                 - (Shape == RefLabelShape.PointLeft ? PointWidth / 2 : 0);
             int availableWidth = Math.Max(0, (int)Bounds.Width);
-            int textWidth = Math.Clamp(Math.Min(availableWidth - paddingLeftRight - paddingLeftRight, (int)_textSize.Width),
+            int textWidth = Math.Clamp(Math.Min(availableWidth - paddingLeftRight - paddingLeftRight, _paintTextWidth),
                 0, Math.Max(0, availableWidth - textX));
             Rect textBounds = new(textX, capsuleBounds.Y + _textOffsetY, textWidth, _textSize.Height);
             if (textWidth > 0 && _textSize.Height > 0)

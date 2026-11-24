@@ -20,6 +20,9 @@ namespace GitExtensionsTests;
 [Category("P8.6i.126")]
 public sealed class WorkingDirectoryPopupSeparatorTests
 {
+    [TearDown]
+    public void TearDown() => WorkingDirectoryTestSupport.Reset();
+
     [AvaloniaTest]
     [TestCase(false, false, false)]
     [TestCase(false, false, true)]
@@ -35,7 +38,7 @@ public sealed class WorkingDirectoryPopupSeparatorTests
         {
             FlowDirection = rightToLeft ? FlowDirection.RightToLeft : FlowDirection.LeftToRight,
         };
-        WorkingDirectoryToolStripSplitButton.TestAccessor accessor = selector.GetTestAccessor();
+        WorkingDirectoryTestSupport.Accessor accessor = selector.GetTestAccessor();
         Repository favourite = new(Path.Combine(Path.GetTempPath(), "GitExtensions.PopupSeparatorFavourite")) { Category = "Separator probe" };
         Repository recent = new(Path.Combine(Path.GetTempPath(), "GitExtensions.PopupSeparatorRecent"));
         accessor.PrepareDropDown([favourite], [recent]);

@@ -67,6 +67,23 @@ public sealed class RevisionGridContextSourceActionTests
     }
 
     [AvaloniaTest]
+    public void ContextMenuOpening_should_refresh_a_new_selection_only_when_requested()
+    {
+        using GridFixture fixture = new(bare: false, count: 2);
+        int menuChanges = 0;
+        fixture.Grid.MenuCommands.MenuChanged += (_, _) => menuChanges++;
+
+        fixture.Grid.SetSelectedRevision(fixture.Revisions[0].ObjectId).Should().BeTrue();
+        fixture.Grid.GetSelectedRevisions().Should().Equal(fixture.Revisions[0]);
+        menuChanges.Should().Be(0);
+
+        fixture.OpenContextMenu();
+        fixture.Grid.GetSelectedRevisions().Should().Equal(fixture.Revisions[1]);
+        fixture.AssertMenu("createTagToolStripMenuItem", true);
+        menuChanges.Should().Be(1);
+    }
+
+    [AvaloniaTest]
     [TestCase("commit", false)]
     [TestCase("stash", false)]
     [TestCase("autostash", false)]
@@ -391,7 +408,7 @@ public sealed class RevisionGridContextSourceActionTests
                 };
             }
 
-            Grid.GetTestAccessor().SetRevisions(Revisions);
+            Grid.GetNativeTestAccessor().SetRevisions(Revisions);
             Window = new Window { Width = 1000, Height = 220, Content = Grid };
             Window.Show();
             Window.Activate();
@@ -431,7 +448,7 @@ public sealed class RevisionGridContextSourceActionTests
         public void OpenContextMenu()
         {
             Settle();
-            Control row = Grid.GetTestAccessor().Revisions.ContainerFromIndex(Revisions.Length - 1) as Control
+            Control row = Grid._gridView.ContainerFromIndex(Revisions.Length - 1) as Control
                 ?? throw new AssertionException("The real selected row must be realized.");
             Point point = row.TranslatePoint(new Point(row.Bounds.Width - 5, row.Bounds.Height / 2), Window)
                 ?? throw new AssertionException("The real selected row must remain attached.");
@@ -456,7 +473,7 @@ public sealed class RevisionGridContextSourceActionTests
         {
             Menu.Close();
             Grid.CancelBackgroundTasks();
-            Grid.GetTestAccessor().SetRevisions([]);
+            Grid.GetNativeTestAccessor().SetRevisions([]);
             Window.Close();
             Dispatcher.UIThread.RunJobs();
             foreach (KeyValuePair<string, string?> setting in _settings)

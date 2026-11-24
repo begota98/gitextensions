@@ -2,21 +2,25 @@ using Avalonia.Media;
 using AvaloniaEdit.Document;
 using AvaloniaEdit.Rendering;
 using GitExtensions.Extensibility.Git;
+using GitExtUtils.GitUI.Theming;
 using GitUI.Compat;
+using GitUI.Theming;
+using DrawingColor = System.Drawing.Color;
 using MediaColor = Avalonia.Media.Color;
 
 namespace GitUI.Editor;
 
 internal abstract class GitHighlightingStrategyBase : DocumentColorizingTransformer
 {
-    protected static MediaColor ColorNormal
-        => Avalonia.Application.Current?.ActualThemeVariant == Avalonia.Styling.ThemeVariant.Dark
-            ? Colors.White
-            : Colors.Black;
+    // Avalonia resolves the original system role through the shared theme resources.
+    protected static MediaColor ColorNormal => GetSystemColor(System.Drawing.KnownColor.WindowText);
 
-    private static MediaColor ColorComment { get; } = Colors.DarkGreen;
+    private static DrawingColor ColorComment { get; } = DrawingColor.DarkGreen;
 
     private readonly char _commentChar;
+
+    // AvaloniaEdit's native Git transformer carries the source strategy's theme wrapper choice.
+    private readonly bool _useSystemVisualStyle = ThemeModule.Settings.UseSystemVisualStyle;
 
     protected GitHighlightingStrategyBase(string name, IGitModule module)
     {
@@ -46,7 +50,10 @@ internal abstract class GitHighlightingStrategyBase : DocumentColorizingTransfor
     {
         if (IsComment(document, line))
         {
-            SetStyle(line.Offset, line.EndOffset, ColorComment);
+            DrawingColor color = _useSystemVisualStyle
+                ? ColorComment
+                : ColorComment.AdaptForeColor(AppColor.EditorBackground.GetThemeColor());
+            SetStyle(line.Offset, line.EndOffset, AvaloniaThemeResources.ToMediaColor(color));
             return true;
         }
 
@@ -62,6 +69,9 @@ internal abstract class GitHighlightingStrategyBase : DocumentColorizingTransfor
     protected abstract void MarkTokens(TextDocument document, DocumentLine line);
 
     public string Name { get; }
+
+    protected static MediaColor GetSystemColor(System.Drawing.KnownColor name)
+        => AvaloniaThemeResources.ToMediaColor(AvaloniaThemeResources.ResolveSystemColor(ThemeModule.Settings, name));
 
     protected void SetStyle(int startOffset, int endOffset, MediaColor color, bool bold = false)
     {

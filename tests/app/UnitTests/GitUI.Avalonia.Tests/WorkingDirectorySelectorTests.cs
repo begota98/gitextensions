@@ -30,6 +30,9 @@ public sealed class WorkingDirectorySelectorTests
     public void SetUp()
         => GitUI.ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
 
+    [TearDown]
+    public void TearDown() => WorkingDirectoryTestSupport.Reset();
+
     [AvaloniaTest]
     public void FormBrowse_should_construct_with_the_same_named_working_directory_split_button()
     {
@@ -69,7 +72,7 @@ public sealed class WorkingDirectorySelectorTests
             Repository alpha = new(@"C:\repos\alpha");
             Repository beta = new(@"C:\repos\beta") { Anchor = Repository.RepositoryAnchor.AnchoredInRecent };
             WorkingDirectoryToolStripSplitButton selector = new();
-            WorkingDirectoryToolStripSplitButton.TestAccessor accessor = selector.GetTestAccessor();
+            WorkingDirectoryTestSupport.Accessor accessor = selector.GetTestAccessor();
 
             accessor.FillDropDown([favourite], [alpha, beta]);
 
@@ -109,7 +112,7 @@ public sealed class WorkingDirectorySelectorTests
                 .IsVisible.Should().BeTrue("the source excludes the favourite submenu and its children from filtering");
             accessor.Menu.Items.OfType<MenuItem>()
                 .Where(item => item.Tag is not RecentRepoInfo)
-                .Should().Contain(item => item.IsVisible && item.Header as string == "Open repository");
+                .Should().Contain(item => item.IsVisible && item.Header as string == "_Open...");
         }
         finally
         {
@@ -128,8 +131,9 @@ public sealed class WorkingDirectorySelectorTests
         HotkeySettings browse = HotkeySettingsManager.CreateDefaultSettingsCore(scriptsManager: null)
             .Single(settings => settings.Name == FormBrowse.HotkeySettingsName);
         WorkingDirectoryToolStripSplitButton selector = new();
+        Initialize(selector);
         selector.RefreshShortcutKeys(browse.Commands);
-        WorkingDirectoryToolStripSplitButton.TestAccessor accessor = selector.GetTestAccessor();
+        WorkingDirectoryTestSupport.Accessor accessor = selector.GetTestAccessor();
         accessor.FillDropDown([], []);
 
         accessor.Menu.Placement.Should().Be(PlacementMode.BottomEdgeAlignedLeft);
@@ -143,12 +147,44 @@ public sealed class WorkingDirectorySelectorTests
         }
 
         MenuItem open = accessor.Menu.Items.OfType<MenuItem>()
-            .Single(item => item.Header as string == "Open repository");
+            .Single(item => item.Header as string == "_Open...");
         MenuItem close = accessor.Menu.Items.OfType<MenuItem>()
-            .Single(item => item.Header as string == "Close (go to Dashboard)");
+            .Single(item => item.Header as string == "_Close (go to Dashboard)");
         WinFormsToolStripMenuSizer.GetShortcutDisplayString(open).Should().Be("Ctrl+O");
         WinFormsToolStripMenuSizer.GetShortcutDisplayString(close).Should().Be("Ctrl+W");
         close.Icon.Should().BeOfType<Image>().Which.Source.Should().BeSameAs(GitUI.Properties.Images.DashboardFolderGit);
+    }
+
+    [AvaloniaTest]
+    [NonParallelizable]
+    [TestCase("")]
+    [TestCase("English")]
+    public void Initialized_working_directory_popup_should_keep_the_original_neutral_menu_captions(string translationName)
+    {
+        using TranslationTestScope translation = new(translationName);
+        WorkingDirectoryToolStripSplitButton selector = new();
+        Initialize(selector);
+        Window window = new() { Width = 480, Height = 100, Content = selector };
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            Button primaryButton = selector.GetVisualDescendants().OfType<Button>()
+                .Single(button => button.Name == "PART_PrimaryButton");
+
+            Click(window, primaryButton, MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+
+            MenuFlyout menu = (MenuFlyout)selector.Flyout!;
+            menu.IsOpen.Should().BeTrue();
+            menu.Items.OfType<MenuItem>().Select(item => item.Header)
+                .Should().ContainInOrder("_Open...", "_Close (go to Dashboard)");
+        }
+        finally
+        {
+            selector.Flyout!.Hide();
+            window.Close();
+        }
     }
 
     [AvaloniaTest]
@@ -167,7 +203,7 @@ public sealed class WorkingDirectorySelectorTests
             new Repository("/repos/favourite") { Category = "Team" }, "favourite", "main",
             IsFavourite: true, IsAnchored: true);
         WorkingDirectoryToolStripSplitButton selector = new();
-        WorkingDirectoryToolStripSplitButton.TestAccessor accessor = selector.GetTestAccessor();
+        WorkingDirectoryTestSupport.Accessor accessor = selector.GetTestAccessor();
 
         accessor.FillDropDown(new RepositoryHistorySnapshot(recent, [favourite]) { TopCount = topCount });
 
@@ -229,7 +265,7 @@ public sealed class WorkingDirectorySelectorTests
                 .ToArray();
             Repository favourite = new("favourite") { Category = category };
             WorkingDirectoryToolStripSplitButton selector = new();
-            WorkingDirectoryToolStripSplitButton.TestAccessor accessor = selector.GetTestAccessor();
+            WorkingDirectoryTestSupport.Accessor accessor = selector.GetTestAccessor();
             if (snapshot)
             {
                 accessor.FillDropDown(new RepositoryHistorySnapshot(
@@ -296,8 +332,9 @@ public sealed class WorkingDirectorySelectorTests
         HotkeySettings browse = HotkeySettingsManager.CreateDefaultSettingsCore(scriptsManager: null)
             .Single(settings => settings.Name == FormBrowse.HotkeySettingsName);
         WorkingDirectoryToolStripSplitButton selector = new();
+        Initialize(selector);
         selector.RefreshShortcutKeys(browse.Commands);
-        WorkingDirectoryToolStripSplitButton.TestAccessor accessor = selector.GetTestAccessor();
+        WorkingDirectoryTestSupport.Accessor accessor = selector.GetTestAccessor();
         accessor.PrepareDropDown([], []);
         Window window = new() { Width = 480, Height = 100, Content = selector };
         window.Show();
@@ -313,9 +350,9 @@ public sealed class WorkingDirectorySelectorTests
             object?[] retainedItems = accessor.Menu.Items.ToArray();
             accessor.Filter.Text = "retained search";
             MenuItem open = accessor.Menu.Items.OfType<MenuItem>()
-                .Single(item => item.Header as string == "Open repository");
+                .Single(item => item.Header as string == "_Open...");
             MenuItem close = accessor.Menu.Items.OfType<MenuItem>()
-                .Single(item => item.Header as string == "Close (go to Dashboard)");
+                .Single(item => item.Header as string == "_Close (go to Dashboard)");
             HotkeyCommand openCommand = browse.Commands!.Single(command => command.CommandCode == (int)FormBrowse.Command.OpenRepo);
             HotkeyCommand closeCommand = browse.Commands!.Single(command => command.CommandCode == (int)FormBrowse.Command.CloseRepository);
             openCommand.KeyData = GitExtensions.Shims.WinForms.Keys.Control | GitExtensions.Shims.WinForms.Keys.Oemcomma;
@@ -363,7 +400,7 @@ public sealed class WorkingDirectorySelectorTests
         Repository alpha = new(@"C:\repos\alpha");
         Repository beta = new(@"C:\repos\beta");
         WorkingDirectoryToolStripSplitButton selector = new();
-        WorkingDirectoryToolStripSplitButton.TestAccessor accessor = selector.GetTestAccessor();
+        WorkingDirectoryTestSupport.Accessor accessor = selector.GetTestAccessor();
         accessor.FillDropDown(new RepositoryHistorySnapshot(
             [
                 new RepositoryHistoryEntry(alpha, "alpha", "main", IsFavourite: false, IsAnchored: false),
@@ -403,7 +440,7 @@ public sealed class WorkingDirectorySelectorTests
     public void WorkingDirectoryToolStripSplitButton_primary_and_arrow_clicks_should_open_repository_menu()
     {
         WorkingDirectoryToolStripSplitButton selector = new();
-        WorkingDirectoryToolStripSplitButton.TestAccessor accessor = selector.GetTestAccessor();
+        WorkingDirectoryTestSupport.Accessor accessor = selector.GetTestAccessor();
         Repository alpha = new(@"C:\repos\alpha");
         Repository beta = new(@"C:\repos\beta");
         accessor.PrepareDropDown([], [alpha, beta]);
@@ -468,9 +505,9 @@ public sealed class WorkingDirectorySelectorTests
         {
             FlowDirection = rightToLeft ? Avalonia.Media.FlowDirection.RightToLeft : Avalonia.Media.FlowDirection.LeftToRight,
         };
-        WorkingDirectoryToolStripSplitButton.TestAccessor accessor = selector.GetTestAccessor();
+        WorkingDirectoryTestSupport.Accessor accessor = selector.GetTestAccessor();
         IRepositoryHistoryUIService history = Substitute.For<IRepositoryHistoryUIService>();
-        history.LoadSnapshot().Returns(new RepositoryHistorySnapshot(
+        RepositoryHistoryTestHelper.SetSnapshot(history, new RepositoryHistorySnapshot(
             [
                 new RepositoryHistoryEntry(new Repository("/repos/alpha"), "alpha", null, IsFavourite: false, IsAnchored: false),
                 new RepositoryHistoryEntry(new Repository("/repos/beta"), "beta", null, IsFavourite: false, IsAnchored: false),
@@ -479,7 +516,7 @@ public sealed class WorkingDirectorySelectorTests
         module.WorkingDir.Returns(string.Empty);
         IGitUICommands commands = Substitute.For<IGitUICommands>();
         commands.Module.Returns(module);
-        selector.Initialize(() => commands, history, _ => { }, _ => { }, () => { }, () => { }, () => { });
+        WorkingDirectoryTestSupport.InitializeInputFixture(selector, () => commands, history);
         Window window = new() { Width = 480, Height = 100, Content = selector };
         window.Show();
         try
@@ -503,13 +540,13 @@ public sealed class WorkingDirectorySelectorTests
 
             accessor.Menu.IsOpen.Should().BeFalse();
             retainedFilter.Text.Should().Be("beta", "the native focused input closes the menu without clearing its text");
-            history.Received(1).LoadSnapshot();
+            history.Received(1).PopulateRecentRepositoriesMenu(Arg.Any<GitUI.Compat.WinFormsControls.ToolStripDropDownItem>());
             accessor.Menu.ShowAt(selector);
             Dispatcher.UIThread.RunJobs();
             accessor.Menu.IsOpen.Should().BeTrue();
             accessor.Filter.Should().BeSameAs(retainedFilter);
             retainedFilter.Text.Should().BeEmpty("only the actual reopened FillDropDown clears the retained native input");
-            history.Received(2).LoadSnapshot();
+            history.Received(2).PopulateRecentRepositoriesMenu(Arg.Any<GitUI.Compat.WinFormsControls.ToolStripDropDownItem>());
             accessor.Menu.Items.OfType<MenuItem>().Where(item => item.Tag is RepositoryHistoryEntry)
                 .Should().OnlyContain(item => item.IsVisible);
         }
@@ -524,9 +561,19 @@ public sealed class WorkingDirectorySelectorTests
     public void WorkingDirectoryToolStripSplitButton_right_click_should_open_repository_picker_only()
     {
         WorkingDirectoryToolStripSplitButton selector = new();
-        WorkingDirectoryToolStripSplitButton.TestAccessor accessor = selector.GetTestAccessor();
+        WorkingDirectoryTestSupport.Accessor accessor = selector.GetTestAccessor();
         bool openedRepositoryPicker = false;
-        accessor.SetOpenRepositoryAction(() => openedRepositoryPicker = true);
+        using IDisposable observer = Window.WindowOpenedEvent.AddClassHandler<FormOpenDirectory>((dialog, _) =>
+        {
+            openedRepositoryPicker = true;
+            Dispatcher.UIThread.Post(dialog.Close);
+        });
+        IGitModule module = Substitute.For<IGitModule>();
+        module.WorkingDir.Returns(string.Empty);
+        IGitUICommands commands = Substitute.For<IGitUICommands>();
+        commands.Module.Returns(module);
+        IRepositoryHistoryUIService history = Substitute.For<IRepositoryHistoryUIService>();
+        WorkingDirectoryTestSupport.InitializeInputFixture(selector, () => commands, history);
         accessor.PrepareDropDown([], []);
         Window window = new()
         {
@@ -558,16 +605,18 @@ public sealed class WorkingDirectorySelectorTests
     public void WorkingDirectoryToolStripSplitButton_should_route_current_and_new_instance_actions()
     {
         WorkingDirectoryToolStripSplitButton selector = new();
-        WorkingDirectoryToolStripSplitButton.TestAccessor accessor = selector.GetTestAccessor();
+        WorkingDirectoryTestSupport.Accessor accessor = selector.GetTestAccessor();
         List<string> current = [];
         List<string> launched = [];
         accessor.SetRepositoryActions(current.Add, launched.Add);
 
-        accessor.OpenRepository("current", openInNewInstance: false);
-        accessor.OpenRepository("new", openInNewInstance: true);
+        string currentPath = WorkingDirectoryTestSupport.CreateRepositoryPath("current");
+        string newPath = WorkingDirectoryTestSupport.CreateRepositoryPath("new");
+        accessor.OpenRepository(currentPath, openInNewInstance: false);
+        accessor.OpenRepository(newPath, openInNewInstance: true);
 
-        current.Should().Equal("current");
-        launched.Should().Equal("new");
+        current.Should().Equal(currentPath);
+        launched.Should().Equal(newPath);
     }
 
     [AvaloniaTest]
@@ -584,12 +633,13 @@ public sealed class WorkingDirectorySelectorTests
         KeyModifiers modifiers)
     {
         WorkingDirectoryToolStripSplitButton selector = new();
-        WorkingDirectoryToolStripSplitButton.TestAccessor accessor = selector.GetTestAccessor();
+        WorkingDirectoryTestSupport.Accessor accessor = selector.GetTestAccessor();
         List<string> current = [];
         List<string> launched = [];
         accessor.SetRepositoryActions(current.Add, launched.Add);
+        string path = WorkingDirectoryTestSupport.CreateRepositoryPath("route");
         accessor.FillDropDown(new RepositoryHistorySnapshot(
-            [new RepositoryHistoryEntry(new Repository("/repos/route"), "Route", null, IsFavourite: false, IsAnchored: false)], []));
+            [new RepositoryHistoryEntry(new Repository(path), "Route", null, IsFavourite: false, IsAnchored: false)], []));
         MenuItem repository = accessor.Menu.Items.OfType<MenuItem>().Single(item => item.Tag is RepositoryHistoryEntry);
 
         repository.RaiseEvent(new KeyEventArgs
@@ -603,10 +653,10 @@ public sealed class WorkingDirectorySelectorTests
         // Real opened release/keyboard activation has separate input-route coverage.
         repository.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
 
-        current.Should().Equal("/repos/route");
+        current.Should().Equal(path);
         launched.Should().BeEmpty();
         repository.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-        current.Should().Equal("/repos/route", "/repos/route");
+        current.Should().Equal(path, path);
         launched.Should().BeEmpty("a nonactivation key is not the current modifier context of either Click");
     }
 
@@ -620,11 +670,11 @@ public sealed class WorkingDirectorySelectorTests
         RawInputModifiers modifiers, bool openInNewInstance)
     {
         WorkingDirectoryToolStripSplitButton selector = new();
-        WorkingDirectoryToolStripSplitButton.TestAccessor accessor = selector.GetTestAccessor();
+        WorkingDirectoryTestSupport.Accessor accessor = selector.GetTestAccessor();
         List<string> current = [];
         List<string> launched = [];
         accessor.SetRepositoryActions(current.Add, launched.Add);
-        Repository repository = new("/repos/pointer-route");
+        Repository repository = new(WorkingDirectoryTestSupport.CreateRepositoryPath("pointer-route"));
         accessor.PrepareDropDown([], [repository]);
         Window window = new() { Width = 480, Height = 100, Content = selector };
         window.Show();
@@ -655,20 +705,19 @@ public sealed class WorkingDirectorySelectorTests
     public void Working_directory_new_instance_should_launch_before_current_window_repository_validation()
     {
         WorkingDirectoryToolStripSplitButton selector = new();
-        WorkingDirectoryToolStripSplitButton.TestAccessor accessor = selector.GetTestAccessor();
-        IRepositoryHistoryUIService history = Substitute.For<IRepositoryHistoryUIService>();
-        history.CanOpenRepository(Arg.Any<string>()).Returns(false);
-        IGitUICommands commands = Substitute.For<IGitUICommands>();
+        WorkingDirectoryTestSupport.Accessor accessor = selector.GetTestAccessor();
         List<string> current = [];
         List<string> launched = [];
-        selector.Initialize(() => commands, history, current.Add, launched.Add, () => { }, () => { }, () => { });
+        accessor.SetRepositoryActions(current.Add, launched.Add);
+        string newPath = WorkingDirectoryTestSupport.CreateRepositoryPath("new-instance");
+        string invalidPath = Path.Join(newPath, "missing");
 
-        accessor.OpenRepository("/repos/new-instance", openInNewInstance: true);
+        accessor.OpenRepository(newPath, openInNewInstance: true);
 
-        launched.Should().Equal("/repos/new-instance");
-        history.DidNotReceive().CanOpenRepository(Arg.Any<string>());
-        accessor.OpenRepository("/repos/current-instance", openInNewInstance: false);
-        history.Received(1).CanOpenRepository("/repos/current-instance");
+        launched.Should().Equal(newPath);
+        accessor.InvalidRemover.DidNotReceiveWithAnyArgs().ShowDeleteInvalidRepositoryDialog(default!);
+        accessor.OpenRepository(invalidPath, openInNewInstance: false);
+        accessor.InvalidRemover.Received(1).ShowDeleteInvalidRepositoryDialog(invalidPath);
         current.Should().BeEmpty();
     }
 
@@ -676,6 +725,7 @@ public sealed class WorkingDirectorySelectorTests
     [NonParallelizable]
     public void FormRecentReposSettings_should_roundtrip_settings_and_repository_actions()
     {
+        using AppSettingsTestScope settings = new();
         int originalMaximum = AppSettings.MaxTopRepositories;
         int originalHistorySize = AppSettings.RecentRepositoriesHistorySize;
         int originalWidth = AppSettings.RecentReposComboMinWidth;
@@ -693,47 +743,49 @@ public sealed class WorkingDirectorySelectorTests
             AppSettings.SortTopRepos = false;
             AppSettings.SortRecentRepos = false;
             AppSettings.ShorteningRecentRepoPathStrategy = ShorteningRecentRepoPathStrategy.None;
-            Repository first = new(@"C:\repos\first");
-            Repository second = new(@"C:\repos\second");
-            IList<Repository>? saved = null;
-            form = new(
-                [first, second],
-                repositories =>
-                {
-                    saved = [.. repositories];
-                    return Task.CompletedTask;
-                });
-            FormRecentReposSettings.TestAccessor accessor = form.GetTestAccessor();
-            accessor.TopRepositories.Items.Cast<RecentRepoInfo>().Should().ContainSingle();
-            accessor.RecentRepositories.Items.Cast<RecentRepoInfo>().Should().ContainSingle();
+            string root = Path.GetDirectoryName(settings.WindowPositionPath)!;
+            Repository first = new(Directory.CreateDirectory(Path.Combine(root, "first")).FullName);
+            Repository second = new(Directory.CreateDirectory(Path.Combine(root, "second")).FullName);
+            ThreadHelper.JoinableTaskFactory.Run(() => RepositoryHistoryManager.Locals.SaveRecentHistoryAsync([first, second]));
+            form = new();
+            form.Show();
+            Dispatcher.UIThread.RunJobs();
+            form.TopLB.Items.Cast<RecentRepoInfo>().Should().ContainSingle();
+            form.RecentLB.Items.Cast<RecentRepoInfo>().Should().ContainSingle();
 
-            RecentRepoInfo top = accessor.TopRepositories.Items.Cast<RecentRepoInfo>().Single();
-            accessor.TopRepositories.SelectedItem = top;
-            accessor.SetContextList(accessor.TopRepositories);
-            accessor.AnchorSelectedToRecent();
-            first.Anchor.Should().Be(Repository.RepositoryAnchor.AnchoredInRecent);
-            accessor.RecentRepositories.SelectedItem = accessor.RecentRepositories.Items
+            RecentRepoInfo top = form.TopLB.Items.Cast<RecentRepoInfo>().Single();
+            form.TopLB.SelectedItem = top;
+            OpenContextMenu(form.TopLB);
+            Click(TopLevel.GetTopLevel(form.anchorToRecentReposToolStripMenuItem)!, form.anchorToRecentReposToolStripMenuItem, MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+            form.contextMenuStrip1.IsOpen.Should().BeFalse();
+            top.Repo.Anchor.Should().Be(Repository.RepositoryAnchor.AnchoredInRecent);
+            form.RecentLB.SelectedItem = form.RecentLB.Items
                 .Cast<RecentRepoInfo>()
                 .Single(item => item.Repo.Path == first.Path);
-            accessor.SetContextList(accessor.RecentRepositories);
-            accessor.RemoveSelectedAnchor();
-            first.Anchor.Should().Be(Repository.RepositoryAnchor.None);
+            OpenContextMenu(form.RecentLB);
+            Click(TopLevel.GetTopLevel(form.removeAnchorToolStripMenuItem)!, form.removeAnchorToolStripMenuItem, MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+            form.contextMenuStrip1.IsOpen.Should().BeFalse();
+            top.Repo.Anchor.Should().Be(Repository.RepositoryAnchor.None);
 
-            RecentRepoInfo recent = accessor.RecentRepositories.Items.Cast<RecentRepoInfo>().Single();
-            accessor.RecentRepositories.SelectedItem = recent;
-            accessor.SetContextList(accessor.RecentRepositories);
-            accessor.RemoveSelectedRecent();
-            accessor.RecentRepositories.Items.Cast<RecentRepoInfo>()
+            RecentRepoInfo recent = form.RecentLB.Items.Cast<RecentRepoInfo>().Single();
+            form.RecentLB.SelectedItem = recent;
+            OpenContextMenu(form.RecentLB);
+            Click(TopLevel.GetTopLevel(form.removeRecentToolStripMenuItem)!, form.removeRecentToolStripMenuItem, MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+            form.contextMenuStrip1.IsOpen.Should().BeFalse();
+            form.RecentLB.Items.Cast<RecentRepoInfo>()
                 .Should().NotContain(item => item.Repo.Path == second.Path);
 
-            accessor.MaximumTopRepositories.Value = 2;
-            accessor.HistorySize.Value = 30;
-            accessor.MinimumWidth.Value = 140;
-            accessor.HideTopRepositories.IsChecked = false;
-            accessor.SortTopRepositories.IsChecked = true;
-            accessor.SortRecentRepositories.IsChecked = true;
-            accessor.MiddleDots.IsChecked = true;
-            accessor.SaveSettings();
+            form._NO_TRANSLATE_maxRecentRepositories.Value = 2;
+            form._NO_TRANSLATE_RecentRepositoriesHistorySize.Value = 30;
+            form.comboMinWidthEdit.Value = 140;
+            form.hideTopRepositoriesFromRecentList.IsChecked = false;
+            form.sortTopRepos.IsChecked = true;
+            form.sortRecentRepos.IsChecked = true;
+            form.middleDotRB.IsChecked = true;
+            form.Ok.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
 
             AppSettings.MaxTopRepositories.Should().Be(2);
             AppSettings.RecentRepositoriesHistorySize.Should().Be(30);
@@ -742,7 +794,8 @@ public sealed class WorkingDirectorySelectorTests
             AppSettings.SortTopRepos.Should().BeTrue();
             AppSettings.SortRecentRepos.Should().BeTrue();
             AppSettings.ShorteningRecentRepoPathStrategy.Should().Be(ShorteningRecentRepoPathStrategy.MiddleDots);
-            saved.Should().NotBeNull();
+            IList<Repository> saved = ThreadHelper.JoinableTaskFactory.Run(RepositoryHistoryManager.Locals.LoadRecentHistoryAsync);
+            saved.Should().ContainSingle().Which.Path.Should().Be(first.Path);
         }
         finally
         {
@@ -755,22 +808,37 @@ public sealed class WorkingDirectorySelectorTests
             AppSettings.SortRecentRepos = originalSortRecent;
             AppSettings.ShorteningRecentRepoPathStrategy = originalShortening;
         }
+
+        return;
+
+        void OpenContextMenu(ListBox list)
+        {
+            Dispatcher.UIThread.RunJobs();
+            ListBoxItem container = list.GetVisualDescendants().OfType<ListBoxItem>()
+                .Single(item => ReferenceEquals(item.Content, list.SelectedItem));
+            Point point = container.TranslatePoint(new Point(10, 8), form)!.Value;
+            form.MouseDown(point, MouseButton.Right);
+            form.MouseUp(point, MouseButton.Right);
+            Dispatcher.UIThread.RunJobs();
+            form.contextMenuStrip1.IsOpen.Should().BeTrue();
+        }
     }
 
     [AvaloniaTest]
     [NonParallelizable]
     public void FormRecentReposSettings_should_ignore_detached_radio_group_transitions()
     {
+        using AppSettingsTestScope settings = new();
         ShorteningRecentRepoPathStrategy originalShortening = AppSettings.ShorteningRecentRepoPathStrategy;
         FormRecentReposSettings? first = null;
         FormRecentReposSettings? second = null;
         try
         {
             AppSettings.ShorteningRecentRepoPathStrategy = ShorteningRecentRepoPathStrategy.MiddleDots;
-            first = new FormRecentReposSettings([]);
+            first = new FormRecentReposSettings();
 
             AppSettings.ShorteningRecentRepoPathStrategy = ShorteningRecentRepoPathStrategy.None;
-            Action constructSecondForm = () => second = new FormRecentReposSettings([]);
+            Action constructSecondForm = () => second = new FormRecentReposSettings();
 
             constructSecondForm.Should().NotThrow();
         }
@@ -792,8 +860,8 @@ public sealed class WorkingDirectorySelectorTests
 
         translation.Received(1).AddTranslationItem(
             nameof(FormBrowse), "_repositorySearchPlaceholder", "Text", "Search repositories...");
-        translation.Received(1).AddTranslationItem(
-            nameof(FormBrowse), "tsmiFavouriteRepositories", "Text", "&Favorite repositories");
+        translation.DidNotReceive().AddTranslationItem(
+            nameof(FormBrowse), "tsmiFavouriteRepositories", "Text", Arg.Any<string>());
         translation.DidNotReceive().AddTranslationItem(
             nameof(FormBrowse), "openToolStripMenuItem", "Text", Arg.Any<string>());
         translation.DidNotReceive().AddTranslationItem(
@@ -801,10 +869,12 @@ public sealed class WorkingDirectorySelectorTests
     }
 
     [AvaloniaTest]
+    [NonParallelizable]
     public void FormRecentReposSettings_should_preserve_original_translation_keys()
     {
+        using AppSettingsTestScope settings = new();
         ITranslation translation = Substitute.For<ITranslation>();
-        FormRecentReposSettings form = new([]);
+        FormRecentReposSettings form = new();
         try
         {
             form.AddTranslationItems(translation);
@@ -850,6 +920,17 @@ public sealed class WorkingDirectorySelectorTests
         browse.Commands.Should().Contain(command =>
             command.CommandCode == (int)FormBrowse.Command.CloseRepository
             && command.KeyData == (GitExtensions.Shims.WinForms.Keys.Control | GitExtensions.Shims.WinForms.Keys.W));
+    }
+
+    private static void Initialize(WorkingDirectoryToolStripSplitButton selector)
+    {
+        IGitModule module = Substitute.For<IGitModule>();
+        module.WorkingDir.Returns(string.Empty);
+        IGitUICommands commands = Substitute.For<IGitUICommands>();
+        commands.Module.Returns(module);
+        IRepositoryHistoryUIService history = Substitute.For<IRepositoryHistoryUIService>();
+        RepositoryHistoryTestHelper.SetSnapshot(history, new RepositoryHistorySnapshot([], []));
+        WorkingDirectoryTestSupport.InitializeInputFixture(selector, () => commands, history);
     }
 
     private static IEnumerable<MenuItem> Flatten(IEnumerable<object?> items)

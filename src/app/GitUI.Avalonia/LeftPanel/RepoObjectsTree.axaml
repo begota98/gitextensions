@@ -24,7 +24,7 @@
       <Setter Property="Foreground" Value="{DynamicResource GitExtensionsKnownColorGrayTextBrush}" />
     </Style>
     <Style Selector="TreeViewItem.repo-node-invisible TextBlock">
-      <Setter Property="Foreground" Value="{DynamicResource GitExtensionsKnownColorGrayTextBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource GitExtensionsRepoNodeInvisibleBrush}" />
     </Style>
   </UserControl.Styles>
   <Grid x:Name="repoTreePanel" RowDefinitions="25,26,*">
@@ -81,7 +81,12 @@
                          Height="26"
                          Margin="0"
                          Padding="2"
-                         Icon="{x:Static properties:Images.Preview}" />
+                         Icon="{x:Static properties:Images.Preview}">
+        <ToolTip.Tip>
+          <ToolTip x:Name="toolTip"
+                   compat:TranslationCompat.TranslateText="False" />
+        </ToolTip.Tip>
+      </compat:IconButton>
     </Grid>
     <TreeView x:Name="treeMain"
               Classes="gitextensions-native-tree gitextensions-explorer-tree gitextensions-hide-tree-selection"
@@ -230,7 +235,10 @@
             <MenuItem.Icon><Image Classes="gitextensions-icon-16" Source="{x:Static properties:Images.BrowseFileExplorer}" /></MenuItem.Icon>
           </wf:ToolStripMenuItem>
           <wf:ToolStripSeparator x:Name="toolStripSeparator9" />
-          <wf:ToolStripMenuItem x:Name="mnubtnCollapse" Header="Collapse">
+          <wf:ToolStripMenuItem x:Name="mnubtnCollapse"
+                                Header="Collapse"
+                                compat:TranslationCompat.UseToolTipText="True"
+                                ToolTip.Tip="Collapse all subnodes">
             <MenuItem.Icon><Image Classes="gitextensions-icon-16" Source="{x:Static properties:Images.CollapseAll}" /></MenuItem.Icon>
           </wf:ToolStripMenuItem>
           <wf:ToolStripMenuItem x:Name="mnubtnExpand" Header="Expand">

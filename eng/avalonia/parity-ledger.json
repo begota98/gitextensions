@@ -21131,6 +21131,7 @@
           "verifiedOn": "2026-10-04",
           "commit": "3161bc55b6bcb2f5e7b91504824c79544ff3fbe7",
           "evidence": [
+            "eng/avalonia/parity-evidence/run-20261123/report.md",
             "eng/avalonia/parity-evidence/P8.6e/e1/functional-findings.after.json",
             "eng/avalonia/parity-evidence/P8.6e/e1/inventory-classification.json",
             "eng/avalonia/parity-evidence/P8.6i/application-shell-126/batch-75/verification.json",
@@ -21147,7 +21148,7 @@
             "linux"
           ],
           "findingCount": 160,
-          "note": "Focused construction, visibility, context-menu setting, shortcut, translation, formatter, and branch-comparer tests close the product-functional contract. The raw findings are classified Designer/AXAML, native event-signature, measurement-lifecycle, false uncatalogued translation-key, and parity-test-seam representation differences. 2026-10-03 batch75: Copy-link context targets are resolved freshly from the originating text surface rather than retained URI state from another panel. Source nearest-character semantics and non-text origins are bounded by native probes and product regressions. Actual test counts, paired images, platform evidence and unresolved coverage are in verification.json; complete axes and existing finding counts are not promoted by bounded tests. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-03 batch76: Wrapped body and refs use configured native RichEdit font line metrics and actual TextLayout visual lines, including empty/trailing paragraphs and runtime font changes. Header width/selection and source margins are unchanged. Native parent-row integration, exact wrapping breakpoints and glyph raster remain open. Actual test counts, paired images, platform evidence and unresolved coverage are in verification.json; complete axes and existing finding counts are not promoted by bounded tests. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-03 batch77: Source cached ContentsResized handlers and finite parent row/column sizing are restored. Authored table/child rectangles and source anchor/minimum rules derive the body client allocation while public Margin8 remains intact; no captured font fudge is used. Native constructor integration is measured at two families/four sizes. Rendered Browse-header equivalence, exact wrapping/glyph raster and original Rx100ms transient cadence remain open. Actual test counts, paired images, platform evidence and unresolved coverage are in verification.json; complete axes and existing finding counts are not promoted by bounded tests. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-04 batch78: Source-opted body/refs preserve native LF caret positions and selectable wrapped URI captions, correct pointer allocation through the authored anchors/Margin, and run the original unconditional Ctrl+C handler before framework selection handling. Composite copy retains source Environment.NewLine block separators and excludes refs. Actual native helper surrogate duplication remains explicit Unicode equivalence debt, not silently replicated. Exact native wrapping, physical smart drag, raster and Rx100ms timing remain open. Actual test counts, paired images, platform evidence and unresolved coverage are in verification.json; complete axes and existing finding counts are not promoted by bounded tests. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-24 CommitInfo viewport follow-up: Source-shaped finite-column negotiation now enables horizontal scrolling only when the actual header minimum exceeds the full client after genuine vertical-gutter deduction. Wrapped body/refs cannot independently require that axis; both actual scrollbars and end offsets remain reachable for genuinely narrow headers and the measured header-fits-full-client-but-not-vertical-gutter boundary. Same-size asynchronous tall-to-short transitions release both gutters and coerce offsets without changing authored row/header dimensions, fonts, capture readers or global scrollbar styles. Four headless regressions exercise fresh versus transitioned real avatar-on content, scrolled/unscrolled shrink, narrow-owner two-axis reachability and the natural header/gutter threshold across twelve cycles; pre/post-render state, actual template Grid slots and property events must settle, not alias an alternating phase. The old unfixed probe failed two cases with a real unnecessary horizontal scrollbar; its off-edge bar geometry supports, but does not itself directly trace, alternating reduced-axis layout. Actual focused passes Windows237/Linux237, identical executed identities; isolated construction3/3. Both Windows solution builds and native-ext4 Linux Avalonia build passed without warnings/errors. Whole-port current reviewed/raw accounting and final bookkeeping checks are recorded separately in eng/avalonia/parity-evidence/main-window-viewport-2026-10-24/headless-accounting-final1.json and source-accounting-final1.json; analyzed parentf90580b388517457773d702799d34e5024dfe124. Original/shared sources, solutions, packages and historical statuses/dates/hashes/counts remain unchanged. Owner deferred desktop captures; no fresh native matrix, paired comparison, Windows/Wayland/X11 runtime, full state or macOS verification is claimed. The inherited387 capture findings (279image/54viewport/54clock) remain open pending their complete rerun, not credited as repaired by headless tests. Higher DPI remains deferred; Flatpak rebuilding is N/A to framework-neutral view layout. Progress126 remains open."
+          "note": "Focused construction, visibility, context-menu setting, shortcut, translation, formatter, and branch-comparer tests close the product-functional contract. The raw findings are classified Designer/AXAML, native event-signature, measurement-lifecycle, false uncatalogued translation-key, and parity-test-seam representation differences. 2026-10-03 batch75: Copy-link context targets are resolved freshly from the originating text surface rather than retained URI state from another panel. Source nearest-character semantics and non-text origins are bounded by native probes and product regressions. Actual test counts, paired images, platform evidence and unresolved coverage are in verification.json; complete axes and existing finding counts are not promoted by bounded tests. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-03 batch76: Wrapped body and refs use configured native RichEdit font line metrics and actual TextLayout visual lines, including empty/trailing paragraphs and runtime font changes. Header width/selection and source margins are unchanged. Native parent-row integration, exact wrapping breakpoints and glyph raster remain open. Actual test counts, paired images, platform evidence and unresolved coverage are in verification.json; complete axes and existing finding counts are not promoted by bounded tests. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-03 batch77: Source cached ContentsResized handlers and finite parent row/column sizing are restored. Authored table/child rectangles and source anchor/minimum rules derive the body client allocation while public Margin8 remains intact; no captured font fudge is used. Native constructor integration is measured at two families/four sizes. Rendered Browse-header equivalence, exact wrapping/glyph raster and original Rx100ms transient cadence remain open. Actual test counts, paired images, platform evidence and unresolved coverage are in verification.json; complete axes and existing finding counts are not promoted by bounded tests. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-04 batch78: Source-opted body/refs preserve native LF caret positions and selectable wrapped URI captions, correct pointer allocation through the authored anchors/Margin, and run the original unconditional Ctrl+C handler before framework selection handling. Composite copy retains source Environment.NewLine block separators and excludes refs. Actual native helper surrogate duplication remains explicit Unicode equivalence debt, not silently replicated. Exact native wrapping, physical smart drag, raster and Rx100ms timing remain open. Actual test counts, paired images, platform evidence and unresolved coverage are in verification.json; complete axes and existing finding counts are not promoted by bounded tests. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-24 CommitInfo viewport follow-up: Source-shaped finite-column negotiation now enables horizontal scrolling only when the actual header minimum exceeds the full client after genuine vertical-gutter deduction. Wrapped body/refs cannot independently require that axis; both actual scrollbars and end offsets remain reachable for genuinely narrow headers and the measured header-fits-full-client-but-not-vertical-gutter boundary. Same-size asynchronous tall-to-short transitions release both gutters and coerce offsets without changing authored row/header dimensions, fonts, capture readers or global scrollbar styles. Four headless regressions exercise fresh versus transitioned real avatar-on content, scrolled/unscrolled shrink, narrow-owner two-axis reachability and the natural header/gutter threshold across twelve cycles; pre/post-render state, actual template Grid slots and property events must settle, not alias an alternating phase. The old unfixed probe failed two cases with a real unnecessary horizontal scrollbar; its off-edge bar geometry supports, but does not itself directly trace, alternating reduced-axis layout. Actual focused passes Windows237/Linux237, identical executed identities; isolated construction3/3. Both Windows solution builds and native-ext4 Linux Avalonia build passed without warnings/errors. Whole-port current reviewed/raw accounting and final bookkeeping checks are recorded separately in eng/avalonia/parity-evidence/main-window-viewport-2026-10-24/headless-accounting-final1.json and source-accounting-final1.json; analyzed parentf90580b388517457773d702799d34e5024dfe124. Original/shared sources, solutions, packages and historical statuses/dates/hashes/counts remain unchanged. Owner deferred desktop captures; no fresh native matrix, paired comparison, Windows/Wayland/X11 runtime, full state or macOS verification is claimed. The inherited387 capture findings (279image/54viewport/54clock) remain open pending their complete rerun, not credited as repaired by headless tests. Higher DPI remains deferred; Flatpak rebuilding is N/A to framework-neutral view layout. Progress126 remains open. 2026-11-21: The fixed Avalonia table rows invalidate when new XHTML publishes and use the wrapped heights in that layout pass. Arrange reuses the last matching client size, and the named throttled callbacks request measure only for a changed height. The large-history Browse selection regression covers the behavior headlessly; native responsiveness remains unverified."
         },
         "visual": {
           "status": "unverified",
@@ -22122,22 +22123,30 @@
           "note": "This source mapping does not declare UI chrome."
         },
         "themingAndColor": {
-          "status": "notApplicable",
-          "verifiedOn": "2026-08-05",
-          "commit": "f917227f4b83f79b39922fcfa8fb0770f94ab79d",
-          "evidence": [],
-          "platforms": [],
+          "status": "partial",
+          "verifiedOn": "2026-11-21",
+          "commit": "9b11496851ec7a8b0bf14b611fe0ae06224d1951",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261122/report.md"
+          ],
+          "platforms": [
+            "windows"
+          ],
           "findingCount": 0,
-          "note": "This source mapping does not declare UI chrome."
+          "note": "Headless FileViewer drawing exercises the original adapted warning colors for light and the dark colorblind variation. Markers retain their creation colors while their spans are reused. Native appearance and remaining themes are pending."
         },
         "behavioralState": {
-          "status": "unverified",
-          "verifiedOn": "2026-08-05",
-          "commit": "f917227f4b83f79b39922fcfa8fb0770f94ab79d",
-          "evidence": [],
-          "platforms": [],
+          "status": "partial",
+          "verifiedOn": "2026-11-21",
+          "commit": "0a3ffcbc72d8a664f5685ce4b101c469b3a2b12c",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261122/report.md"
+          ],
+          "platforms": [
+            "windows"
+          ],
           "findingCount": 0,
-          "note": "the complete interaction state matrix has not been exercised"
+          "note": "Headless FileViewer pointer input exercises the three commit warning messages, initial overlap precedence, active hover refresh, pointer press and printable input dismissal. Native appearance, pending hover during a held button and edited overlap order are pending."
         },
         "platform": {
           "status": "unverified",
@@ -23469,6 +23478,7 @@
           "verifiedOn": "2026-10-03",
           "commit": "a7cc57b0c52c939d8034c164cf78a4a63032d928",
           "evidence": [
+            "eng/avalonia/parity-evidence/run-20261122/report.md",
             "eng/avalonia/parity-evidence/P8.6i/repository-host-client-alignment-42/inventory/FileViewer.functional-findings.json",
             "eng/avalonia/parity-evidence/P8.6i/repository-host-client-alignment-42/tests/windows/focused.trx",
             "eng/avalonia/parity-evidence/P8.6i/repository-host-client-alignment-42/tests/linux/gate.log",
@@ -23480,7 +23490,7 @@
             "linux"
           ],
           "findingCount": 590,
-          "note": "Existing FileViewer behavior, source-named toolbar fields, integer runtime layout, and truthful inner-editor hover route pass 140 focused tests on Windows and Linux. The inventory retains 590 findings and the complete editor behavior audit remains open. 2026-10-03 batch75: Main lower-pane diff gutter retains source caret invalidation, raw inactive-border disabled background and zero-digit header-only sizing. Semantic diff overlays remain source-driven. Eleven FileViewer tooltips retain source Designer defaults before visibility and the same translation keys. This is cross-owner127 consumer evidence, not Progress126 ownership expansion or complete editor parity. Actual test counts, paired images, platform evidence and unresolved coverage are in verification.json; complete axes and existing finding counts are not promoted by bounded tests. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed."
+          "note": "Existing FileViewer behavior, source-named toolbar fields, integer runtime layout, and truthful inner-editor hover route pass 140 focused tests on Windows and Linux. The inventory retains 590 findings and the complete editor behavior audit remains open. 2026-10-03 batch75: Main lower-pane diff gutter retains source caret invalidation, raw inactive-border disabled background and zero-digit header-only sizing. Semantic diff overlays remain source-driven. Eleven FileViewer tooltips retain source Designer defaults before visibility and the same translation keys. This is cross-owner127 consumer evidence, not Progress126 ownership expansion or complete editor parity. Actual test counts, paired images, platform evidence and unresolved coverage are in verification.json; complete axes and existing finding counts are not promoted by bounded tests. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. Headless input verifies that both mouse buttons open the Diff appearance submenu on press and reset Patch on release within the header, a release outside preserves the setting, Enter opens the submenu, and Word diff remains independent. Native popup appearance and dismissal remain unverified."
         },
         "visual": {
           "status": "partial",
@@ -23801,6 +23811,7 @@
           "verifiedOn": "2026-10-03",
           "commit": "a7cc57b0c52c939d8034c164cf78a4a63032d928",
           "evidence": [
+            "eng/avalonia/parity-evidence/run-20261122/report.md",
             "eng/avalonia/parity-evidence/P8.6i/embedded-controls-62/inventory/windows/GitUI.Editor.FileViewerInternal.functional-findings.json",
             "eng/avalonia/parity-evidence/P8.6i/embedded-controls-62/tests/windows/focused.trx",
             "eng/avalonia/parity-evidence/P8.6i/embedded-controls-62/tests/linux/focused.trx",
@@ -23812,7 +23823,7 @@
             "linux"
           ],
           "findingCount": 52,
-          "note": "The restored internal owner now uses the original forward/backward change-navigation algorithms, translating only AvaloniaEdit's one-based caret to the zero-based diff map at the framework boundary. The 128-test focused Windows/Linux gate passes; 52 explicit source findings and exhaustive live behavior stay open. 2026-10-03 batch75: Main lower-pane diff gutter retains source caret invalidation, raw inactive-border disabled background and zero-digit header-only sizing. Semantic diff overlays remain source-driven. Eleven FileViewer tooltips retain source Designer defaults before visibility and the same translation keys. This is cross-owner127 consumer evidence, not Progress126 ownership expansion or complete editor parity. Actual test counts, paired images, platform evidence and unresolved coverage are in verification.json; complete axes and existing finding counts are not promoted by bounded tests. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed."
+          "note": "The restored internal owner now uses the original forward/backward change-navigation algorithms, translating only AvaloniaEdit's one-based caret to the zero-based diff map at the framework boundary. The 128-test focused Windows/Linux gate passes; 52 explicit source findings and exhaustive live behavior stay open. 2026-10-03 batch75: Main lower-pane diff gutter retains source caret invalidation, raw inactive-border disabled background and zero-digit header-only sizing. Semantic diff overlays remain source-driven. Eleven FileViewer tooltips retain source Designer defaults before visibility and the same translation keys. This is cross-owner127 consumer evidence, not Progress126 ownership expansion or complete editor parity. Actual test counts, paired images, platform evidence and unresolved coverage are in verification.json; complete axes and existing finding counts are not promoted by bounded tests. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. The headless KeyUp and Alt-wheel cases verify the native text-area sender and top/bottom navigation scope, including wheel input on the adjacent scrollbar. Native desktop wheel routing remains open."
         },
         "visual": {
           "status": "unverified",
@@ -24381,13 +24392,17 @@
           "note": "This source mapping does not declare UI chrome."
         },
         "themingAndColor": {
-          "status": "notApplicable",
-          "verifiedOn": "2026-08-05",
-          "commit": "f917227f4b83f79b39922fcfa8fb0770f94ab79d",
-          "evidence": [],
-          "platforms": [],
+          "status": "partial",
+          "verifiedOn": "2026-11-21",
+          "commit": "82210310c20fec7e749718720f9338a307d83bbb",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261122/report.md"
+          ],
+          "platforms": [
+            "windows"
+          ],
           "findingCount": 0,
-          "note": "This source mapping does not declare UI chrome."
+          "note": "Headless FileViewer tests exercise system-style and theme-adapted Git comment colors through both concrete highlighters in the default dark theme. Native appearance and remaining theme combinations are pending."
         },
         "behavioralState": {
           "status": "unverified",
@@ -36364,6 +36379,7 @@
           "verifiedOn": "2026-10-03",
           "commit": "9f6afc8ca06cb4ff507b06d0a048712c247bbca3",
           "evidence": [
+            "eng/avalonia/parity-evidence/run-20261122/report.md",
             "eng/avalonia/parity-evidence/P8.6i/repository-host-capture-contract-48/winforms-verified/manifest.json",
             "eng/avalonia/parity-evidence/P8.6i/repository-host-capture-contract-48/avalonia-final2/manifest.json",
             "eng/avalonia/parity-evidence/P8.6i/repository-host-capture-contract-48/diff-final2/findings.json",
@@ -36395,7 +36411,7 @@
             "windows"
           ],
           "findingCount": 873,
-          "note": "Thirty-six native-100 ViewPullRequestsForm pairs verify the embedded 25/2/23-DIP toolbar, splitter, bold git-grep filter, list/tree palette, and source ToolStrip host boundary against client-aligned pixels without scaling. The count is the containing form's unsuppressed total; exact columns, popup, other-scale, and consumer closure remain open. 2026-10-02 batch68 working-tree evidence based on 03cea46cf1b98dda17993dbf7d6ddb23a4241773: shared declaration extraction is pixel-neutral across 45 cells; not source parity or full-axis closure. Verification counts/platform limitations: verification.json. Existing finding counts/statuses remain open. 2026-10-02 batch69: Shared native tree selection paints only the icon/label presenter, excluding the expander and dotted hierarchy. Focused/unfocused tests and representative Browse/tree/Settings renders cover the changed template; these are not exhaustive consumer state audits. Native palette, connector/font and residual image findings remain open. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-02 batch70: Native-drawn tree selection is separated from owner-drawn file trees, with measured Explorer roles and real focus-transfer coverage. PictureBox Zoom applies source integer client destination sizing. CommitInfoHeader uses the original RichEdit tab/contents path rather than incompatible text-width compensations. Browse Commands/Plugins follow original AutoSize for font and translation changes. Stale generated Designer metadata is refreshed; that is measurement repair, not evidence of pixel closure. Paired native100 three-theme captures, focused tests and actual runtime gates are recorded; full-state and higher-DPI coverage remain open. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-02 batch71: Menu AutoSize uses the original preferred-text sizing inputs rather than Fluent desired width; commit-header native formatting origin moves painted text, links and hit testing together, and contents sizing includes the final paragraph rather than counting newline separators. Dashboard client clipping and source minimum-size behavior retain source runtime geometry. Actual gate counts, source inventory, paired native100 captures and remaining debt are recorded; no complete-axis claim. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-02 batch72: Windows96-DPI supported ASCII header HFONT character advances and SelectedRtf font conversion govern measured widths, painting and selection foreground; removed the port-only letter-spacing fudge. Unsupported/native-unavailable paths use the framework fallback, not claimed raster-identical. Browse tab captions use native advances, source image gap and fixed sibling allocations. Dashboard retains source hover timing, caption active/cursor/focus regions and integer image placement; headings and captions share source font quantization/baseline paint. RepoObjectsTree Explorer selection-part fill/edge compose over the live PanelBackground; labels use ambient-control HFONT advances plus source text-slot padding, with a portable measurement fallback. Settings trees and ownerdrawn FileStatusList are corroborating consumers, not newly repaired by this tree change. Actual gate counts, native100 images and unresolved raster/state/selection debt are recorded; no complete-axis claim. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-03 batch73: Native-width commit-header anchors are real selectable decorated text with actual URI identity; partial keyboard/context Copy, source press activation, forward/reverse smart-word/link drag and X-button routing are exercised. Generic XHTML keeps its existing control route; complex shaping, punctuation/backtracking and exact glyph raster remain debt. Image-free/empty Browse tabs retain source font-based minimum and height without sibling reflow. Dashboard client-clipped descenders, viewport-anchored tile and source caption non-left-button state routes are exercised; heading advance and raster remain open. Explorer tree corners composite measured native image-part samples over live PanelBackground; regular NodeFont inherits ambient tree font and styled nodes retain source settings fonts. Search Button uses source flat light/dark fill/edge and inset3 solid/dotted keyboard focus, live theme/state styles, unchanged26x26/2px/16px layout; rounded raster/full physical-state coverage remains open. Settings trees/FileStatusList are corroborating consumers, not complete components. Actual tests/captures and unresolved platform/coverage debt are recorded; no complete-axis claim. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed."
+          "note": "Thirty-six native-100 ViewPullRequestsForm pairs verify the embedded 25/2/23-DIP toolbar, splitter, bold git-grep filter, list/tree palette, and source ToolStrip host boundary against client-aligned pixels without scaling. The count is the containing form's unsuppressed total; exact columns, popup, other-scale, and consumer closure remain open. 2026-10-02 batch68 working-tree evidence based on 03cea46cf1b98dda17993dbf7d6ddb23a4241773: shared declaration extraction is pixel-neutral across 45 cells; not source parity or full-axis closure. Verification counts/platform limitations: verification.json. Existing finding counts/statuses remain open. 2026-10-02 batch69: Shared native tree selection paints only the icon/label presenter, excluding the expander and dotted hierarchy. Focused/unfocused tests and representative Browse/tree/Settings renders cover the changed template; these are not exhaustive consumer state audits. Native palette, connector/font and residual image findings remain open. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-02 batch70: Native-drawn tree selection is separated from owner-drawn file trees, with measured Explorer roles and real focus-transfer coverage. PictureBox Zoom applies source integer client destination sizing. CommitInfoHeader uses the original RichEdit tab/contents path rather than incompatible text-width compensations. Browse Commands/Plugins follow original AutoSize for font and translation changes. Stale generated Designer metadata is refreshed; that is measurement repair, not evidence of pixel closure. Paired native100 three-theme captures, focused tests and actual runtime gates are recorded; full-state and higher-DPI coverage remain open. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-02 batch71: Menu AutoSize uses the original preferred-text sizing inputs rather than Fluent desired width; commit-header native formatting origin moves painted text, links and hit testing together, and contents sizing includes the final paragraph rather than counting newline separators. Dashboard client clipping and source minimum-size behavior retain source runtime geometry. Actual gate counts, source inventory, paired native100 captures and remaining debt are recorded; no complete-axis claim. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-02 batch72: Windows96-DPI supported ASCII header HFONT character advances and SelectedRtf font conversion govern measured widths, painting and selection foreground; removed the port-only letter-spacing fudge. Unsupported/native-unavailable paths use the framework fallback, not claimed raster-identical. Browse tab captions use native advances, source image gap and fixed sibling allocations. Dashboard retains source hover timing, caption active/cursor/focus regions and integer image placement; headings and captions share source font quantization/baseline paint. RepoObjectsTree Explorer selection-part fill/edge compose over the live PanelBackground; labels use ambient-control HFONT advances plus source text-slot padding, with a portable measurement fallback. Settings trees and ownerdrawn FileStatusList are corroborating consumers, not newly repaired by this tree change. Actual gate counts, native100 images and unresolved raster/state/selection debt are recorded; no complete-axis claim. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-03 batch73: Native-width commit-header anchors are real selectable decorated text with actual URI identity; partial keyboard/context Copy, source press activation, forward/reverse smart-word/link drag and X-button routing are exercised. Generic XHTML keeps its existing control route; complex shaping, punctuation/backtracking and exact glyph raster remain debt. Image-free/empty Browse tabs retain source font-based minimum and height without sibling reflow. Dashboard client-clipped descenders, viewport-anchored tile and source caption non-left-button state routes are exercised; heading advance and raster remain open. Explorer tree corners composite measured native image-part samples over live PanelBackground; regular NodeFont inherits ambient tree font and styled nodes retain source settings fonts. Search Button uses source flat light/dark fill/edge and inset3 solid/dotted keyboard focus, live theme/state styles, unchanged26x26/2px/16px layout; rounded raster/full physical-state coverage remains open. Settings trees/FileStatusList are corroborating consumers, not complete components. Actual tests/captures and unresolved platform/coverage debt are recorded; no complete-axis claim. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. Headless measurement through Bind and SetDiffs covers the commit-search and filename-filter order with the search row both shown and collapsed. Native comparison and IDE preview remain open."
         },
         "themingAndColor": {
           "status": "partial",
@@ -38375,6 +38391,7 @@
           "verifiedOn": "2026-10-04",
           "commit": "075c58fe1ab9d167369640ef267b2e6225aa6c64",
           "evidence": [
+            "eng/avalonia/parity-evidence/run-20261123/report.md",
             "eng/avalonia/parity-evidence/P8.6i/embedded-controls-63/inventory/windows/GitUI.FileStatusList.functional-findings.json",
             "eng/avalonia/parity-evidence/P8.6i/embedded-controls-63/tests/windows/focused-final.trx",
             "eng/avalonia/parity-evidence/P8.6i/embedded-controls-63/tests/linux/gate.log",
@@ -38398,7 +38415,7 @@
             "linux"
           ],
           "findingCount": 121,
-          "note": "The current Windows/Linux gate retains the source-shaped FileStatusList contracts and the semantic capture reader now resolves its splitter as the original PanelBackground rather than a text foreground. The 121 total source differences and exhaustive live interactions remain open. 2026-10-02 batch68 working-tree evidence based on 03cea46cf1b98dda17993dbf7d6ddb23a4241773: shared declaration extraction is pixel-neutral across 45 cells; not source parity or full-axis closure. Verification counts/platform limitations: verification.json. Existing finding counts/statuses remain open. 2026-10-02 batch69: Shared native tree selection paints only the icon/label presenter, excluding the expander and dotted hierarchy. Focused/unfocused tests and representative Browse/tree/Settings renders cover the changed template; these are not exhaustive consumer state audits. Native palette, connector/font and residual image findings remain open. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-02 batch70: Native-drawn tree selection is separated from owner-drawn file trees, with measured Explorer roles and real focus-transfer coverage. PictureBox Zoom applies source integer client destination sizing. CommitInfoHeader uses the original RichEdit tab/contents path rather than incompatible text-width compensations. Browse Commands/Plugins follow original AutoSize for font and translation changes. Stale generated Designer metadata is refreshed; that is measurement repair, not evidence of pixel closure. Paired native100 three-theme captures, focused tests and actual runtime gates are recorded; full-state and higher-DPI coverage remain open. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-02 batch71: Menu AutoSize uses the original preferred-text sizing inputs rather than Fluent desired width; commit-header native formatting origin moves painted text, links and hit testing together, and contents sizing includes the final paragraph rather than counting newline separators. Dashboard client clipping and source minimum-size behavior retain source runtime geometry. Actual gate counts, source inventory, paired native100 captures and remaining debt are recorded; no complete-axis claim. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-02 batch72: Windows96-DPI supported ASCII header HFONT character advances and SelectedRtf font conversion govern measured widths, painting and selection foreground; removed the port-only letter-spacing fudge. Unsupported/native-unavailable paths use the framework fallback, not claimed raster-identical. Browse tab captions use native advances, source image gap and fixed sibling allocations. Dashboard retains source hover timing, caption active/cursor/focus regions and integer image placement; headings and captions share source font quantization/baseline paint. RepoObjectsTree Explorer selection-part fill/edge compose over the live PanelBackground; labels use ambient-control HFONT advances plus source text-slot padding, with a portable measurement fallback. Settings trees and ownerdrawn FileStatusList are corroborating consumers, not newly repaired by this tree change. Actual gate counts, native100 images and unresolved raster/state/selection debt are recorded; no complete-axis claim. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-03 batch73: Native-width commit-header anchors are real selectable decorated text with actual URI identity; partial keyboard/context Copy, source press activation, forward/reverse smart-word/link drag and X-button routing are exercised. Generic XHTML keeps its existing control route; complex shaping, punctuation/backtracking and exact glyph raster remain debt. Image-free/empty Browse tabs retain source font-based minimum and height without sibling reflow. Dashboard client-clipped descenders, viewport-anchored tile and source caption non-left-button state routes are exercised; heading advance and raster remain open. Explorer tree corners composite measured native image-part samples over live PanelBackground; regular NodeFont inherits ambient tree font and styled nodes retain source settings fonts. Search Button uses source flat light/dark fill/edge and inset3 solid/dotted keyboard focus, live theme/state styles, unchanged26x26/2px/16px layout; rounded raster/full physical-state coverage remains open. Settings trees/FileStatusList are corroborating consumers, not complete components. Actual tests/captures and unresolved platform/coverage debt are recorded; no complete-axis claim. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-04 upstream sync 40e2457de..52d08e996: reviewed source changes against portable twins/unchanged links. Bounded synchronized behavior and actual build/test/runtime/capture receipts are recorded in eng/avalonia/parity-evidence/upstream-sync-2026-10-04/verification.json. Historical axes/finding counts are not new closure evidence; source-changed verified axes are invalidated pending complete per-component remeasurement. Existing command-log synchronous presentation, tooltip lifetime, commit lower split minimum, full physical states and platform parity remain open in their original owners. Rebased working-tree basis 075c58fe1ab9d167369640ef267b2e6225aa6c64; no complete axis/component claim. 2026-10-04 bounded Browse-threading correction, working-tree basis 98c70f00101020b60e923810afa1767f4d21db90: Clear invokes the existing ClearSelected boundary before emptying the list, preserving the original clear-selection contract when a renderer reset would otherwise hide its retained selected node. The pre-fix regressions exposed a retained hidden SelectedItem; the implementation restores selection reset rather than suppressing the caller's thread-access failure. Actual verification outcomes and coverage limitations are recorded in eng/avalonia/parity-evidence/browse-threading-2026-10-04/verification.json; this note does not assert a test, capture or runtime pass. Historical source/visual/theming/state/platform findings and uncaptured states remain open in their original owners; no complete axis/component claim. 2026-10-05 additional main-window menu feedback: Source ToolStripEx-owned settings dropdown explicitly opts into retained pre-opening owner state without changing command logic or source dimensions; generic standalone dropdowns remain unchanged. Bounded applicable gates: Windows/Linux product 704/704, additional construction3/3, capture-driver11/11, bookkeeping78/78; native Windows probes24, capture harness1. Native100/headless100 matrices45/45 in light/dark/custom, retained comparison4239 findings (image237); reviewed source2497+400=2897, raw7234+542=7776. Evidence: eng/avalonia/parity-evidence/main-window-menu-feedback-2026-10-05/verification.json; analyzed parent ec4a7563ddfe56010c886e866493ea0d49ee164c. No full-axis closure; higherDPI/macOS/full manual audit and arbitrary whole-owner redraw freezing remain open. Historical statuses/dates/hashes/counts/evidence are preserved."
+          "note": "The current Windows/Linux gate retains the source-shaped FileStatusList contracts and the semantic capture reader now resolves its splitter as the original PanelBackground rather than a text foreground. The 121 total source differences and exhaustive live interactions remain open. 2026-10-02 batch68 working-tree evidence based on 03cea46cf1b98dda17993dbf7d6ddb23a4241773: shared declaration extraction is pixel-neutral across 45 cells; not source parity or full-axis closure. Verification counts/platform limitations: verification.json. Existing finding counts/statuses remain open. 2026-10-02 batch69: Shared native tree selection paints only the icon/label presenter, excluding the expander and dotted hierarchy. Focused/unfocused tests and representative Browse/tree/Settings renders cover the changed template; these are not exhaustive consumer state audits. Native palette, connector/font and residual image findings remain open. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-02 batch70: Native-drawn tree selection is separated from owner-drawn file trees, with measured Explorer roles and real focus-transfer coverage. PictureBox Zoom applies source integer client destination sizing. CommitInfoHeader uses the original RichEdit tab/contents path rather than incompatible text-width compensations. Browse Commands/Plugins follow original AutoSize for font and translation changes. Stale generated Designer metadata is refreshed; that is measurement repair, not evidence of pixel closure. Paired native100 three-theme captures, focused tests and actual runtime gates are recorded; full-state and higher-DPI coverage remain open. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-02 batch71: Menu AutoSize uses the original preferred-text sizing inputs rather than Fluent desired width; commit-header native formatting origin moves painted text, links and hit testing together, and contents sizing includes the final paragraph rather than counting newline separators. Dashboard client clipping and source minimum-size behavior retain source runtime geometry. Actual gate counts, source inventory, paired native100 captures and remaining debt are recorded; no complete-axis claim. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-02 batch72: Windows96-DPI supported ASCII header HFONT character advances and SelectedRtf font conversion govern measured widths, painting and selection foreground; removed the port-only letter-spacing fudge. Unsupported/native-unavailable paths use the framework fallback, not claimed raster-identical. Browse tab captions use native advances, source image gap and fixed sibling allocations. Dashboard retains source hover timing, caption active/cursor/focus regions and integer image placement; headings and captions share source font quantization/baseline paint. RepoObjectsTree Explorer selection-part fill/edge compose over the live PanelBackground; labels use ambient-control HFONT advances plus source text-slot padding, with a portable measurement fallback. Settings trees and ownerdrawn FileStatusList are corroborating consumers, not newly repaired by this tree change. Actual gate counts, native100 images and unresolved raster/state/selection debt are recorded; no complete-axis claim. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-03 batch73: Native-width commit-header anchors are real selectable decorated text with actual URI identity; partial keyboard/context Copy, source press activation, forward/reverse smart-word/link drag and X-button routing are exercised. Generic XHTML keeps its existing control route; complex shaping, punctuation/backtracking and exact glyph raster remain debt. Image-free/empty Browse tabs retain source font-based minimum and height without sibling reflow. Dashboard client-clipped descenders, viewport-anchored tile and source caption non-left-button state routes are exercised; heading advance and raster remain open. Explorer tree corners composite measured native image-part samples over live PanelBackground; regular NodeFont inherits ambient tree font and styled nodes retain source settings fonts. Search Button uses source flat light/dark fill/edge and inset3 solid/dotted keyboard focus, live theme/state styles, unchanged26x26/2px/16px layout; rounded raster/full physical-state coverage remains open. Settings trees/FileStatusList are corroborating consumers, not complete components. Actual tests/captures and unresolved platform/coverage debt are recorded; no complete-axis claim. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-04 upstream sync 40e2457de..52d08e996: reviewed source changes against portable twins/unchanged links. Bounded synchronized behavior and actual build/test/runtime/capture receipts are recorded in eng/avalonia/parity-evidence/upstream-sync-2026-10-04/verification.json. Historical axes/finding counts are not new closure evidence; source-changed verified axes are invalidated pending complete per-component remeasurement. Existing command-log synchronous presentation, tooltip lifetime, commit lower split minimum, full physical states and platform parity remain open in their original owners. Rebased working-tree basis 075c58fe1ab9d167369640ef267b2e6225aa6c64; no complete axis/component claim. 2026-10-04 bounded Browse-threading correction, working-tree basis 98c70f00101020b60e923810afa1767f4d21db90: Clear invokes the existing ClearSelected boundary before emptying the list, preserving the original clear-selection contract when a renderer reset would otherwise hide its retained selected node. The pre-fix regressions exposed a retained hidden SelectedItem; the implementation restores selection reset rather than suppressing the caller's thread-access failure. Actual verification outcomes and coverage limitations are recorded in eng/avalonia/parity-evidence/browse-threading-2026-10-04/verification.json; this note does not assert a test, capture or runtime pass. Historical source/visual/theming/state/platform findings and uncaptured states remain open in their original owners; no complete axis/component claim. 2026-10-05 additional main-window menu feedback: Source ToolStripEx-owned settings dropdown explicitly opts into retained pre-opening owner state without changing command logic or source dimensions; generic standalone dropdowns remain unchanged. Bounded applicable gates: Windows/Linux product 704/704, additional construction3/3, capture-driver11/11, bookkeeping78/78; native Windows probes24, capture harness1. Native100/headless100 matrices45/45 in light/dark/custom, retained comparison4239 findings (image237); reviewed source2497+400=2897, raw7234+542=7776. Evidence: eng/avalonia/parity-evidence/main-window-menu-feedback-2026-10-05/verification.json; analyzed parent ec4a7563ddfe56010c886e866493ea0d49ee164c. No full-axis closure; higherDPI/macOS/full manual audit and arbitrary whole-owner redraw freezing remain open. Historical statuses/dates/hashes/counts/evidence are preserved. 2026-11-21: Headless File tree loading keeps the filename filter available during enumeration. Search activation preserves input in another control, focuses its active presenter when appropriate, and toggles in both directions through the actual checked context-menu item."
         },
         "visual": {
           "status": "partial",
@@ -43207,6 +43224,7 @@
           "verifiedOn": "2026-10-04",
           "commit": "075c58fe1ab9d167369640ef267b2e6225aa6c64",
           "evidence": [
+            "eng/avalonia/parity-evidence/run-20261123/report.md",
             "eng/avalonia/parity-evidence/PR-feedback/unmapped-shortcuts/inventory/RevisionGridControl.json",
             "eng/avalonia/parity-evidence/P8.6h/h3b2b2b2b15/accepted/avalonia/manifest.json",
             "eng/avalonia/parity-evidence/PR-feedback/unmapped-shortcuts/tests/windows/focused.trx",
@@ -43230,7 +43248,7 @@
             "flatpak"
           ],
           "findingCount": 921,
-          "note": "The grid publishes the final scored RevisionGraph order, including stash, worktree and index rows, and its context menu retains the original disabled current-branch delete row and hides the empty script host. The capture readers expose the native grid and popup through stable DataGridView/MenuItem semantics without framework template artifacts. Recycled rows resolve the original selected, authored, alternating and panel-background precedence at the row boundary. Reload carries a pending focus request through the loading page and focuses the native ListBox once it is displayed; the owning FormBrowse focus command targets that inner list directly. Final-order replacement retains the primary and multi-selection by revision identity, scrolls the primary row into view, and restores focus only when the grid owned it before Avalonia reset the collection. Modifier-only or unsupported input no longer reaches its first unassigned command. The source-shape sweep maps the actual native popup tree to the original ContextMenuStrip, ToolStripMenuItem, and ToolStripSeparator identities and restores the source handler signatures. The menu closure restores the omitted original remote-branch delete group, separator and StartDeleteRemoteBranchDialog route. The fresh scoped inventory remains at 921 known source-shape findings, including deliberate Avalonia focus-lifecycle members, and the broader exhaustive behavior audit remains open. Worktree update 2026-09-22 (uncommitted, based on 99b182cbd): Restores ref-focused context menus and advanced grouping, single-child menu actions, bounded untracked-stash rows, and WorkTree/Index/HEAD cycling with clean-row skipping. Keeps native popup anchors stable during asynchronous row refresh and repaints author highlighting without recycling pressed labels. The affected selection passes 166 tests on Windows and WSL; evidence: eng/avalonia/parity-evidence/P8.6i/application-shell-126/tests/{windows,linux}-batch-2-final.trx. Full source, visual/state and platform closure remains open; no axis is promoted. 2026-10-03 batch76: Revision row height measures actual configured-family/style Graphics.MeasureString(By), then preserves physical truncation plus scaled9 spacing. Segoe-only formula removed. Live resource changes update realized rows and avatar-column allocation without replacing selection. Off-Windows uses actual resolved Avalonia font metrics; native Windows raster equivalence and higherDPI remain unverified. Actual test counts, paired images, platform evidence and unresolved coverage are in verification.json; complete axes and existing finding counts are not promoted by bounded tests. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-04 batch80: Source96 ref-label consumer probes cover six original fonts, prefix measurement versus literal painting,35 label states and four nestled pairs per font, circular path points, clipping and integer hit maps. Candidate adopts source integer capsule sizing, unshrunk circular paths, deferred pair highlights, and one ordered source hit contract for hover/tooltip/double-click/context routes. Exact completed counts, hashes, platform limits and remaining raster/state debt are in batch80/verification.json. Parent ced3016e2bba2b7537b82f73542f17edf0466ac1 identifies the verified working-tree basis, not a self-containing commit. No complete axis is claimed. Batch80 production finite ref allocation clips each label to the remaining message-cell width and advances by painted width plus the source margin; transparent full-cell input supplies source rounded-corner routing. Cached literal metrics prevent false ellipsis without expanding the original clip or claiming native glyph-raster identity. WorkingDir popup capture-only fixed coordinates are removed, exposing rather than repairing actual placement and margins. 2026-10-04 upstream sync 40e2457de..52d08e996: reviewed source changes against portable twins/unchanged links. Bounded synchronized behavior and actual build/test/runtime/capture receipts are recorded in eng/avalonia/parity-evidence/upstream-sync-2026-10-04/verification.json. Historical axes/finding counts are not new closure evidence; source-changed verified axes are invalidated pending complete per-component remeasurement. Existing command-log synchronous presentation, tooltip lifetime, commit lower split minimum, full physical states and platform parity remain open in their original owners. Rebased working-tree basis 075c58fe1ab9d167369640ef267b2e6225aa6c64; no complete axis/component claim. 2026-10-05 owner-requested main-window feedback batch: Realized graph rows now receive the published lane allocation, including completion refresh; actual viewport intersection includes partial endpoints but excludes virtualization overscan when choosing width. Retained painter exceptions are observable through source-style trace diagnostics. Evidence root: eng/avalonia/parity-evidence/main-window-feedback-2026-10-05. Working-tree basis c2f994a6d22139fd81832b70f2caec34a19392f2; bounded applicable gates verified 2026-10-05; actual receipt: eng/avalonia/parity-evidence/main-window-feedback-2026-10-05/verification.json. Observed passing counts: Windows/Linux product 613/613, additional construction 3/3, capture-driver 2/2, bookkeeping 78/78; Windows native probes 8, capture harness 1. Final source-native100/candidate-headless100 three-theme/nine-state capture matrices: 27/27. Retained whole-port source findings: reviewed 2497 actionable + 400 dependent = 2897, raw 7235 actionable + 542 dependent = 7777. Retained paired-capture findings: 2648 total, including 153 image findings. No full-axis closure; existing per-axis statuses, dates, hashes, evidence arrays and historical finding counts are preserved, not promoted or rewritten by this bounded batch. 2026-10-05 additional main-window menu feedback: Commit context menu hover uses the source Professional selection palette and paint-only inset instead of semantic CSS Highlight; actual popup-row hover opens its real ancestors and rolls back on unsupported states. This is not complete context-menu/action closure. Bounded applicable gates: Windows/Linux product 704/704, additional construction3/3, capture-driver11/11, bookkeeping78/78; native Windows probes24, capture harness1. Native100/headless100 matrices45/45 in light/dark/custom, retained comparison4239 findings (image237); reviewed source2497+400=2897, raw7234+542=7776. Evidence: eng/avalonia/parity-evidence/main-window-menu-feedback-2026-10-05/verification.json; analyzed parent ec4a7563ddfe56010c886e866493ea0d49ee164c. No full-axis closure; higherDPI/macOS/full manual audit and arbitrary whole-owner redraw freezing remain open. Historical statuses/dates/hashes/counts/evidence are preserved. 2026-10-13 main-window selection and layout: Startup selects the source HEAD rather than artificial working-directory row; SelectedId is a consumed request, not the current selection. Ordered multi-selection and reload restoration retain raw current cell separately from latest-selected details/diff endpoints, with explicit sort-order paths preserved. Late loading batches do not reclaim another control focus, and generation/cancellation reject stale completion. Actual original four-stage endpoint/reload probes are recorded; unmeasured modifier/right-click behavior is not claimed complete. Bounded applicable gates: Windows product 918/918; Linux 915 passed with three explicit Windows-only font skips out of the same 918 identities, additional construction3/3, capture-driver17/17, bookkeeping78/78; native Windows probes60, capture harness1. Native100/headless100 matrices54/54 (three additional actual filter-row hover states per theme; broader denominator) in light/dark/custom, retained comparison1554 findings (image282); reviewed source2495+400=2895, raw7231+542=7773. Evidence: eng/avalonia/parity-evidence/main-window-closure-2026-10-13/verification.json; analyzed parent e22102fb8002e3f7bef535d3f1e2b2a076cbad12. No full-axis closure; higherDPI/macOS/full manual audit and arbitrary whole-owner redraw freezing, source mouse-opening preselection and unmeasured modifier/right-click routes remain open. Historical statuses/dates/hashes/counts/evidence are preserved. 2026-10-14 main-window toolbar and command behavior: Source right-cell selection retains only the latest still-selected hit; blank clicks retain selection/default/details while latest becomes null. Single-revision commands and parent/child navigation use the source latest target, explicitly default-target consumers stay default. Right-pointer handling preserves the keyboard caret, ordinary input cancels pending streamed restoration, and already-checked branch modes do not reload. Filtered history navigation reports source feedback; keyboard Ctrl+C uses restoration order while copy-menu/default order stays reverse insertion. Actual queued pointer receipts distinguish current/latest/default/details/restoration; no universal native CurrentCell-to-Avalonia SelectedItem mapping or full state audit is claimed. Bounded applicable gates: Windows product 1091/1091; Linux 1088 passed with three explicit Windows-only font skips out of the same 1091 identities, additional construction3/3, capture-driver17/17, bookkeeping78/78; native Windows probes99, capture harness1. Native100/headless100 matrices54/54 (same54-state bounded matrix; changed history parent and relative-time inputs) in light/dark/custom, retained comparison1098 findings (image282); reviewed source2495+400=2895, raw7232+542=7774. Evidence: eng/avalonia/parity-evidence/main-window-toolbar-2026-10-14/verification.json; analyzed parent 1338570b43e1fe367694929ccb5f09739a6a9a80. No full-axis closure; higherDPI/macOS/full manual audit and broader owner rafting/state coverage remain open. Historical statuses/dates/hashes/counts/evidence are preserved. 2026-10-15 main-window viewport, popup and lower-pane behavior: Rows measure against the actual finite scroll-content viewport, preserving original scrollbar reservation and fill-column minimum; narrow layouts horizontally scroll to the final column without intrinsic-caption expansion. Recycled rows release viewport subscriptions on detach. Original9/11/14pt wide/narrow/scrolled/regrown probes and independent candidate geometry tests exercise this contract. Reference capsule paint and hit geometry are recomputed from actual arranged capacity rather than stale bootstrap DesiredSize. Bounded applicable gates: Windows product 1326/1326; Linux 1323 passed plus three qualified Windows-only font skips from the identical 1326 identities; construction3/3, capture-driver17/17 and bookkeeping78/78 on each OS; native original probes108/108; capture harness1/1. Native100 matrices54/54 in light/dark/custom validate resolvedARGB and byte-identical tree round trips; retained comparison885 findings, including image279. Whole-port reviewed source2494+400=2894, raw7232+542=7774, are separate denominators. Evidence: eng/avalonia/parity-evidence/main-window-render-2026-10-15/verification.json; analyzed parent014e87fd07bbb4bb7a7ac2a0e9dccba91511b7c6. No full-axis closure; higherDPI/macOS/complete paired manual audit remain open. Flatpak package rebuild is N/A to this ordinary framework-neutral UI/input batch. Historical statuses, dates, hashes, counts and evidence are preserved. 2026-10-29 interim main-window menu-paint repair (parent 77544bb672fd6b76b6749f4bf411a1ab0fc6aca3): Revision context-menu disabled icons share the original ToolStrip matrix and first-disabled-draw process-mode cache; generic separators retain integer placement and SeparatorDark. Message markers use source integer centers; converted images are owned and disposed without changing original assets. The batch's original bitmap-only probe passes278 cases (252 marker,26 menu), not desktop parity. Evidence under eng/avalonia/parity-evidence/main-window-menu-paint-2026-10-29/: native-gate-final1.json and native-bitmap-retention-final1.json; consult headless-accounting-final1.json, source-accounting-final1.json and candidate-producer-validation-final1.json for actual latest counts and limitations. All387 capture findings remain unremeasured; source baseline2896 reviewed/7776 raw is not image-fix credit. Desktop/full native54-state/runtime/macOS/higherDPI closure remains deferred or unrun. Flatpak rebuild is N/A for these framework-neutral UI changes; no axis/component is complete. 2026-10-29 interim toolbar/arrow paint repair (parent 50651a56a765ade356fe5b10302518176f248d12): Generic revision-context submenu arrows retain the original paint rectangle, opaque GDI row coverage, RTL direction and raw renderer colors. This shared menu-painter correction does not alter graph, reference-label or message layout. The actual original bitmap oracle passes228 cases;1116 retained files and two-source embedded-PDB proof are recorded in eng/avalonia/parity-evidence/main-window-toolbar-arrows-2026-10-29/. This note establishes no headless product or candidate pass; expected headless-accounting-final1.json, source-accounting-final1.json and candidate-producer-validation-final1.json hold actual subsequent counts and limitations. Source2896 reviewed/7776 raw and387 capture findings remain retained/unremeasured; no axis/status promotion. Desktop/full native54-state/runtime/macOS/higherDPI closure remains deferred or unrun; Flatpak rebuild is N/A for these framework-neutral UI changes. 2026-11-02 source-action batch (analyzed parent 3c9b3696c): Context actions retain Apply for both stash kinds, safe bare-repository ref actions, exactly-once child dispatch, the chosen diff tool, and original first/selected revision pairing. Exact scoped regression results and retained evidence: eng/avalonia/parity-evidence/main-window-source-actions-2026-11-02/. No complete axis, native desktop/runtime verification or unremeasured screenshot-finding reduction is claimed."
+          "note": "The grid publishes the final scored RevisionGraph order, including stash, worktree and index rows, and its context menu retains the original disabled current-branch delete row and hides the empty script host. The capture readers expose the native grid and popup through stable DataGridView/MenuItem semantics without framework template artifacts. Recycled rows resolve the original selected, authored, alternating and panel-background precedence at the row boundary. Reload carries a pending focus request through the loading page and focuses the native ListBox once it is displayed; the owning FormBrowse focus command targets that inner list directly. Final-order replacement retains the primary and multi-selection by revision identity, scrolls the primary row into view, and restores focus only when the grid owned it before Avalonia reset the collection. Modifier-only or unsupported input no longer reaches its first unassigned command. The source-shape sweep maps the actual native popup tree to the original ContextMenuStrip, ToolStripMenuItem, and ToolStripSeparator identities and restores the source handler signatures. The menu closure restores the omitted original remote-branch delete group, separator and StartDeleteRemoteBranchDialog route. The fresh scoped inventory remains at 921 known source-shape findings, including deliberate Avalonia focus-lifecycle members, and the broader exhaustive behavior audit remains open. Worktree update 2026-09-22 (uncommitted, based on 99b182cbd): Restores ref-focused context menus and advanced grouping, single-child menu actions, bounded untracked-stash rows, and WorkTree/Index/HEAD cycling with clean-row skipping. Keeps native popup anchors stable during asynchronous row refresh and repaints author highlighting without recycling pressed labels. The affected selection passes 166 tests on Windows and WSL; evidence: eng/avalonia/parity-evidence/P8.6i/application-shell-126/tests/{windows,linux}-batch-2-final.trx. Full source, visual/state and platform closure remains open; no axis is promoted. 2026-10-03 batch76: Revision row height measures actual configured-family/style Graphics.MeasureString(By), then preserves physical truncation plus scaled9 spacing. Segoe-only formula removed. Live resource changes update realized rows and avatar-column allocation without replacing selection. Off-Windows uses actual resolved Avalonia font metrics; native Windows raster equivalence and higherDPI remain unverified. Actual test counts, paired images, platform evidence and unresolved coverage are in verification.json; complete axes and existing finding counts are not promoted by bounded tests. Actual gate counts/limitations are in verification.json; existing axis status and finding counts are preserved, not claimed closed. 2026-10-04 batch80: Source96 ref-label consumer probes cover six original fonts, prefix measurement versus literal painting,35 label states and four nestled pairs per font, circular path points, clipping and integer hit maps. Candidate adopts source integer capsule sizing, unshrunk circular paths, deferred pair highlights, and one ordered source hit contract for hover/tooltip/double-click/context routes. Exact completed counts, hashes, platform limits and remaining raster/state debt are in batch80/verification.json. Parent ced3016e2bba2b7537b82f73542f17edf0466ac1 identifies the verified working-tree basis, not a self-containing commit. No complete axis is claimed. Batch80 production finite ref allocation clips each label to the remaining message-cell width and advances by painted width plus the source margin; transparent full-cell input supplies source rounded-corner routing. Cached literal metrics prevent false ellipsis without expanding the original clip or claiming native glyph-raster identity. WorkingDir popup capture-only fixed coordinates are removed, exposing rather than repairing actual placement and margins. 2026-10-04 upstream sync 40e2457de..52d08e996: reviewed source changes against portable twins/unchanged links. Bounded synchronized behavior and actual build/test/runtime/capture receipts are recorded in eng/avalonia/parity-evidence/upstream-sync-2026-10-04/verification.json. Historical axes/finding counts are not new closure evidence; source-changed verified axes are invalidated pending complete per-component remeasurement. Existing command-log synchronous presentation, tooltip lifetime, commit lower split minimum, full physical states and platform parity remain open in their original owners. Rebased working-tree basis 075c58fe1ab9d167369640ef267b2e6225aa6c64; no complete axis/component claim. 2026-10-05 owner-requested main-window feedback batch: Realized graph rows now receive the published lane allocation, including completion refresh; actual viewport intersection includes partial endpoints but excludes virtualization overscan when choosing width. Retained painter exceptions are observable through source-style trace diagnostics. Evidence root: eng/avalonia/parity-evidence/main-window-feedback-2026-10-05. Working-tree basis c2f994a6d22139fd81832b70f2caec34a19392f2; bounded applicable gates verified 2026-10-05; actual receipt: eng/avalonia/parity-evidence/main-window-feedback-2026-10-05/verification.json. Observed passing counts: Windows/Linux product 613/613, additional construction 3/3, capture-driver 2/2, bookkeeping 78/78; Windows native probes 8, capture harness 1. Final source-native100/candidate-headless100 three-theme/nine-state capture matrices: 27/27. Retained whole-port source findings: reviewed 2497 actionable + 400 dependent = 2897, raw 7235 actionable + 542 dependent = 7777. Retained paired-capture findings: 2648 total, including 153 image findings. No full-axis closure; existing per-axis statuses, dates, hashes, evidence arrays and historical finding counts are preserved, not promoted or rewritten by this bounded batch. 2026-10-05 additional main-window menu feedback: Commit context menu hover uses the source Professional selection palette and paint-only inset instead of semantic CSS Highlight; actual popup-row hover opens its real ancestors and rolls back on unsupported states. This is not complete context-menu/action closure. Bounded applicable gates: Windows/Linux product 704/704, additional construction3/3, capture-driver11/11, bookkeeping78/78; native Windows probes24, capture harness1. Native100/headless100 matrices45/45 in light/dark/custom, retained comparison4239 findings (image237); reviewed source2497+400=2897, raw7234+542=7776. Evidence: eng/avalonia/parity-evidence/main-window-menu-feedback-2026-10-05/verification.json; analyzed parent ec4a7563ddfe56010c886e866493ea0d49ee164c. No full-axis closure; higherDPI/macOS/full manual audit and arbitrary whole-owner redraw freezing remain open. Historical statuses/dates/hashes/counts/evidence are preserved. 2026-10-13 main-window selection and layout: Startup selects the source HEAD rather than artificial working-directory row; SelectedId is a consumed request, not the current selection. Ordered multi-selection and reload restoration retain raw current cell separately from latest-selected details/diff endpoints, with explicit sort-order paths preserved. Late loading batches do not reclaim another control focus, and generation/cancellation reject stale completion. Actual original four-stage endpoint/reload probes are recorded; unmeasured modifier/right-click behavior is not claimed complete. Bounded applicable gates: Windows product 918/918; Linux 915 passed with three explicit Windows-only font skips out of the same 918 identities, additional construction3/3, capture-driver17/17, bookkeeping78/78; native Windows probes60, capture harness1. Native100/headless100 matrices54/54 (three additional actual filter-row hover states per theme; broader denominator) in light/dark/custom, retained comparison1554 findings (image282); reviewed source2495+400=2895, raw7231+542=7773. Evidence: eng/avalonia/parity-evidence/main-window-closure-2026-10-13/verification.json; analyzed parent e22102fb8002e3f7bef535d3f1e2b2a076cbad12. No full-axis closure; higherDPI/macOS/full manual audit and arbitrary whole-owner redraw freezing, source mouse-opening preselection and unmeasured modifier/right-click routes remain open. Historical statuses/dates/hashes/counts/evidence are preserved. 2026-10-14 main-window toolbar and command behavior: Source right-cell selection retains only the latest still-selected hit; blank clicks retain selection/default/details while latest becomes null. Single-revision commands and parent/child navigation use the source latest target, explicitly default-target consumers stay default. Right-pointer handling preserves the keyboard caret, ordinary input cancels pending streamed restoration, and already-checked branch modes do not reload. Filtered history navigation reports source feedback; keyboard Ctrl+C uses restoration order while copy-menu/default order stays reverse insertion. Actual queued pointer receipts distinguish current/latest/default/details/restoration; no universal native CurrentCell-to-Avalonia SelectedItem mapping or full state audit is claimed. Bounded applicable gates: Windows product 1091/1091; Linux 1088 passed with three explicit Windows-only font skips out of the same 1091 identities, additional construction3/3, capture-driver17/17, bookkeeping78/78; native Windows probes99, capture harness1. Native100/headless100 matrices54/54 (same54-state bounded matrix; changed history parent and relative-time inputs) in light/dark/custom, retained comparison1098 findings (image282); reviewed source2495+400=2895, raw7232+542=7774. Evidence: eng/avalonia/parity-evidence/main-window-toolbar-2026-10-14/verification.json; analyzed parent 1338570b43e1fe367694929ccb5f09739a6a9a80. No full-axis closure; higherDPI/macOS/full manual audit and broader owner rafting/state coverage remain open. Historical statuses/dates/hashes/counts/evidence are preserved. 2026-10-15 main-window viewport, popup and lower-pane behavior: Rows measure against the actual finite scroll-content viewport, preserving original scrollbar reservation and fill-column minimum; narrow layouts horizontally scroll to the final column without intrinsic-caption expansion. Recycled rows release viewport subscriptions on detach. Original9/11/14pt wide/narrow/scrolled/regrown probes and independent candidate geometry tests exercise this contract. Reference capsule paint and hit geometry are recomputed from actual arranged capacity rather than stale bootstrap DesiredSize. Bounded applicable gates: Windows product 1326/1326; Linux 1323 passed plus three qualified Windows-only font skips from the identical 1326 identities; construction3/3, capture-driver17/17 and bookkeeping78/78 on each OS; native original probes108/108; capture harness1/1. Native100 matrices54/54 in light/dark/custom validate resolvedARGB and byte-identical tree round trips; retained comparison885 findings, including image279. Whole-port reviewed source2494+400=2894, raw7232+542=7774, are separate denominators. Evidence: eng/avalonia/parity-evidence/main-window-render-2026-10-15/verification.json; analyzed parent014e87fd07bbb4bb7a7ac2a0e9dccba91511b7c6. No full-axis closure; higherDPI/macOS/complete paired manual audit remain open. Flatpak package rebuild is N/A to this ordinary framework-neutral UI/input batch. Historical statuses, dates, hashes, counts and evidence are preserved. 2026-10-29 interim main-window menu-paint repair (parent 77544bb672fd6b76b6749f4bf411a1ab0fc6aca3): Revision context-menu disabled icons share the original ToolStrip matrix and first-disabled-draw process-mode cache; generic separators retain integer placement and SeparatorDark. Message markers use source integer centers; converted images are owned and disposed without changing original assets. The batch's original bitmap-only probe passes278 cases (252 marker,26 menu), not desktop parity. Evidence under eng/avalonia/parity-evidence/main-window-menu-paint-2026-10-29/: native-gate-final1.json and native-bitmap-retention-final1.json; consult headless-accounting-final1.json, source-accounting-final1.json and candidate-producer-validation-final1.json for actual latest counts and limitations. All387 capture findings remain unremeasured; source baseline2896 reviewed/7776 raw is not image-fix credit. Desktop/full native54-state/runtime/macOS/higherDPI closure remains deferred or unrun. Flatpak rebuild is N/A for these framework-neutral UI changes; no axis/component is complete. 2026-10-29 interim toolbar/arrow paint repair (parent 50651a56a765ade356fe5b10302518176f248d12): Generic revision-context submenu arrows retain the original paint rectangle, opaque GDI row coverage, RTL direction and raw renderer colors. This shared menu-painter correction does not alter graph, reference-label or message layout. The actual original bitmap oracle passes228 cases;1116 retained files and two-source embedded-PDB proof are recorded in eng/avalonia/parity-evidence/main-window-toolbar-arrows-2026-10-29/. This note establishes no headless product or candidate pass; expected headless-accounting-final1.json, source-accounting-final1.json and candidate-producer-validation-final1.json hold actual subsequent counts and limitations. Source2896 reviewed/7776 raw and387 capture findings remain retained/unremeasured; no axis/status promotion. Desktop/full native54-state/runtime/macOS/higherDPI closure remains deferred or unrun; Flatpak rebuild is N/A for these framework-neutral UI changes. 2026-11-02 source-action batch (analyzed parent 3c9b3696c): Context actions retain Apply for both stash kinds, safe bare-repository ref actions, exactly-once child dispatch, the chosen diff tool, and original first/selected revision pairing. Exact scoped regression results and retained evidence: eng/avalonia/parity-evidence/main-window-source-actions-2026-11-02/. No complete axis, native desktop/runtime verification or unremeasured screenshot-finding reduction is claimed. 2026-11-21: The native list gets selected-revision children from the shared RevisionGraph lookup in source order, matching the original RevisionDataGridView delegation without a loaded-row scan. The large-history Browse selection regression covers the behavior headlessly; native responsiveness remains unverified."
         },
         "visual": {
           "status": "partial",
@@ -47604,20 +47622,19 @@
     },
     {
       "source": "src/plugins/Statistics/GitStatistics/PieChart/Quadrilateral.cs",
-      "twin": "src/plugins/Statistics/GitStatistics/PieChart/PieChart3D.NonWindows.cs",
+      "twin": "src/plugins/Statistics/GitStatistics/PieChart/Quadrilateral.NonWindows.cs",
       "complete": false,
       "axes": {
         "structural": {
           "status": "unverified",
-          "verifiedOn": "2026-08-27",
-          "commit": "9b5ea806a03e1fbdf44911848adca44563b92bac",
+          "verifiedOn": "2026-11-09",
+          "commit": "dfe3ff0d6c1ada20805d5811f2dee82841e35ff1",
           "evidence": [
-            "eng/avalonia/parity-evidence/P8.6i/framework-signatures-65/sweep/windows/functional-findings.json",
-            "eng/avalonia/parity-evidence/P8.6i/framework-signatures-65/sweep/linux/functional-findings.json"
+            "eng/avalonia/parity-evidence/run-20261108-2/B131-004-reviewed-final/types/GitExtensions.Plugins.GitStatistics.PieChart.Quadrilateral.functional-findings.json"
           ],
           "platforms": [],
-          "findingCount": 0,
-          "note": "P8.6i progress 65 restores safely anchored source comments and moves exact native-control field type substitutions into pinned, visible reviewed-deviation evidence. The byte-identical Windows/Linux schema-v4 inventory records zero ordinary findings for this mapping; accepted framework deviations and unexercised axes prevent an identity or parity claim."
+          "findingCount": 1,
+          "note": "The named native Quadrilateral is now inventoried as its own type. One original GDI point-flags field remains measured; required drawing signatures and moved annotations are exact accepted deviations. The current working-tree report and final Batch receipt carry the source proof; no structural completion is claimed."
         },
         "functional": {
           "status": "unverified",
@@ -50786,6 +50803,448 @@
           "platforms": [],
           "findingCount": 0,
           "note": "New reporter mapping; full six-axis parity remains unverified."
+        }
+      }
+    },
+    {
+      "source": "src/app/BugReporter/Program.cs",
+      "twin": "src/app/BugReporter.Avalonia/Program.cs",
+      "complete": false,
+      "axes": {
+        "structural": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-09",
+          "commit": "dbf0c17a0a5aa881ff0d46dacc82bf1321aaa9d5",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261108-2/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New independent reporter mapping. No six-axis completion claimed; native process/UI and final platform evidence are pending."
+        },
+        "functional": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-09",
+          "commit": "dbf0c17a0a5aa881ff0d46dacc82bf1321aaa9d5",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261108-2/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New independent reporter mapping. No six-axis completion claimed; native process/UI and final platform evidence are pending."
+        },
+        "visual": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-09",
+          "commit": "dbf0c17a0a5aa881ff0d46dacc82bf1321aaa9d5",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261108-2/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New independent reporter mapping. No six-axis completion claimed; native process/UI and final platform evidence are pending."
+        },
+        "themingAndColor": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-09",
+          "commit": "dbf0c17a0a5aa881ff0d46dacc82bf1321aaa9d5",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261108-2/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New independent reporter mapping. No six-axis completion claimed; native process/UI and final platform evidence are pending."
+        },
+        "behavioralState": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-09",
+          "commit": "dbf0c17a0a5aa881ff0d46dacc82bf1321aaa9d5",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261108-2/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New independent reporter mapping. No six-axis completion claimed; native process/UI and final platform evidence are pending."
+        },
+        "platform": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-09",
+          "commit": "dbf0c17a0a5aa881ff0d46dacc82bf1321aaa9d5",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261108-2/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New independent reporter mapping. No six-axis completion claimed; native process/UI and final platform evidence are pending."
+        }
+      }
+    },
+    {
+      "source": "src/app/GitUI/WindowsJumpListManager.cs",
+      "twin": "src/app/GitUI.Avalonia/WindowsJumpListManager.cs",
+      "complete": false,
+      "axes": {
+        "structural": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "functional": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "visual": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "themingAndColor": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "behavioralState": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "platform": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        }
+      }
+    },
+    {
+      "source": "src/app/GitUI/WindowsThumbnailToolbarButton.cs",
+      "twin": "src/app/GitUI.Avalonia/WindowsThumbnailToolbarButton.cs",
+      "complete": false,
+      "axes": {
+        "structural": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "functional": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "visual": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "themingAndColor": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "behavioralState": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "platform": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        }
+      }
+    },
+    {
+      "source": "src/app/GitUI/WindowsThumbnailToolbarButtons.cs",
+      "twin": "src/app/GitUI.Avalonia/WindowsThumbnailToolbarButtons.cs",
+      "complete": false,
+      "axes": {
+        "structural": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "functional": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "visual": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "themingAndColor": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "behavioralState": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "platform": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-10",
+          "commit": "d64c4e037d364cf1942f7d7d7b5bd4e9c827c151",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar mapping; its framework signature substitutions are exactly pinned. Headless Windows/Linux tests use a recording shell. Native taskbar display and clicks, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        }
+      }
+    },
+    {
+      "source": "src/app/GitUI/TaskbarProgress.cs",
+      "twin": "src/app/GitUI.Avalonia/TaskbarProgress.cs",
+      "complete": false,
+      "axes": {
+        "structural": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-11",
+          "commit": "58a83c5831d68c2efc77571bba49e1fde5bb949f",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar progress mapping. Headless Windows/Linux tests use a recording shell and a native main-window fixture; native taskbar display, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "functional": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-11",
+          "commit": "58a83c5831d68c2efc77571bba49e1fde5bb949f",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar progress mapping. Headless Windows/Linux tests use a recording shell and a native main-window fixture; native taskbar display, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "visual": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-11",
+          "commit": "58a83c5831d68c2efc77571bba49e1fde5bb949f",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar progress mapping. Headless Windows/Linux tests use a recording shell and a native main-window fixture; native taskbar display, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "themingAndColor": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-11",
+          "commit": "58a83c5831d68c2efc77571bba49e1fde5bb949f",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar progress mapping. Headless Windows/Linux tests use a recording shell and a native main-window fixture; native taskbar display, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "behavioralState": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-11",
+          "commit": "58a83c5831d68c2efc77571bba49e1fde5bb949f",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar progress mapping. Headless Windows/Linux tests use a recording shell and a native main-window fixture; native taskbar display, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        },
+        "platform": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-11",
+          "commit": "58a83c5831d68c2efc77571bba49e1fde5bb949f",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261110/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "New Windows taskbar progress mapping. Headless Windows/Linux tests use a recording shell and a native main-window fixture; native taskbar display, macOS and Linux substitutes are pending; no six-axis completion claimed."
+        }
+      }
+    },
+    {
+      "source": "src/app/GitUI/UserControls/PictureBoxEx.cs",
+      "twin": "src/app/GitUI.Avalonia/UserControls/PictureBoxEx.cs",
+      "complete": false,
+      "axes": {
+        "structural": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-20",
+          "commit": "861ccdbb4f7c1d2f20febc8c15580b87592aa79d",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261122/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 1,
+          "note": "The same-named control delegates to a native Image. The source OnPaint declaration remains actionable because Avalonia uses Render."
+        },
+        "functional": {
+          "status": "partial",
+          "verifiedOn": "2026-11-20",
+          "commit": "861ccdbb4f7c1d2f20febc8c15580b87592aa79d",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261122/report.md"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "findingCount": 0,
+          "note": "The native drawing callback catches a failing current image and FileViewer displays the exception through the original text fallback. Headless Windows Edit verification is recorded in the report."
+        },
+        "visual": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-20",
+          "commit": "861ccdbb4f7c1d2f20febc8c15580b87592aa79d",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261122/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "Native clear and first-frame error display need a paired comparison."
+        },
+        "themingAndColor": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-20",
+          "commit": "861ccdbb4f7c1d2f20febc8c15580b87592aa79d",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261122/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "The render catch resolves Window through the existing system-color theme boundary. Native theme comparison is pending."
+        },
+        "behavioralState": {
+          "status": "partial",
+          "verifiedOn": "2026-11-20",
+          "commit": "861ccdbb4f7c1d2f20febc8c15580b87592aa79d",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261122/report.md"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "findingCount": 0,
+          "note": "Two headless cases exercise the current failure and a replacement before the deferred FileViewer callback. Native compositor presentation is pending."
+        },
+        "platform": {
+          "status": "unverified",
+          "verifiedOn": "2026-11-20",
+          "commit": "861ccdbb4f7c1d2f20febc8c15580b87592aa79d",
+          "evidence": [
+            "eng/avalonia/parity-evidence/run-20261122/report.md"
+          ],
+          "platforms": [],
+          "findingCount": 0,
+          "note": "Native renderer effects and all desktop platform states remain pending."
         }
       }
     }

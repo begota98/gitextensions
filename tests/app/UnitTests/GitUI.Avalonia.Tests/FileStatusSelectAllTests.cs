@@ -1,6 +1,8 @@
-﻿using Avalonia.Controls;
+﻿using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -42,17 +44,31 @@ public sealed class FileStatusSelectAllTests
             tree.IsVisible.Should().BeTrue();
             TreeViewItem[] roots = [.. tree.GetVisualDescendants().OfType<TreeViewItem>().Where(item => item.Level == 0)];
             roots.Should().NotBeEmpty();
-            foreach (TreeViewItem root in roots)
+            ContextMenu menu = tree.ContextMenu!;
+            foreach (TreeViewItem root in roots.Where(root => root.Items.Count > 0))
             {
                 tree.SelectedItem = root.DataContext;
-                control.GetTestAccessor().CollapseAllMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                Control header = root.GetVisualDescendants().OfType<Control>()
+                    .First(control => control.Name == "PART_HeaderPresenter");
+                Point point = header.TranslatePoint(new Point(header.Bounds.Width / 2, header.Bounds.Height / 2), window)!.Value;
+                window.MouseMove(point, RawInputModifiers.None);
+                window.MouseDown(point, MouseButton.Right, RawInputModifiers.None);
+                window.MouseUp(point, MouseButton.Right, RawInputModifiers.None);
+                Dispatcher.UIThread.RunJobs();
+                menu.IsOpen.Should().BeTrue();
+                MenuItem collapse = menu.Items.OfType<MenuItem>().Single(item => item.Header as string == "C_ollapse all");
+                collapse.IsVisible.Should().BeTrue();
+                collapse.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                menu.Close();
             }
 
+            tree.Focus().Should().BeTrue();
             Dispatcher.UIThread.RunJobs();
             ScrollViewer scroll = tree.GetVisualDescendants().OfType<ScrollViewer>().First();
             var offset = scroll.Offset;
             bool autoScroll = tree.AutoScrollToSelectedItem;
-            control.SelectAll();
+            window.KeyPress(Key.A, RawInputModifiers.Control, PhysicalKey.A, keySymbol: "a");
+            window.KeyRelease(Key.A, RawInputModifiers.Control, PhysicalKey.A, keySymbol: "a");
             Dispatcher.UIThread.RunJobs();
             using var after = window.CaptureRenderedFrame();
 

@@ -138,20 +138,17 @@ internal sealed class MessageColumnProvider : ColumnProvider
 
         if (revision.IsArtificial)
         {
-            RevisionGridRefRenderer.RefLabelControl artificialLabel = DrawArtificialRevision(revision);
-            panel.ContentPanel.SetMinimumAdvance(artificialLabel, GetArtificialLabelWidth(panel));
-            DrawRef(panel, artificialLabel);
-
-            foreach (Control statusControl in CreateArtificialStatusControls(revision.ObjectId))
-            {
-                panel.ContentPanel.Children.Insert(panel.ContentPanel.Children.Count - 1, statusControl);
-            }
+            panel.Subject.Classes.Remove("revision-emphasized");
+            panel.Body.Classes.Remove("revision-emphasized");
+            DrawArtificialRevision(panel, revision);
 
             panel.Subject.Text = string.Empty;
-            panel.Subject.FontWeight = FontWeight.Normal;
             panel.Revision = revision;
             panel.Indicator.Update(revision);
-            ToolTip.SetTip(panel, GetArtificialToolTip(revision));
+            ToolTip.SetTip(panel, _settings.ShowGitStatusForArtificialCommits
+                && _grid.GetChangeCount(revision.ObjectId) is ArtificialCommitChangeCount changeCount
+                    ? changeCount.GetSummary()
+                    : _settings.ShowRevisionGridTooltips ? revision.Subject : null);
             RestoreHighlightAfterUpdate(panel, restoreHighlight);
             if (rowIndex >= 0)
             {
@@ -161,90 +158,66 @@ internal sealed class MessageColumnProvider : ColumnProvider
             return;
         }
 
-        // Draw super project references (for submodules)
-        SuperProjectInfo? superProjectInfo = _grid.TryGetSuperProjectInfo(out SuperProjectInfo? info)
-            ? info
-            : null;
-        IReadOnlyList<IGitRef>? superprojectRefs = superProjectInfo?.Refs is not null
-            && superProjectInfo.Refs.TryGetValue(revision.ObjectId, out IReadOnlyList<IGitRef>? refs)
-                ? refs
-                : null;
-        foreach (Control label in DrawSuperprojectInfo(revision, superProjectInfo)
-                     .Concat(DrawSuperprojectRefs(revision, superProjectInfo)))
+        List<IGitRef> superprojectRefs = [];
+        if (_grid.TryGetSuperProjectInfo(out SuperProjectInfo? superProjectInfo))
         {
-            DrawRef(panel, label);
+            // Draw super project references (for submodules)
+            foreach (Control label in DrawSuperprojectInfo(revision, superProjectInfo))
+            {
+                DrawRef(panel, label);
+            }
+
+            if (superProjectInfo.Refs is not null && !revision.ObjectId.IsZero
+                && superProjectInfo.Refs.TryGetValue(revision.ObjectId, out IReadOnlyList<IGitRef>? refs))
+            {
+                superprojectRefs.AddRange(refs);
+            }
         }
 
         IReadOnlyList<IGitRef> gitRefs = SortRefs(revision.Refs.Where(FilterRef));
-        foreach (IGitRef gitRef in gitRefs)
-        {
-            IImage? bisectImage = gitRef.IsBisectGood
-                ? _bisectGoodImage
-                : gitRef.IsBisectBad
-                    ? _bisectBadImage
-                    : null;
-            if (bisectImage is not null)
-            {
-                panel.ContentPanel.Children.Insert(
-                    panel.ContentPanel.Children.Count - 1,
-                    DrawImage(bisectImage));
-            }
-        }
-
-        IReadOnlyList<IGitRef> labelRefs = [.. gitRefs.Where(gitRef => !gitRef.IsBisectGood && !gitRef.IsBisectBad)];
+        Dictionary<string, IGitRef> trackedRemotes = BuildTrackedRemoteMap(gitRefs);
 
         // When there is only one local branch on this commit, remote-ref labels can omit the branch name if equal.
-        IGitRef? singleLocalBranch = labelRefs.Count(gitRef => gitRef.IsHead) == 1
-            ? labelRefs.Single(gitRef => gitRef.IsHead)
-            : null;
-        string? singleTrackedLocalBranchName = singleLocalBranch is not null
-            && labelRefs.Any(singleLocalBranch.IsTrackingRemote)
-                ? singleLocalBranch.LocalName
-                : null;
+        int localBranchCount = gitRefs.Count(gitRef => gitRef.IsHead);
+        string? singleLocalBranchName = localBranchCount == 1 ? trackedRemotes.Keys.FirstOrDefault() : null;
 
-        // Remote refs that are tracked by a local branch in this row
-        // are drawn condensed immediately after that local branch instead.
-        // If this branch is at its tracked remote, draw them condensed.
-        // If this branch has ahead/behind information, draw that info as virtual label of the tracked/tracking branch.
-        // Builds a map of local branch name → remote ref that tracks it. No I/O is performed.
-        // Draws a local branch capsule with its tracked remote capsule nestled against it, appearing as a single visual group.
-        // Draw the gitRef with a '>' / '<' right edge that meets the nestledRef's matching left indent.
-        // Compute the geometry to align the nestled notch/point exactly against the branch point/notch.
-        // Position the NotchLeft rect so its notch tip (rect.X + pointWidth) aligns with the branch point tip (branchRect.Right), cancelling the inter-label margin.
-        // Draw the nestled directly via DrawRefEx with RefLabelIcon.None — the nestled remote never shows a head indicator.
-        // Draw highlight frames last so neither capsule overwrites the other's highlight edge.
-        foreach (Control label in RevisionGridRefRenderer.CreateLabels(
-                     labelRefs,
-                     _settings.ShowTags,
-                     _settings.ShowRemoteBranches,
-                     _settings.FillRefLabels,
-                     GetVirtualRef,
-                     superprojectRefs?.Select(gitRef => gitRef.CompleteName).ToHashSet(StringComparer.Ordinal),
-                     GetLabel))
+        foreach (IGitRef gitRef in gitRefs)
         {
-            if (_settings.ShowAnnotatedTagsMessages
-                && label is RevisionGridRefRenderer.RefLabelControl { GitRef: { IsTag: true, IsDereference: true } } tagLabel)
+            // Remote refs that are tracked by a local branch in this row
+            // are drawn condensed immediately after that local branch instead.
+            if (trackedRemotes.ContainsValue(gitRef))
             {
-                tagLabel.AppendLabel(" [...]");
+                continue;
             }
 
-            DrawRef(panel, label);
-            foreach (RevisionGridRefRenderer.RefLabelControl remoteLabel in label.GetSelfAndVisualDescendants().OfType<RevisionGridRefRenderer.RefLabelControl>())
+            IGitRef? superprojectRef = superprojectRefs.FirstOrDefault(superGitRef => gitRef.CompleteName == superGitRef.CompleteName);
+            if (superprojectRef is not null)
             {
-                TryReplaceRemoteNameWithIcon(remoteLabel);
+                superprojectRefs.Remove(superprojectRef);
             }
+
+            // If this branch is at its tracked remote, draw them condensed.
+            if (gitRef.IsHead && trackedRemotes.TryGetValue(gitRef.Name, out IGitRef? remote))
+            {
+                DrawBranchWithNestledRemote(gitRef, superprojectRef, remote, remote.Remote);
+                continue;
+            }
+
+            // If this branch has ahead/behind information, draw that info as virtual label of the tracked/tracking branch.
+            (string aheadBehind, string trackedCompleteName, bool isGone) = GetAheadBehind(gitRef, withCounts: false);
+            if (aheadBehind.Length > 0)
+            {
+                NestledVirtualRef nestledRef = new(gitRef, trackedCompleteName, trackingBranchIsGone: isGone);
+                DrawBranchWithNestledRemote(gitRef, superprojectRef, nestledRef, aheadBehind);
+                continue;
+            }
+
+            DrawSeparateRef(gitRef, superprojectRef);
         }
 
-        (string Label, string? HighlightedLabel) GetLabel(IGitRef gitRef)
+        foreach (Control label in DrawSuperprojectRefs(superprojectRefs))
         {
-            if (singleTrackedLocalBranchName is not null
-                && gitRef.IsRemote
-                && gitRef.LocalName == GetRemotePrefix(gitRef.Module, gitRef.Remote) + singleTrackedLocalBranchName)
-            {
-                return (gitRef.Remote, gitRef.Name);
-            }
-
-            return (gitRef.Name, null);
+            DrawRef(panel, label);
         }
 
         if (revision.IsStash || revision.IsAutostash)
@@ -266,6 +239,96 @@ internal sealed class MessageColumnProvider : ColumnProvider
         if (rowIndex >= 0)
         {
             _refLabelHitInfoByRow[rowIndex] = new WeakReference<MessageCell>(panel);
+        }
+
+        return;
+
+        // Builds a map of local branch name → remote ref that tracks it. No I/O is performed.
+        static Dictionary<string, IGitRef> BuildTrackedRemoteMap(IReadOnlyList<IGitRef> refs)
+        {
+            IReadOnlyList<IGitRef> localBranches = [.. refs.Where(r => r.IsHead)];
+            if (localBranches.Count == 0)
+            {
+                return [];
+            }
+
+            Dictionary<string, IGitRef> remoteByLocal = [];
+            foreach (IGitRef remote in refs)
+            {
+                if (!remote.IsRemote)
+                {
+                    continue;
+                }
+
+                foreach (IGitRef local in localBranches)
+                {
+                    if (!local.IsTrackingRemote(remote))
+                    {
+                        continue;
+                    }
+
+                    if (!remoteByLocal.TryAdd(local.LocalName, remote))
+                    {
+                        throw new InvalidOperationException($"Multiple remote refs {remote.Name} and {remoteByLocal[local.LocalName].Name} claim they were tracked by local branch '{local.LocalName}'.");
+                    }
+                }
+            }
+
+            return remoteByLocal;
+        }
+
+        // Draws a local branch capsule with its tracked remote capsule nestled against it, appearing as a single visual group.
+        void DrawBranchWithNestledRemote(IGitRef gitRef, IGitRef? superprojectRef, IGitRef nestledRef, string nestledName)
+        {
+            // Draw the gitRef with a '>' / '<' right edge that meets the nestledRef's matching left indent.
+            (RefLabelShape shape1, RefLabelShape shape2) = gitRef.IsRemote
+                ? (RefLabelShape.NotchRight, RefLabelShape.PointLeft)
+                : (RefLabelShape.PointRight, RefLabelShape.NotchLeft);
+            RevisionGridRefRenderer.RefLabelControl label = RevisionGridRefRenderer.CreateLabel(
+                gitRef, gitRef.Name, shape1, _settings.FillRefLabels, dashed: superprojectRef is not null);
+
+            // Draw the nestled directly via CreateLabel with showHeadIndicator: false — the nestled remote never shows a head indicator.
+            NestledVirtualRef? virtualRef = nestledRef as NestledVirtualRef;
+            RevisionGridRefRenderer.RefLabelControl nestledLabel = RevisionGridRefRenderer.CreateLabel(
+                nestledRef, nestledName, shape2, _settings.FillRefLabels, showHeadIndicator: false,
+                dashed: virtualRef is not null,
+                fontWeight: virtualRef is null ? FontWeight.Normal : virtualRef.TrackingBranchIsGone ? FontWeight.Bold : FontWeight.Normal);
+
+            // Register hit-boxes.
+            DrawRef(panel, new RevisionGridRefRenderer.NestledRefLabelPanel(label, nestledLabel));
+            TryReplaceRemoteNameWithIcon(label);
+            TryReplaceRemoteNameWithIcon(nestledLabel);
+        }
+
+        void DrawSeparateRef(IGitRef gitRef, IGitRef? superprojectRef)
+        {
+            if (gitRef.IsBisectGood)
+            {
+                DrawRef(panel, DrawImage(_bisectGoodImage));
+                return;
+            }
+
+            if (gitRef.IsBisectBad)
+            {
+                DrawRef(panel, DrawImage(_bisectBadImage));
+                return;
+            }
+
+            bool showFullNameOnHighlight = singleLocalBranchName is not null
+                && gitRef.IsRemote
+                && gitRef.LocalName == GetRemotePrefix(gitRef.Module, gitRef.Remote) + singleLocalBranchName;
+            string name = showFullNameOnHighlight ? gitRef.Remote : gitRef.Name;
+            RefLabelShape shape = gitRef.IsTag ? RefLabelShape.PointLeft : RefLabelShape.Rect;
+            RevisionGridRefRenderer.RefLabelControl label = RevisionGridRefRenderer.CreateLabel(
+                gitRef, name, shape, _settings.FillRefLabels, dashed: superprojectRef is not null,
+                highlightedLabel: showFullNameOnHighlight ? gitRef.Name : null);
+            if (_settings.ShowAnnotatedTagsMessages && gitRef.IsTag && gitRef.IsDereference)
+            {
+                label.AppendLabel(" [...]");
+            }
+
+            DrawRef(panel, label);
+            TryReplaceRemoteNameWithIcon(label);
         }
 
         bool DetachHighlightForUpdate(MessageCell messageCell, GitRevision updatedRevision)
@@ -323,16 +386,115 @@ internal sealed class MessageColumnProvider : ColumnProvider
         AutomationProperties.SetName(control, revision.Subject.Trim());
     }
 
-    public override bool TryGetToolTip(GitRevision revision, [NotNullWhen(returnValue: true)] out string? toolTip)
+    public override bool TryGetToolTip(double? x, GitRevision revision, IGitRef? highlightRef, [NotNullWhen(returnValue: true)] out string? toolTip)
     {
         _toolTipBuilder.Clear();
+
+        if (highlightRef is not null)
+        {
+            if (highlightRef is NestledVirtualRef aheadBehindRef)
+            {
+                bool realRefIsRemote = !aheadBehindRef.IsRemote;
+                string realRefLocalName = aheadBehindRef.MergeWith;
+                string realRefCompleteName = realRefIsRemote ? GitRefName.GetFullRemoteName(realRefLocalName, aheadBehindRef.TrackingRemote) : GitRefName.GetFullBranchName(realRefLocalName);
+                string realRefName = realRefIsRemote ? realRefCompleteName[GitRefName.RefsRemotesPrefix.Length..] : realRefLocalName;
+                AheadBehindData? data = GetAheadBehindData(realRefIsRemote, realRefCompleteName);
+                _toolTipBuilder.Append('[').Append(realRefName).Append(']');
+                if (realRefIsRemote)
+                {
+                    _toolTipBuilder.AppendLine().AppendFormat(TranslatedStrings.IsTrackedBy_Branch_AheadBehind, data?.Branch, data?.ToDisplay());
+                }
+                else
+                {
+                    string? remoteBranch = data?.RemoteRef[GitRefName.RefsRemotesPrefix.Length..];
+                    if (data?.AheadCount == AheadBehindData.Gone)
+                    {
+                        _toolTipBuilder.AppendLine()
+                                       .AppendFormat(TranslatedStrings.WasTracking_Remote, remoteBranch);
+                    }
+                    else
+                    {
+                        _toolTipBuilder.Append("   ").AppendLine(data?.ToDisplay())
+                                       .AppendFormat(TranslatedStrings.IsTracking_Remote, remoteBranch);
+                    }
+                }
+            }
+            else
+            {
+                _toolTipBuilder.Append('[').Append(highlightRef.Name).Append(']');
+                if (highlightRef.IsRemote)
+                {
+                    if (GetAheadBehindData(isRemote: true, highlightRef.CompleteName) is { } data)
+                    {
+                        _toolTipBuilder.AppendLine().AppendFormat(TranslatedStrings.IsTrackedBy_Branch_AheadBehind, data.Branch, data.ToDisplay());
+                    }
+                    else if (_settings.ShowRevisionGridTooltips)
+                    {
+                        _toolTipBuilder.AppendLine().Append(TranslatedStrings.IsRemoteBranch);
+                    }
+                    else
+                    {
+                        toolTip = null;
+                        return false;
+                    }
+                }
+                else if (highlightRef.IsHead)
+                {
+                    if (GetAheadBehindData(isRemote: false, highlightRef.CompleteName) is { } data)
+                    {
+                        string remoteBranch = data.RemoteRef[GitRefName.RefsRemotesPrefix.Length..];
+                        if (data.AheadCount == AheadBehindData.Gone)
+                        {
+                            _toolTipBuilder.AppendLine()
+                                           .AppendFormat(TranslatedStrings.WasTracking_Remote, remoteBranch);
+                        }
+                        else
+                        {
+                            _toolTipBuilder.Append("   ").AppendLine(data.ToDisplay())
+                                           .AppendFormat(TranslatedStrings.IsTracking_Remote, remoteBranch);
+                        }
+                    }
+                    else if (_settings.ShowRevisionGridTooltips)
+                    {
+                        _toolTipBuilder.AppendLine().Append(TranslatedStrings.IsLocalBranch);
+                    }
+                    else
+                    {
+                        toolTip = null;
+                        return false;
+                    }
+                }
+                else if (highlightRef.IsTag)
+                {
+                    if (_settings.ShowRevisionGridTooltips)
+                    {
+                        _toolTipBuilder.AppendLine().Append(TranslatedStrings.IsTag);
+                    }
+                    else
+                    {
+                        toolTip = null;
+                        return false;
+                    }
+                }
+            }
+
+            if (!_settings.ShowRevisionGridTooltips)
+            {
+                toolTip = _toolTipBuilder.ToString();
+                return true;
+            }
+
+            _toolTipBuilder.AppendLine().AppendLine();
+        }
 
         if (!revision.IsArtificial && (revision.HasMultiLineMessage || revision.Refs.Count != 0))
         {
             // The body is not stored for older commits (to save memory)
             string bodySummary = _gitRevisionSummaryBuilder.BuildSummary(GetBody(revision))
                 ?? revision.Subject + (revision.HasMultiLineMessage ? TranslatedStrings.BodyNotLoaded : "");
-            _toolTipBuilder.EnsureCapacity(bodySummary.Length + 10);
+            int initialLength = bodySummary.Length + 10;
+            _toolTipBuilder.EnsureCapacity(initialLength);
+
             _toolTipBuilder.Append(bodySummary);
 
             if (revision.Refs.Count != 0)
@@ -370,171 +532,109 @@ internal sealed class MessageColumnProvider : ColumnProvider
             return true;
         }
 
-        if (_settings.ShowGitStatusForArtificialCommits
-            && _grid.GetChangeCount(revision.ObjectId) is ArtificialCommitChangeCount changeCount)
+        if (_settings.ShowGitStatusForArtificialCommits && _grid.GetChangeCount(revision.ObjectId) is ArtificialCommitChangeCount changeCount)
         {
             toolTip = _toolTipBuilder.Append(changeCount.GetSummary()).ToString();
             return true;
         }
 
-        return base.TryGetToolTip(revision, out toolTip);
+        return base.TryGetToolTip(x, revision, highlightRef, out toolTip);
     }
 
-    public override bool TryGetToolTip(
-        GitRevision revision,
-        IGitRef? highlightRef,
-        [NotNullWhen(returnValue: true)] out string? toolTip)
-    {
-        if (highlightRef is not null)
-        {
-            toolTip = GetRefToolTip(highlightRef);
-            if (toolTip is null)
-            {
-                return false;
-            }
-
-            if (_settings.ShowRevisionGridTooltips && TryGetToolTip(revision, out string? summary))
-            {
-                // The source appends the ordinary commit summary after its ref details.
-                toolTip += Environment.NewLine + Environment.NewLine + summary;
-            }
-
-            return true;
-        }
-
-        return base.TryGetToolTip(revision, highlightRef, out toolTip);
-    }
-
-    private static double GetArtificialLabelWidth(MessageCell panel)
-    {
-        double fontSize = panel.Subject.FontSize > 0 ? panel.Subject.FontSize : 12;
-        Typeface typeface = new(
-            panel.Subject.FontFamily,
-            panel.Subject.FontStyle,
-            panel.Subject.FontWeight);
-        double workTreeWidth = Measure(ResourceManager.TranslatedStrings.Workspace);
-        double indexWidth = Measure(ResourceManager.TranslatedStrings.Index);
-
-        // RefLabelControl adds eight pixels of horizontal padding, one-pixel overlap
-        // correction, and a five-pixel right margin.
-        return Math.Ceiling(Math.Max(workTreeWidth, indexWidth)) + 12;
-
-        double Measure(string text)
-            => new FormattedText(
-                text,
-                CultureInfo.CurrentUICulture,
-                FlowDirection.LeftToRight,
-                typeface,
-                fontSize,
-                Brushes.Black).Width;
-    }
-
-    private IReadOnlyList<Control> CreateArtificialStatusControls(ObjectId objectId)
-    {
-        // Summary of changes
-        if (!_settings.ShowGitStatusForArtificialCommits
-            || _grid.GetChangeCount(objectId) is not ArtificialCommitChangeCount changeCount)
-        {
-            return [];
-        }
-
-        if (!changeCount.DataValid)
-        {
-            return [CreateArtificialCount(icon: Images.RepoStateUnknown, count: null)];
-        }
-
-        if (!changeCount.HasChanges)
-        {
-            return [CreateArtificialCount(icon: Images.RepoStateClean, count: null)];
-        }
-
-        List<Control> controls = [];
-        Add(changeCount.Changed, Images.FileStatusModified);
-        Add(changeCount.New, Images.FileStatusAdded);
-        Add(changeCount.Deleted, Images.FileStatusRemoved);
-        Add(changeCount.SubmodulesChanged, Images.SubmoduleRevisionDown);
-        Add(changeCount.SubmodulesDirty, Images.SubmoduleDirty);
-        return controls;
-
-        void Add(IReadOnlyList<GitItemStatus> items, IImage icon)
-        {
-            if (items.Count > 0)
-            {
-                controls.Add(CreateArtificialCount(icon, items.Count));
-            }
-        }
-    }
-
-    private string? GetArtificialToolTip(GitRevision revision)
-    {
-        if (_settings.ShowGitStatusForArtificialCommits
-            && _grid.GetChangeCount(revision.ObjectId) is ArtificialCommitChangeCount changeCount)
-        {
-            return changeCount.GetSummary();
-        }
-
-        return _settings.ShowRevisionGridTooltips ? revision.Subject : null;
-    }
-
-    private static Control CreateArtificialCount(IImage icon, int? count)
-    {
-        StackPanel panel = new()
-        {
-            Orientation = Orientation.Horizontal,
-            VerticalAlignment = VerticalAlignment.Center,
-            Spacing = 3,
-            Margin = new Thickness(1, 0, 5, 0),
-        };
-        panel.Children.Add(new Image
-        {
-            Source = icon,
-            Width = 12,
-            Height = 12,
-            VerticalAlignment = VerticalAlignment.Center,
-        });
-        if (count is int value)
-        {
-            panel.Children.Add(new TextBlock
-            {
-                Text = value.ToString(),
-                MinWidth = 14,
-                VerticalAlignment = VerticalAlignment.Center,
-            });
-        }
-
-        return panel;
-    }
-
-    private static RevisionGridRefRenderer.RefLabelControl DrawArtificialRevision(GitRevision revision)
+    private void DrawArtificialRevision(MessageCell panel, GitRevision revision)
     {
         // Add fake "refs" for artificial commits
-        return RevisionGridRefRenderer.CreateSpecialLabel(
+        RevisionGridRefRenderer.RefLabelControl artificialLabel = RevisionGridRefRenderer.CreateSpecialLabel(
             revision.Subject,
-            revision.ObjectId == ObjectId.IndexId
-                ? RefLabelIcon.CommitIndex
-                : RefLabelIcon.WorkingDirectory,
+            revision.ObjectId == ObjectId.IndexId ? RefLabelIcon.CommitIndex : RefLabelIcon.WorkingDirectory,
             dashed: false);
+        double fontSize = panel.Subject.FontSize > 0 ? panel.Subject.FontSize : 12;
+        Typeface typeface = new(panel.Subject.FontFamily, panel.Subject.FontStyle, panel.Subject.FontWeight);
+        double max = Math.Max(Measure(ResourceManager.TranslatedStrings.Workspace), Measure(ResourceManager.TranslatedStrings.Index));
+
+        // Avalonia retains the capsule separately from the status-count allocation.
+        panel.ContentPanel.SetMinimumAdvance(artificialLabel, Math.Ceiling(max) + 12);
+        DrawRef(panel, artificialLabel);
+
+        // Summary of changes
+        if (!_settings.ShowGitStatusForArtificialCommits || _grid.GetChangeCount(revision.ObjectId) is not ArtificialCommitChangeCount changeCount)
+        {
+            return;
+        }
+
+        if (changeCount.DataValid)
+        {
+            if (changeCount.HasChanges)
+            {
+                DrawArtificialCount(changeCount.Changed, Images.FileStatusModified);
+                DrawArtificialCount(changeCount.New, Images.FileStatusAdded);
+                DrawArtificialCount(changeCount.Deleted, Images.FileStatusRemoved);
+                DrawArtificialCount(changeCount.SubmodulesChanged, Images.SubmoduleRevisionDown);
+                DrawArtificialCount(changeCount.SubmodulesDirty, Images.SubmoduleDirty);
+            }
+            else
+            {
+                DrawArtificialCount(items: null, Images.RepoStateClean);
+            }
+        }
+        else
+        {
+            DrawArtificialCount(items: null, Images.RepoStateUnknown);
+        }
+
+        return;
+
+        void DrawArtificialCount(IReadOnlyList<GitItemStatus>? items, IImage icon)
+        {
+            if (items?.Count is 0)
+            {
+                return;
+            }
+
+            // Avalonia lays out the image and count as retained controls instead of a Graphics draw.
+            StackPanel countPanel = new()
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+                Spacing = 3,
+                Margin = new Thickness(1, 0, 5, 0),
+            };
+            countPanel.Children.Add(new Image
+            {
+                Source = icon,
+                Width = 12,
+                Height = 12,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            if (items is not null)
+            {
+                countPanel.Children.Add(new TextBlock
+                {
+                    Text = items.Count.ToString(),
+                    MinWidth = 14,
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+            }
+
+            panel.ContentPanel.Children.Insert(panel.ContentPanel.Children.Count - 1, countPanel);
+        }
+
+        double Measure(string text)
+            => new FormattedText(text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                typeface, fontSize, Brushes.Black).Width;
     }
 
-    private static IReadOnlyList<Control> DrawSuperprojectRefs(
-        GitRevision revision,
-        SuperProjectInfo? superProjectInfo)
+    private static IReadOnlyList<Control> DrawSuperprojectRefs(IReadOnlyList<IGitRef> superprojectRefs)
     {
         List<Control> labels = [];
-        if (superProjectInfo?.Refs?.TryGetValue(revision.ObjectId, out IReadOnlyList<IGitRef>? refs) == true)
+        for (int i = 0; i < Math.Min(MaxSuperprojectRefs, superprojectRefs.Count); i++)
         {
-            IEnumerable<IGitRef> additionalRefs = refs
-                .Where(superProjectRef => revision.Refs.All(gitRef => gitRef.CompleteName != superProjectRef.CompleteName))
-                .Take(MaxSuperprojectRefs);
-            foreach (IGitRef gitRef in additionalRefs)
-            {
-                labels.Add(RevisionGridRefRenderer.CreateLabel(
-                    gitRef,
-                    gitRef.Name,
-                    gitRef.IsTag ? RefLabelShape.PointLeft : RefLabelShape.Rect,
-                    fill: false,
-                    dashed: true));
-            }
+            IGitRef gitRef = superprojectRefs[i];
+            string gitRefName = i < MaxSuperprojectRefs - 1 ? gitRef.Name : "…";
+
+            // Additional superproject refs have a source palette and no actionable ref identity.
+            labels.Add(RevisionGridRefRenderer.CreateLabel(
+                gitRef, gitRefName, RefLabelShape.Rect, fill: false, dashed: true, isSuperprojectOnly: true));
         }
 
         return labels;
@@ -573,11 +673,6 @@ internal sealed class MessageColumnProvider : ColumnProvider
         return labels;
     }
 
-    internal static IReadOnlyList<Control> CreateSuperprojectLabels(
-        GitRevision revision,
-        SuperProjectInfo? superProjectInfo)
-        => [.. DrawSuperprojectInfo(revision, superProjectInfo), .. DrawSuperprojectRefs(revision, superProjectInfo)];
-
     private static void DrawRef(MessageCell panel, Control label)
     {
         // see note on using IsDereference in CommitInfo class
@@ -615,15 +710,10 @@ internal sealed class MessageColumnProvider : ColumnProvider
 
         // Draw the multi-line indicator
         bool emphasized = _grid.IsCurrentCheckout(revision);
-        GitExtensions.Shims.WinForms.Font normalFont = AppSettings.Font;
 
         // Source BoldFont replaces configured Italic; NormalFont keeps its full style.
-        panel.Subject.FontWeight = emphasized || normalFont.Bold
-            ? FontWeight.Bold
-            : FontWeight.Normal;
-        panel.Subject.FontStyle = !emphasized && normalFont.Italic ? FontStyle.Italic : FontStyle.Normal;
-        panel.Body.FontWeight = panel.Subject.FontWeight;
-        panel.Body.FontStyle = panel.Subject.FontStyle;
+        panel.Subject.Classes.Set("revision-emphasized", emphasized);
+        panel.Body.Classes.Set("revision-emphasized", emphasized);
     }
 
     private bool FilterRef(IGitRef gitRef)
@@ -684,17 +774,6 @@ internal sealed class MessageColumnProvider : ColumnProvider
 
             return 5;
         }
-    }
-
-    private (IGitRef GitRef, string Name)? GetVirtualRef(IGitRef gitRef)
-    {
-        (string display, string trackedCompleteName, bool isGone) = GetAheadBehind(gitRef, withCounts: false);
-        if (display.Length == 0)
-        {
-            return null;
-        }
-
-        return (new NestledVirtualRef(gitRef, trackedCompleteName, trackingBranchIsGone: isGone), display);
     }
 
     private string[] GetCommitMessageLines(GitRevision revision)
@@ -941,110 +1020,6 @@ internal sealed class MessageColumnProvider : ColumnProvider
         _hitInfoListPool.Push(list);
     }
 
-    private string? GetRefToolTip(IGitRef? gitRef)
-    {
-        if (gitRef is null)
-        {
-            return null;
-        }
-
-        StringBuilder toolTip = new();
-        if (gitRef is NestledVirtualRef aheadBehindRef)
-        {
-            bool realRefIsRemote = !aheadBehindRef.IsRemote;
-            string realRefLocalName = aheadBehindRef.MergeWith;
-            string realRefCompleteName = realRefIsRemote
-                ? GitRefName.GetFullRemoteName(realRefLocalName, aheadBehindRef.TrackingRemote)
-                : GitRefName.GetFullBranchName(realRefLocalName);
-            string realRefName = RemovePrefix(
-                realRefCompleteName,
-                realRefIsRemote ? GitRefName.RefsRemotesPrefix : GitRefName.RefsHeadsPrefix);
-            AheadBehindData? data = GetAheadBehindData(realRefIsRemote, realRefCompleteName);
-            toolTip.Append('[').Append(realRefName).Append(']');
-            if (realRefIsRemote)
-            {
-                toolTip.AppendLine().AppendFormat(
-                    TranslatedStrings.IsTrackedBy_Branch_AheadBehind,
-                    data?.Branch,
-                    data?.ToDisplay());
-            }
-            else
-            {
-                AppendTrackingDetails(toolTip, data);
-            }
-
-            return toolTip.ToString();
-        }
-
-        AheadBehindData? aheadBehind = GetAheadBehindData(gitRef.IsRemote, gitRef.CompleteName);
-        toolTip.Append('[').Append(gitRef.Name).Append(']');
-        if (gitRef.IsRemote)
-        {
-            if (aheadBehind is not null)
-            {
-                toolTip.AppendLine().AppendFormat(
-                    TranslatedStrings.IsTrackedBy_Branch_AheadBehind,
-                    aheadBehind.Value.Branch,
-                    aheadBehind.Value.ToDisplay());
-            }
-            else if (_settings.ShowRevisionGridTooltips)
-            {
-                toolTip.AppendLine().Append(TranslatedStrings.IsRemoteBranch);
-            }
-            else
-            {
-                return null;
-            }
-        }
-        else if (gitRef.IsHead)
-        {
-            if (aheadBehind is not null)
-            {
-                AppendTrackingDetails(toolTip, aheadBehind);
-            }
-            else if (_settings.ShowRevisionGridTooltips)
-            {
-                toolTip.AppendLine().Append(TranslatedStrings.IsLocalBranch);
-            }
-            else
-            {
-                return null;
-            }
-        }
-        else if (gitRef.IsTag)
-        {
-            if (_settings.ShowRevisionGridTooltips)
-            {
-                toolTip.AppendLine().Append(TranslatedStrings.IsTag);
-            }
-            else
-            {
-                return null;
-            }
-        }
-
-        return toolTip.ToString();
-
-        static void AppendTrackingDetails(StringBuilder builder, AheadBehindData? data)
-        {
-            string? remoteBranch = data is null
-                ? null
-                : RemovePrefix(data.Value.RemoteRef, GitRefName.RefsRemotesPrefix);
-            if (data?.AheadCount == AheadBehindData.Gone)
-            {
-                builder.AppendLine().AppendFormat(TranslatedStrings.WasTracking_Remote, remoteBranch);
-            }
-            else
-            {
-                builder.Append("   ").AppendLine(data?.ToDisplay())
-                    .AppendFormat(TranslatedStrings.IsTracking_Remote, remoteBranch);
-            }
-        }
-
-        static string RemovePrefix(string value, string prefix)
-            => value.StartsWith(prefix, StringComparison.Ordinal) ? value[prefix.Length..] : value;
-    }
-
     private sealed class MessageContentPanel : Panel
     {
         private const int RefMarginRight = 5;
@@ -1276,8 +1251,6 @@ internal sealed class MessageColumnProvider : ColumnProvider
             SetDock(Indicator, Dock.Right);
             Children.Add(Indicator);
             Children.Add(ContentPanel);
-            PointerMoved += OnPointerMoved;
-            PointerExited += provider._grid.OnGridViewCellMouseLeave;
             DoubleTapped += OnDoubleTapped;
         }
 
@@ -1321,8 +1294,8 @@ internal sealed class MessageColumnProvider : ColumnProvider
                     Indicator.Width, Indicator.Height));
             }
 
-            Indicator.UpdatePaintVisibility(Revision is { IsArtificial: false, IsAutostash: false }
-                && MessagePanel.CanRenderIndicator);
+            Indicator.Opacity = Revision is { IsArtificial: false, IsAutostash: false }
+                && MessagePanel.CanRenderIndicator ? 1 : 0;
             return result;
         }
 
@@ -1342,13 +1315,6 @@ internal sealed class MessageColumnProvider : ColumnProvider
             => Revision is not null
                 ? _provider.HitTest(_provider._grid.GetRevisionIndex(Revision), getPosition(_provider._grid))
                 : null;
-
-        private void OnPointerMoved(object? sender, PointerEventArgs e)
-        {
-            // Keep hover/cursor state here; the central provider owns truncated-cell tooltip text.
-            RevisionGridRefRenderer.RefLabelControl? label = HitTest(e.GetPosition);
-            _provider.SetHighlight(this, label);
-        }
 
         private void OnDoubleTapped(object? sender, TappedEventArgs e)
         {

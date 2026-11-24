@@ -4,6 +4,7 @@
              xmlns:compat="using:GitUI.Compat"
              xmlns:editor="using:GitUI.Editor"
              xmlns:properties="using:GitUI.Properties"
+             xmlns:userControls="using:GitUI.UserControls"
              x:Class="GitUI.Editor.FileViewer">
   <UserControl.Styles>
     <Style Selector="Button.fileviewer-toolbar-button">
@@ -108,7 +109,7 @@
                     Header="_Treat all files as text"
                     ToggleType="CheckBox" />
           <MenuItem x:Name="automaticContinuousScrollToolStripMenuItem"
-                    Header=""
+                    compat:TranslationCompat.TranslateText="False"
                     ToggleType="CheckBox">
             <MenuItem.Icon><Image Classes="gitextensions-icon-16" Source="{x:Static properties:Images.UiScrollBar}" /></MenuItem.Icon>
           </MenuItem>
@@ -129,11 +130,11 @@
     <Border x:Name="PictureBox"
             IsVisible="False"
             Background="{DynamicResource GitExtensionsKnownColorControlLightLightBrush}">
-      <Image x:Name="ImagePreview"
-             HorizontalAlignment="Center"
-             VerticalAlignment="Center"
-             Stretch="Uniform"
-             StretchDirection="DownOnly" />
+      <userControls:PictureBoxEx x:Name="ImagePreview"
+                                 HorizontalAlignment="Center"
+                                 VerticalAlignment="Center"
+                                 Stretch="Uniform"
+                                 StretchDirection="DownOnly" />
     </Border>
 
     <HyperlinkButton x:Name="_NO_TRANSLATE_lblShowPreview"
@@ -211,12 +212,11 @@
                            ToolTip.Tip="Ignore all whitespace changes"
                            Classes="gitextensions-toolbar-button image-only fileviewer-toolbar-button"
                            Icon="{x:Static properties:Images.WhitespaceIgnoreAll}" />
-        <ComboBox x:Name="encodingToolStripComboBox"
-                  Classes="gitextensions-toolbar-input"
-                  Width="140"
-                  Height="25"
-                  MinHeight="25"
-                  Margin="1,0" />
+        <compat:ToolbarComboBox x:Name="encodingToolStripComboBox"
+                                Width="140"
+                                Height="25"
+                                MinHeight="25"
+                                Margin="1,0" />
         <compat:IconButton x:Name="settingsButton"
                            compat:TranslationCompat.TranslateToolTip="False"
                            ToolTip.Tip="Settings"

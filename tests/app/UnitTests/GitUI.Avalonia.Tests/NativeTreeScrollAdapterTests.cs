@@ -16,6 +16,14 @@ namespace GitExtensionsTests;
 [Category("P8.6i.126")]
 public sealed class NativeTreeScrollAdapterTests
 {
+    private JoinableTaskContextTestScope _threading = null!;
+
+    [SetUp]
+    public void SetUp() => _threading = new JoinableTaskContextTestScope();
+
+    [TearDown]
+    public void TearDown() => _threading.Dispose();
+
     [AvaloniaTest]
     [TestCase(1, 0, KeyModifiers.None, 3, -45)]
     [TestCase(-1, 0, KeyModifiers.None, 3, 45)]
@@ -135,7 +143,7 @@ public sealed class NativeTreeScrollAdapterTests
             scroll.Offset = new Vector(100, scroll.Offset.Y);
             if (search)
             {
-                accessor.SearchBox.Text = "target";
+                accessor.GetSearchBox().Text = "target";
                 accessor.Search();
             }
             else

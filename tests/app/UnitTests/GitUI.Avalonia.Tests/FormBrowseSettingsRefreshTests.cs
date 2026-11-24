@@ -155,7 +155,7 @@ public sealed class FormBrowseSettingsRefreshTests
         GitUI.CommitInfo.CommitInfo details = fixture.Form.FindControl<GitUI.CommitInfo.CommitInfo>("RevisionInfo")
             ?? throw new AssertionException("The actual Browse commit-details control must exist.");
         details.ReloadHotkeys();
-        MenuItem addNotes = details.GetTestAccessor().AddNoteMenuItem;
+        MenuItem addNotes = details.GetNativeTestSupport().AddNoteMenuItem;
         addNotes.InputGesture.Should().NotBeNull();
         addNotes.InputGesture!.Matches(KeyEvent(Key.F20)).Should().BeTrue();
         addNotes.InputGesture.Matches(KeyEvent(Key.F21)).Should().BeFalse();
@@ -273,6 +273,7 @@ public sealed class FormBrowseSettingsRefreshTests
             loader.LoadHotkeys(Arg.Any<string>()).Returns(call =>
                 _hotkeys.TryGetValue(call.Arg<string>(), out IReadOnlyList<HotkeyCommand>? commands) ? commands : []);
             IGitModule module = Substitute.For<IGitModule>();
+            module.ConfigureCancelledRevisionRead();
             module.WorkingDir.Returns(Path.GetTempPath());
             module.IsValidGitWorkingDir().Returns(validRepository);
             IAppTitleGenerator title = Substitute.For<IAppTitleGenerator>();
@@ -284,14 +285,11 @@ public sealed class FormBrowseSettingsRefreshTests
             commands.GetService(typeof(GitUI.Shells.IShellProvider)).Returns(new GitUI.Shells.ShellProvider());
             commands.GetService(typeof(IHotkeySettingsLoader)).Returns(loader);
             IRepositoryHistoryUIService history = Substitute.For<IRepositoryHistoryUIService>();
-            history.LoadSnapshot().Returns(new RepositoryHistorySnapshot([], []));
-            IUserRepositoriesListController controller = Substitute.For<IUserRepositoriesListController>();
-            IReadOnlyList<RecentRepoInfo> emptyRepositories = [];
-            controller.PreRenderRepositories(Arg.Any<string>()).Returns((emptyRepositories, emptyRepositories));
+            RepositoryHistoryTestHelper.SetSnapshot(history, new RepositoryHistorySnapshot([], []));
             commands.GetService(typeof(IRepositoryHistoryUIService)).Returns(history);
-            commands.GetService(typeof(IUserRepositoriesListController)).Returns(controller);
+            commands.GetService(typeof(IRepositoryCurrentBranchNameCache)).Returns(Substitute.For<IRepositoryCurrentBranchNameCache>());
             commands.GetService(typeof(ILinkFactory)).Returns(Substitute.For<ILinkFactory>());
-            Form = new FormBrowse(commands);
+            Form = new FormBrowse(commands, new BrowseArguments());
         }
 
         public FormBrowse Form { get; }

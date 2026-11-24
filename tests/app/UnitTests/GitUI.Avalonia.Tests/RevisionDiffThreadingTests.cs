@@ -59,7 +59,9 @@ public sealed class RevisionDiffThreadingTests
         GitExtUtils.ServiceContainerRegistry.RegisterServices(_serviceContainer);
         System.IO.Abstractions.FileSystem fileSystem = new();
         _serviceContainer.AddService<System.IO.Abstractions.IFileSystem>(fileSystem);
-        _serviceContainer.AddService<IGitDirectoryResolver>(new GitDirectoryResolver(fileSystem));
+        GitDirectoryResolver gitDirectoryResolver = new(fileSystem);
+        _serviceContainer.AddService<IGitDirectoryResolver>(gitDirectoryResolver);
+        _serviceContainer.AddService<GitCommands.UserRepositoryHistory.IRepositoryDescriptionProvider>(new GitCommands.UserRepositoryHistory.RepositoryDescriptionProvider(gitDirectoryResolver));
         GitCommands.ServiceContainerRegistry.RegisterServices(_serviceContainer);
         GitUI.ServiceContainerRegistry.RegisterServices(_serviceContainer);
 
@@ -223,13 +225,110 @@ public sealed class RevisionDiffThreadingTests
     }
 
     [AvaloniaTest]
+    public async Task Dispose_should_cancel_an_in_flight_revision_diff_calculation()
+    {
+        TaskCompletionSource<CancellationToken> calculationStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using ManualResetEventSlim finishCalculation = new();
+        IGitModule module = Substitute.For<IGitModule>();
+        module.WorkingDir.Returns(_repository.Module.WorkingDir);
+        module.IsValidGitWorkingDir().Returns(true);
+        module.GetDiffFilesWithSubmodulesStatus(
+                _parent.ObjectId, _head.ObjectId, _parent.ObjectId, Arg.Any<bool>(),
+                Arg.Any<UntrackedFilesMode>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                calculationStarted.TrySetResult(call.Arg<CancellationToken>());
+                finishCalculation.Wait(TimeSpan.FromSeconds(10));
+                return [];
+            });
+        RevisionDiffControl control = CreateControl(fileTreeMode: false, module: module);
+
+        try
+        {
+            control.DisplayDiffTab([_head]);
+            CancellationToken calculation = await calculationStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            calculation.IsCancellationRequested.Should().BeFalse();
+
+            ((IDisposable)control).Dispose();
+            _controls.Remove(control);
+
+            calculation.IsCancellationRequested.Should().BeTrue();
+        }
+        finally
+        {
+            finishCalculation.Set();
+            await JoinAsync(control);
+        }
+
+        control.DisplayedRevision.Should().BeNull();
+    }
+
+    [AvaloniaTest]
+    public async Task Dispose_should_cancel_an_in_flight_selected_file_load()
+    {
+        TaskCompletionSource<CancellationToken> loadStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using SemaphoreSlim finishLoad = new(0);
+        IGitModule module = Substitute.For<IGitModule>();
+        module.WorkingDir.Returns(_repository.Module.WorkingDir);
+        module.GetSingleDiffAsync(
+                _parent.ObjectId, _head.ObjectId, FirstFile, Arg.Any<string?>(), Arg.Any<string>(), Arg.Any<System.Text.Encoding>(),
+                Arg.Any<bool>(), Arg.Any<bool>(), Arg.Any<bool>(), Arg.Any<IGitCommandConfiguration>(), Arg.Any<CancellationToken>())
+            .Returns(async call =>
+            {
+                loadStarted.TrySetResult(call.Arg<CancellationToken>());
+                await finishLoad.WaitAsync(TimeSpan.FromSeconds(10));
+                return ((Patch?)null, (string?)SamplePatch);
+            });
+        RevisionDiffControl control = CreateControl(fileTreeMode: false, module: module);
+        SeedFiles(control, fileTreeMode: false);
+
+        try
+        {
+            control.SelectFileOrFolder(() => { }, RelativePath.From(FirstFile));
+            CancellationToken load = await loadStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            load.IsCancellationRequested.Should().BeFalse();
+
+            ((IDisposable)control).Dispose();
+            _controls.Remove(control);
+
+            load.IsCancellationRequested.Should().BeTrue();
+        }
+        finally
+        {
+            finishLoad.Release();
+            await JoinAsync(control);
+        }
+
+        control.GetTestAccessor().DiffText.GetText().Should().NotContain("+changed first");
+    }
+
+    [AvaloniaTest]
     public async Task DisplayDiffTab_should_select_and_render_real_calculated_changes_on_the_owner_thread()
     {
         RevisionDiffControl control = CreateControl(fileTreeMode: false);
         RevisionDiffControl.TestAccessor accessor = control.GetTestAccessor();
 
-        await Task.Run(() => control.DisplayDiffTab([_head]));
-        await JoinAsync(control);
+        TaskCompletionSource selectionChanged = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        EventHandler selectionChangedHandler = (_, _) =>
+        {
+            if (accessor.DiffFiles.SelectedItem is not null)
+            {
+                selectionChanged.TrySetResult();
+            }
+        };
+        accessor.DiffFiles.SelectedIndexChanged += selectionChangedHandler;
+        try
+        {
+            await Task.Run(() => control.DisplayDiffTab([_head]));
+
+            // FileStatusList's real throttled notification is outside the owner's task collection.
+            await selectionChanged.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await JoinAsync(control);
+        }
+        finally
+        {
+            accessor.DiffFiles.SelectedIndexChanged -= selectionChangedHandler;
+        }
 
         _exceptions.Should().BeEmpty();
         control.DisplayedRevision.Should().Be(_head);
@@ -287,11 +386,10 @@ public sealed class RevisionDiffThreadingTests
         SeedFiles(control, fileTreeMode);
         FileStatusList files = control.GetTestAccessor().DiffFiles;
         files.SelectFileOrFolder(RelativePath.From(FirstFile), notify: false).Should().BeTrue();
-        FileStatusList.TestAccessor accessor = files.GetTestAccessor();
-        TreeView renderer = fileTreeMode ? accessor.Tree : accessor.DiffTree;
+        TreeView renderer = fileTreeMode ? files.FindControl<TreeView>("tvFiles")! : files.FindControl<TreeView>("tvDiffFiles")!;
         renderer.SelectedItem.Should().NotBeNull();
 
-        files.Clear();
+        files.ClearDiffs();
 
         renderer.SelectedItem.Should().BeNull("an old node must not survive hidden behind the cleared renderer flags");
         (renderer.SelectedItems?.Cast<object>()).Should().BeEmpty();
@@ -377,9 +475,9 @@ public sealed class RevisionDiffThreadingTests
     private void Application_ThreadException(object? sender, ThreadExceptionEventArgs e)
         => _exceptions.Enqueue(e.Exception);
 
-    private RevisionDiffControl CreateControl(bool fileTreeMode, IReadOnlyList<GitRevision>? selectedRevisions = null)
+    private RevisionDiffControl CreateControl(bool fileTreeMode, IReadOnlyList<GitRevision>? selectedRevisions = null, IGitModule? module = null)
     {
-        GitUICommands commands = new(_serviceContainer, _repository.Module);
+        GitUICommands commands = new(_serviceContainer, module ?? _repository.Module);
         IGitUICommandsSource source = Substitute.For<IGitUICommandsSource>();
         source.UICommands.Returns(commands);
         RevisionDiffControl control = new() { UICommandsSource = source };

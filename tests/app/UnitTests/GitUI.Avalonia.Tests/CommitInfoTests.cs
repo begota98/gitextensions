@@ -41,7 +41,9 @@ public sealed class CommitInfoTests
     [AvaloniaTest]
     public void CommitInfo_should_reserve_scrollbar_space_when_content_overflows()
     {
+        using CommitInfoTestSupport.UiContextScope uiContext = new();
         CommitInfo control = new();
+        using IDisposable controlLifetime = control;
         Grid table = control.FindControl<Grid>("tableLayout")!;
         table.IsVisible = true;
         control.FindControl<XhtmlTextBlock>("rtbxCommitMessage")!
@@ -51,6 +53,7 @@ public sealed class CommitInfoTests
         try
         {
             Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            CommitInfoTestSupport.WaitForContentsLayout(window);
             ScrollViewer scroll = control.GetVisualDescendants().OfType<ScrollViewer>().First();
             scroll.AllowAutoHide.Should().BeFalse();
             scroll.Extent.Height.Should().BeGreaterThan(scroll.Viewport.Height);
@@ -130,7 +133,7 @@ public sealed class CommitInfoTests
         WinFormsShims.IClipboard clipboard = Substitute.For<WinFormsShims.IClipboard>();
         WinFormsShims.ShimHost.Clipboard = clipboard;
         CommitInfoHeader header = new();
-        XhtmlTextBlock block = useHeader ? header.GetTestAccessor().RevisionHeader : new();
+        XhtmlTextBlock block = useHeader ? header.GetRevisionHeader() : new();
         block.SetTabStops([], [], defaultTabInterval: 48);
         block.SetXHTMLText("Author:\t\t<a href='gitext://author'>A &amp; B</a><br/>Commit:\t<a href='gitext://commit'>abc123</a>");
         Window window = new() { Width = 500, Height = 100, Content = useHeader ? header : block };
@@ -521,8 +524,10 @@ public sealed class CommitInfoTests
     [AvaloniaTest]
     public void CommitInfo_should_preserve_the_original_named_surfaces()
     {
+        using CommitInfoTestSupport.UiContextScope uiContext = new();
         CommitInfo control = new();
-        CommitInfo.TestAccessor accessor = control.GetTestAccessor();
+        using IDisposable controlLifetime = control;
+        CommitInfoTestSupport.Accessor accessor = control.GetNativeTestSupport();
 
         accessor.Header.Should().NotBeNull();
         accessor.Avatar.Should().NotBeNull();
@@ -534,18 +539,18 @@ public sealed class CommitInfoTests
     public void CommitInfoHeader_should_preserve_the_original_named_surfaces()
     {
         CommitInfoHeader header = new();
-        CommitInfoHeader.TestAccessor accessor = header.GetTestAccessor();
-        accessor.RevisionHeader.NativeContentOverhang.Should().Be(2,
+        XhtmlTextBlock revisionHeader = header.GetRevisionHeader();
+        revisionHeader.NativeContentOverhang.Should().Be(2,
             "the original borderless RichEdit retains one formatting pixel at each edge");
-        accessor.RevisionHeader.NativeFormattingInset.Should().Be(1);
-        accessor.RevisionHeader.Padding.Should().Be(new Thickness(0));
+        revisionHeader.NativeFormattingInset.Should().Be(1);
+        revisionHeader.Padding.Should().Be(new Thickness(0));
         ContextMenu contextMenu = new();
 
         header.SetContextMenuStrip(contextMenu);
 
-        accessor.Avatar.Name.Should().Be("avatarControl");
-        accessor.RevisionHeader.Name.Should().Be("rtbRevisionHeader");
-        accessor.RevisionHeader.ContextMenu.Should().BeSameAs(contextMenu);
+        header.GetAvatar().Name.Should().Be("avatarControl");
+        revisionHeader.Name.Should().Be("rtbRevisionHeader");
+        revisionHeader.ContextMenu.Should().BeSameAs(contextMenu);
     }
 
     [AvaloniaTest]
@@ -553,7 +558,7 @@ public sealed class CommitInfoTests
     public void CommitInfoHeader_should_follow_the_rendered_RichEdit_default_tab_interval()
     {
         CommitInfoHeader header = new();
-        XhtmlTextBlock block = header.GetTestAccessor().RevisionHeader;
+        XhtmlTextBlock block = header.GetRevisionHeader();
         block.SetXHTMLText("Author:\t\t<a href='gitext://author'>author</a><br/>Commit hash:\t<a href='gitext://commit'>commit</a>");
         Window window = new() { Width = 400, Height = 120, Content = header };
         window.Show();
@@ -664,7 +669,7 @@ public sealed class CommitInfoTests
     public void CommitInfoHeader_should_hit_test_pointer_selection_at_the_native_formatting_origin()
     {
         CommitInfoHeader header = new();
-        XhtmlTextBlock block = header.GetTestAccessor().RevisionHeader;
+        XhtmlTextBlock block = header.GetRevisionHeader();
         block.SetXHTMLText("MMMMMM");
         Window window = new() { Width = 500, Height = 100, Content = header };
         window.Show();
@@ -710,7 +715,7 @@ public sealed class CommitInfoTests
     public void CommitInfoHeader_should_activate_the_link_at_its_actual_inset_bounds()
     {
         CommitInfoHeader header = new();
-        XhtmlTextBlock block = header.GetTestAccessor().RevisionHeader;
+        XhtmlTextBlock block = header.GetRevisionHeader();
         block.SetXHTMLText("Author:\t\t<a href='gitext://author'>author</a>");
         string? activatedUri = null;
         block.LinkClicked += (_, e) => activatedUri = e.LinkUri;
@@ -865,7 +870,7 @@ public sealed class CommitInfoTests
     public void CommitInfoHeader_should_dispatch_history_mouse_buttons_without_consuming_them_as_text_selection(MouseButton button, string expected)
     {
         CommitInfoHeader header = new();
-        XhtmlTextBlock block = header.GetTestAccessor().RevisionHeader;
+        XhtmlTextBlock block = header.GetRevisionHeader();
         block.SetXHTMLText("Author:\t\t<a href='gitext://author'>office affinity</a>");
         List<string> commands = [];
         header.CommandClicked += (_, e) => commands.Add(e.Command);
@@ -906,7 +911,7 @@ public sealed class CommitInfoTests
     {
         const string date = "9 months ago (1/2/2026 12:00:00 PM)";
         CommitInfoHeader header = new();
-        XhtmlTextBlock block = header.GetTestAccessor().RevisionHeader;
+        XhtmlTextBlock block = header.GetRevisionHeader();
         block.SetXHTMLText($"Author:\t\t<a href='mailto:parity@example.invalid'>{System.Net.WebUtility.HtmlEncode(author)}</a>"
             + $"<br/>Date:\t\t{date}<br/>Commit hash:\t{hash}");
         double longestValueWidth = new[] { author, date, hash }
@@ -926,7 +931,7 @@ public sealed class CommitInfoTests
     public void CommitInfoHeader_should_show_the_complete_hash_within_its_native_content_width(string hash)
     {
         CommitInfoHeader header = new();
-        XhtmlTextBlock block = header.GetTestAccessor().RevisionHeader;
+        XhtmlTextBlock block = header.GetRevisionHeader();
         block.SetXHTMLText($"Author:\t\t<a href='mailto:parity@example.invalid'>Parity Capture &lt;parity@example.invalid&gt;</a>"
             + $"<br/>Date:\t\t26 years ago (1/2/2001 1:00:00 PM)<br/>Commit hash:\t{hash}"
             + "<br/>Child:\t\t<a href='gitext://child'>Commit index</a><br/>Parent:\t\t<a href='gitext://parent'>351f58d7</a>");
@@ -960,7 +965,7 @@ public sealed class CommitInfoTests
         const string author = "Parity Capture <parity@example.invalid>";
         const string hash = "ceaece927abc97012d5cc36ea9dfba32321e9704";
         CommitInfoHeader header = new();
-        XhtmlTextBlock block = header.GetTestAccessor().RevisionHeader;
+        XhtmlTextBlock block = header.GetRevisionHeader();
         block.SetXHTMLText($"Author:\t\t<a href='mailto:parity@example.invalid'>{System.Net.WebUtility.HtmlEncode(author)}</a>"
             + $"<br/>Date:\t\t9 months ago (1/2/2026 12:00:00 PM)<br/>Commit hash:\t{hash}");
         Window window = new() { Width = 700, Height = 200, Content = header };
@@ -1136,7 +1141,7 @@ public sealed class CommitInfoTests
         AppSettings.ShowAuthorAvatarInCommitInfo = showAvatar;
         CommitInfoHeader header = new() { VerticalAlignment = Avalonia.Layout.VerticalAlignment.Top };
         header.CommandClicked += (_, _) => { };
-        XhtmlTextBlock block = header.GetTestAccessor().RevisionHeader;
+        XhtmlTextBlock block = header.GetRevisionHeader();
         Window window = new() { Width = 700, Height = 400, Content = header };
         try
         {
@@ -1155,7 +1160,7 @@ public sealed class CommitInfoTests
             block.TextLayout.Height.Should().Be(contentsHeight);
             double.IsNaN(header.Height).Should().BeTrue("the original parent AutoSizes around the RichEdit client rectangle");
             header.Bounds.Height.Should().Be(Math.Max(contentsHeight, showAvatar ? AppSettings.AuthorImageSizeInCommitInfo : 0));
-            header.GetTestAccessor().Avatar.IsVisible.Should().Be(showAvatar);
+            header.GetAvatar().IsVisible.Should().Be(showAvatar);
             foreach (XhtmlLinkRun link in GetTextLinks(block))
             {
                 Rect linkBounds = GetTextLinkBounds(block, link);
@@ -1205,7 +1210,7 @@ public sealed class CommitInfoTests
         AppSettings.ShowAuthorAvatarInCommitInfo = false;
         CommitInfoHeader header = new() { VerticalAlignment = Avalonia.Layout.VerticalAlignment.Top };
         header.CommandClicked += (_, _) => { };
-        XhtmlTextBlock block = header.GetTestAccessor().RevisionHeader;
+        XhtmlTextBlock block = header.GetRevisionHeader();
         Window window = new() { Width = 1200, Height = 500, Content = header };
         try
         {
@@ -1291,8 +1296,10 @@ public sealed class CommitInfoTests
     [AvaloniaTest]
     public void CommitInfo_should_render_the_hostless_revision_body_and_hide_a_null_revision()
     {
+        using CommitInfoTestSupport.UiContextScope uiContext = new();
         CommitInfo control = new();
-        CommitInfo.TestAccessor accessor = control.GetTestAccessor();
+        using IDisposable controlLifetime = control;
+        CommitInfoTestSupport.Accessor accessor = control.GetNativeTestSupport();
         GitRevision revision = new(ObjectId.Parse("1234567890abcdef1234567890abcdef12345678"))
         {
             Subject = "Commit subject",
@@ -1329,8 +1336,10 @@ public sealed class CommitInfoTests
         IGitUICommandsSource source = Substitute.For<IGitUICommandsSource>();
         source.UICommands.Returns(commands);
 
+        using CommitInfoTestSupport.UiContextScope uiContext = new();
         CommitInfo control = new() { UICommandsSource = source };
-        KeyGesture? gesture = control.GetTestAccessor().AddNoteMenuItem.InputGesture;
+        using IDisposable controlLifetime = control;
+        KeyGesture? gesture = control.GetNativeTestSupport().AddNoteMenuItem.InputGesture;
 
         gesture.Should().NotBeNull();
         gesture!.Key.Should().Be(Key.N);
@@ -1350,7 +1359,10 @@ public sealed class CommitInfoTests
         bool originalDerived = AppSettings.CommitInfoShowTagThisCommitDerivesFrom;
         try
         {
-            CommitInfo.TestAccessor accessor = new CommitInfo().GetTestAccessor();
+            using CommitInfoTestSupport.UiContextScope uiContext = new();
+            CommitInfo control = new();
+            using IDisposable controlLifetime = control;
+            CommitInfoTestSupport.Accessor accessor = control.GetNativeTestSupport();
 
             accessor.ShowLocalBranchesMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             accessor.ShowRemoteBranchesMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
@@ -1380,7 +1392,9 @@ public sealed class CommitInfoTests
     [AvaloniaTest]
     public void CommitInfo_should_preserve_menu_translation_keys_without_empty_text_keys()
     {
+        using CommitInfoTestSupport.UiContextScope uiContext = new();
         CommitInfo control = new();
+        using IDisposable controlLifetime = control;
         ITranslation translation = Substitute.For<ITranslation>();
 
         control.AddTranslationItems(translation);

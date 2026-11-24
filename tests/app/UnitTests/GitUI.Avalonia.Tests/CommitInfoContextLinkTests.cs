@@ -31,10 +31,12 @@ public sealed class CommitInfoContextLinkTests
     [AvaloniaTest]
     public void Shared_context_menu_should_query_only_the_freshly_right_clicked_editor_and_character()
     {
+        using CommitInfoTestSupport.UiContextScope uiContext = new();
         CommitInfo control = new();
-        CommitInfo.TestAccessor accessor = control.GetTestAccessor();
+        using IDisposable controlLifetime = control;
+        CommitInfoTestSupport.Accessor accessor = control.GetNativeTestSupport();
         accessor.TableLayout.IsVisible = true;
-        XhtmlTextBlock header = accessor.Header.GetTestAccessor().RevisionHeader;
+        XhtmlTextBlock header = accessor.Header.GetRevisionHeader();
         XhtmlTextBlock[] surfaces = [accessor.CommitMessage, header, accessor.RevisionInfo];
         string[] links = ["gitext://body", "gitext://header", "gitext://revision"];
         for (int index = 0; index < surfaces.Length; index++)
@@ -47,11 +49,13 @@ public sealed class CommitInfoContextLinkTests
         try
         {
             Dispatcher.UIThread.RunJobs();
+            CommitInfoTestSupport.WaitForContentsLayout(window);
             for (int index = 0; index < surfaces.Length; index++)
             {
                 XhtmlTextBlock block = surfaces[index];
+                string layout = $"surface {index}, bounds {block.Bounds}, body {accessor.CommitMessageHeight}/{accessor.CommitMessage.ContentsHeight}, refs {accessor.RevisionInfoHeight}/{accessor.RevisionInfo.ContentsHeight}";
                 RequestAt(window, accessor.ContextMenu, GetLinkPoint(block, window, 0));
-                accessor.CopyLinkMenuItem.IsVisible.Should().BeTrue();
+                accessor.CopyLinkMenuItem.IsVisible.Should().BeTrue("the freshly clicked link must be available: {0}", layout);
                 accessor.CopyLinkMenuItem.Tag.Should().Be(links[index]);
                 accessor.CopyLinkMenuItem.Header?.ToString().Should().Contain(links[index]);
                 accessor.ContextMenu.Close();
@@ -91,10 +95,12 @@ public sealed class CommitInfoContextLinkTests
         WinFormsShims.IClipboard? previousClipboard = GetInstalledClipboard();
         WinFormsShims.IClipboard clipboard = Substitute.For<WinFormsShims.IClipboard>();
         WinFormsShims.ShimHost.Clipboard = clipboard;
+        using CommitInfoTestSupport.UiContextScope uiContext = new();
         CommitInfo control = new();
-        CommitInfo.TestAccessor accessor = control.GetTestAccessor();
+        using IDisposable controlLifetime = control;
+        CommitInfoTestSupport.Accessor accessor = control.GetNativeTestSupport();
         accessor.TableLayout.IsVisible = true;
-        XhtmlTextBlock header = accessor.Header.GetTestAccessor().RevisionHeader;
+        XhtmlTextBlock header = accessor.Header.GetRevisionHeader();
         header.SetXHTMLText("prefix <a href='gitext://gotorevision/second'>caption</a> tail");
         int activations = 0;
         header.LinkClicked += (_, _) => activations++;
@@ -132,10 +138,12 @@ public sealed class CommitInfoContextLinkTests
     public void Native_header_right_click_should_preserve_selection_inside_and_outside_the_pressed_caption(bool pressInsideSelection)
     {
         const string link = "https://example.invalid/source";
+        using CommitInfoTestSupport.UiContextScope uiContext = new();
         CommitInfo control = new();
-        CommitInfo.TestAccessor accessor = control.GetTestAccessor();
+        using IDisposable controlLifetime = control;
+        CommitInfoTestSupport.Accessor accessor = control.GetNativeTestSupport();
         accessor.TableLayout.IsVisible = true;
-        XhtmlTextBlock header = accessor.Header.GetTestAccessor().RevisionHeader;
+        XhtmlTextBlock header = accessor.Header.GetRevisionHeader();
         header.SetXHTMLText($"head <a href='{link}'>caption</a> tail");
         int activations = 0;
         header.LinkClicked += (_, _) => activations++;
@@ -184,10 +192,12 @@ public sealed class CommitInfoContextLinkTests
     [AvaloniaTest]
     public void Keyboard_context_request_should_use_the_known_mouse_point_not_the_caret_or_old_link()
     {
+        using CommitInfoTestSupport.UiContextScope uiContext = new();
         CommitInfo control = new();
-        CommitInfo.TestAccessor accessor = control.GetTestAccessor();
+        using IDisposable controlLifetime = control;
+        CommitInfoTestSupport.Accessor accessor = control.GetNativeTestSupport();
         accessor.TableLayout.IsVisible = true;
-        XhtmlTextBlock header = accessor.Header.GetTestAccessor().RevisionHeader;
+        XhtmlTextBlock header = accessor.Header.GetRevisionHeader();
         header.SetXHTMLText("prefix <a href='gitext://first'>first</a> plain <a href='gitext://second'>second</a> tail");
         Window window = new() { Width = 600, Height = 260, Content = control };
         window.Show();
@@ -218,10 +228,12 @@ public sealed class CommitInfoContextLinkTests
     [AvaloniaTest]
     public void Keyboard_context_request_without_a_known_pointer_after_reparenting_should_not_reuse_a_link()
     {
+        using CommitInfoTestSupport.UiContextScope uiContext = new();
         CommitInfo control = new();
-        CommitInfo.TestAccessor accessor = control.GetTestAccessor();
+        using IDisposable controlLifetime = control;
+        CommitInfoTestSupport.Accessor accessor = control.GetNativeTestSupport();
         accessor.TableLayout.IsVisible = true;
-        XhtmlTextBlock header = accessor.Header.GetTestAccessor().RevisionHeader;
+        XhtmlTextBlock header = accessor.Header.GetRevisionHeader();
         header.SetXHTMLText("prefix <a href='gitext://first'>caption</a>");
         Window first = new() { Width = 600, Height = 260, Content = control };
         Window second = new() { Width = 600, Height = 260 };
@@ -259,7 +271,7 @@ public sealed class CommitInfoContextLinkTests
     public void Context_link_lookup_should_match_source_nearest_character_semantics_in_blank_space(bool nativeHeader, bool trailingPlainText)
     {
         CommitInfoHeader header = new();
-        XhtmlTextBlock block = nativeHeader ? header.GetTestAccessor().RevisionHeader : new();
+        XhtmlTextBlock block = nativeHeader ? header.GetRevisionHeader() : new();
         const string link = "https://example.invalid/source";
         block.SetXHTMLText($"head <a href='{link}'>caption</a>{(trailingPlainText ? " tail" : string.Empty)}");
         Window window = new() { Width = 600, Height = 220, Content = nativeHeader ? header : block };

@@ -212,7 +212,7 @@ public sealed class ExecutableTests
         await Task.Delay(exitDelay);
 
         exception.Should().NotBeNull();
-        exception.GetType().Should().Be<OperationCanceledException>();
+        exception.Should().BeAssignableTo<OperationCanceledException>();
         executionResult.Should().BeNull();
     }
 

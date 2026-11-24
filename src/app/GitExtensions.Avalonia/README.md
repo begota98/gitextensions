@@ -36,8 +36,25 @@ initialization focuses the revision list.
 Dashboard loads repository-host actions before the remaining plugins, then refreshes its host links.
 Error reports use the original-shaped review form with exception details, reproduction steps,
 Copy, Send and Quit, Quit, and Ignore when permitted. Sending requires reproduction steps and
-confirmation, then opens the fork's issue form. Fatal reporting still runs inside the application;
-independent reporter-process isolation remains unimplemented.
+confirmation, then opens the fork's issue form. Fatal exceptions are handed to an independent
+reporter process using the same Avalonia executable. Its dedicated reporter role starts without
+normal application services, plugins or settings-saving callbacks. Recoverable errors retain
+the in-application report flow.
+On Windows, Browse forwards registered close-all and taskbar close requests to an open modal
+before closing itself. Its taskbar thumbnail toolbar offers Commit, Push, Pull and Close all
+windows, and opened repositories are added to the Recent category of the jump list. The Avalonia
+application uses its own taskbar identity, so it does not share a taskbar group or jump list with
+the WinForms application. The taskbar button shows the progress of running commands, and a
+coloured dot for the working-directory status when the Browse status display is enabled. On
+macOS the Dock menu lists the ten most recent repositories followed by Commit, Push, Pull and Close
+all windows, which closes the windows of that instance only; the Dock icon shows the progress bar
+and the status dot. On Linux, launchers that read the `com.canonical.Unity.LauncherEntry` signal
+(Ubuntu Dock, Dash to Dock, Dash to Panel, KDE Plasma, Plank) show the progress of running
+commands and request attention while the working directory has changes; opened repositories are
+added to the shared recently-used list that KDE's task manager offers. Stock GNOME Shell and COSMIC
+show neither yet. The desktop entry also offers Commit, Push, Pull and Close all windows: the first
+three act in the most recently used Browse window (or start Git Extensions when none is running),
+and Close all windows closes every running instance.
 Dialogs that originally expose context help provide a Help icon in their footer and the F1 key.
 Both open the same manual section; an invalid section disables the help action.
 Splitter settings retain the container size, logical DPI, font size and collapsed states as
@@ -79,6 +96,12 @@ The manifest forwards the host SSH agent. HTTPS authentication uses Git's config
 credential-helper protocol, but a host helper executable is not assumed to be runnable inside
 the sandbox; Secret Service/keyring integration requires a compatible bundled helper and
 explicit packaging support.
+
+On Windows, build-server sign-in first uses the configured credential helper. If it has no
+stored value, the app can read the original application's per-user encrypted build-server
+files. Conflicting or unreadable old stores prompt for credentials rather than selecting an
+account. The old files stay unchanged; saving the dialog writes to the current helper.
+Other platforms keep using their configured helper and the same credential dialog.
 
 Known diff/merge tools and editor suggestions retain the shared installation lookup first.
 On unconfined Linux, an additional lookup searches PATH, then installed Flatpak applications
@@ -122,7 +145,7 @@ unconfined toolkit dialog or invoke `xdg-open` directly.
 - A desktop environment:
   - Windows 10 or later
   - Linux with an X11 or Wayland session (standard desktop distributions work out of the box)
-  - macOS 11 or later on Apple Silicon
+  - macOS 12 or later on Apple Silicon
 
 On Windows, automatic Git discovery also checks `GITEXT_GIT` (an installation directory
 ending in a path separator), the Git installer registry, standard and per-user installations,

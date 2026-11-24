@@ -5,9 +5,7 @@ using GitCommands.Submodules;
 using GitExtensions.Extensibility;
 using GitExtensions.Extensibility.Git;
 using GitExtUtils;
-using GitUI.Properties;
-
-using ResourceManager;
+using TreeNode = Avalonia.Controls.TreeViewItem;
 
 namespace GitUI.LeftPanel;
 
@@ -20,10 +18,9 @@ internal sealed class SubmoduleTree : Tree
         ? StringComparer.OrdinalIgnoreCase
         : StringComparer.Ordinal;
 
-    public SubmoduleTree(RepoObjectsTree owner)
-        : base(owner, RepoTreeKind.Submodules, TranslatedStrings.Submodules, Images.FolderSubmodule)
+    public SubmoduleTree(TreeNode treeNode, IGitUICommandsSource commandsSource)
+        : base(treeNode, commandsSource)
     {
-        Complete(TranslatedStrings.Submodules, Images.FolderSubmodule, expanded: true);
     }
 
     public override void Dispose()
@@ -109,7 +106,9 @@ internal sealed class SubmoduleTree : Tree
         Nodes loadedNodes = FillSubmoduleTree(result);
         Nodes.AddNodes(loadedNodes);
         _currentNodes = Nodes;
-        Complete(TranslatedStrings.Submodules, Images.FolderSubmodule, expanded: true);
+        Nodes.FillTreeViewNode(TreeViewNode);
+        OwnerControl.ApplyRoots();
+        TreeViewNode.IsExpanded = true;
 
         foreach (NodeBase node in DescendantsAndSelf())
         {
@@ -225,7 +224,6 @@ internal sealed class SubmoduleTree : Tree
             bool isCurrent = submoduleInfo.Bold;
 
             nodes.Add(new SubmoduleNode(this,
-                this,
                 submoduleInfo,
                 isCurrent,
                 isCurrent ? result.CurrentSubmoduleStatus : null,
@@ -300,14 +298,13 @@ internal sealed class SubmoduleTree : Tree
 
                 if (!pathToNodes.ContainsKey(path))
                 {
-                    pathToNodes[path] = new SubmoduleFolderNode(this, this, parts[i]);
+                    pathToNodes[path] = new SubmoduleFolderNode(this, parts[i]);
                 }
             }
         }
 
         // Add top-module node
         SubmoduleNode topModuleNode = new(
-            this,
             this,
             result.TopProject!,
             result.TopProject!.Bold,
@@ -319,7 +316,7 @@ internal sealed class SubmoduleTree : Tree
         HashSet<Node> nodesInTree = [];
         foreach (SubmoduleNode node in submoduleNodes)
         {
-            NodeBase parentNode = topModuleNode;
+            Node parentNode = topModuleNode;
             string[] parts = GetNodeRelativePath(topModule, node).Split(Delimiters.ForwardSlash);
 
             for (int i = 0; i < parts.Length; ++i)
@@ -330,8 +327,7 @@ internal sealed class SubmoduleTree : Tree
                 // If node is not already in the tree, add it
                 if (!nodesInTree.Contains(nodeToAdd))
                 {
-                    nodeToAdd.Reparent(parentNode);
-                    parentNode.AddChild(nodeToAdd);
+                    parentNode.Nodes.AddNode(nodeToAdd);
                     nodesInTree.Add(nodeToAdd);
                 }
 
@@ -340,12 +336,25 @@ internal sealed class SubmoduleTree : Tree
         }
 
         // Compact chains of single-child folder nodes for a cleaner display
-        CompactSingleChildFolderChains(topModuleNode.TreeViewNode.Items.Cast<TreeViewItem>());
+        CompactSingleChildFolderChains(topModuleNode.Nodes);
 
         Nodes nodes = new(this);
         nodes.AddNode(topModuleNode);
 
         return nodes;
+
+        static void CompactSingleChildFolderChains(Nodes nodes)
+        {
+            foreach (Node node in nodes)
+            {
+                if (node is SubmoduleFolderNode folderNode)
+                {
+                    folderNode.CompactSingleChildFolders();
+                }
+
+                CompactSingleChildFolderChains(node.Nodes);
+            }
+        }
     }
 
     public void Attach(ISubmoduleStatusProvider? provider)
@@ -444,18 +453,5 @@ internal sealed class SubmoduleTree : Tree
         }
 
         return child[parent.Length] is '/' or '\\';
-    }
-
-    private static void CompactSingleChildFolderChains(IEnumerable<TreeViewItem> items)
-    {
-        foreach (TreeViewItem item in items.ToArray())
-        {
-            if (item.Tag is SubmoduleFolderNode folderNode)
-            {
-                folderNode.CompactSingleChildFolders();
-            }
-
-            CompactSingleChildFolderChains(item.Items.Cast<TreeViewItem>());
-        }
     }
 }

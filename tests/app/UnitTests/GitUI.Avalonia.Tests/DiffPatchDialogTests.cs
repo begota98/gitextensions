@@ -1,16 +1,22 @@
 ﻿using System.Reflection;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
 using Avalonia.Interactivity;
+using Avalonia.Media;
+using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using AwesomeAssertions.Execution;
 using GitCommands;
 using GitCommands.Git;
 using GitExtensions.Extensibility;
 using GitExtensions.Extensibility.Git;
 using GitUI;
 using GitUI.CommandsDialogs;
+using GitUI.Editor;
+using GitUI.Editor.Diff;
 using GitUIPluginInterfaces;
 using Microsoft.VisualStudio.Threading;
 using NSubstitute;
@@ -353,6 +359,48 @@ public sealed class DiffPatchDialogTests
     }
 
     [AvaloniaTest]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task FormDiff_should_preserve_its_source_line_number_preference_and_inset(bool dark)
+    {
+        using FormDiff form = new() { RequestedThemeVariant = dark ? ThemeVariant.Dark : ThemeVariant.Light };
+        form.Resources["GitExtensionsWindowBackgroundBrush"] = new SolidColorBrush(Colors.Magenta);
+        FileViewer viewer = form.GetTestAccessor().DiffText;
+        FileViewerInternal editor = viewer.FindControl<FileViewerInternal>("internalFileViewer")!;
+        try
+        {
+            form.Show();
+            await viewer.ViewTextAsync(fileName: null, text: "No differences");
+            Dispatcher.UIThread.RunJobs();
+            form.UpdateLayout();
+
+            using AssertionScope assertions = new();
+            viewer.ShowLineNumbers.Should().BeFalse();
+            viewer.TextEditor.ShowLineNumbers.Should().BeFalse("plain text keeps FormDiff's explicit preference");
+            editor.Padding.Left.Should().Be(5);
+            viewer.TextEditor.TranslatePoint(default, editor)!.Value.X.Should().Be(5);
+            form.TryFindResource("GitExtensionsNativeTreeDefaultBackgroundBrush", form.ActualThemeVariant, out object? background)
+                .Should().BeTrue();
+            Color? expectedBackground = (background as ISolidColorBrush)?.Color;
+            expectedBackground.Should().NotBeNull();
+            ((editor.Background as ISolidColorBrush)?.Color).Should().Be(expectedBackground);
+
+            viewer.ViewPatch("@@ -5,2 +11,2 @@\n-old\n+new\n context\n");
+            Dispatcher.UIThread.RunJobs();
+            form.UpdateLayout();
+
+            viewer.TextEditor.ShowLineNumbers.Should().BeFalse();
+            viewer.TextEditor.TextArea.LeftMargins.OfType<DiffViewerLineNumberControl>()
+                .Should().ContainSingle(gutter => gutter.IsVisible, "patches use the separate diff line numbers");
+            viewer.TextEditor.TranslatePoint(default, editor)!.Value.X.Should().Be(5);
+        }
+        finally
+        {
+            form.Close();
+        }
+    }
+
+    [AvaloniaTest]
     public void Diff_should_resolve_and_offer_the_original_merge_base()
     {
         ObjectId parent = ObjectId.Parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -527,8 +575,8 @@ public sealed class DiffPatchDialogTests
         FormFormatPatch form = new(commands);
         FormFormatPatch.TestAccessor accessor = form.GetTestAccessor();
         accessor.OutputPath.Text = outputPath;
-        accessor.RevisionGrid.GetTestAccessor().SetRevisions([revision]);
-        accessor.RevisionGrid.GetTestAccessor().Revisions.SelectedItem = revision;
+        accessor.RevisionGrid.GetNativeTestAccessor().SetRevisions([revision]);
+        accessor.RevisionGrid._gridView.SelectedItem = revision;
 
         Invoke(form, "FormatPatch_Click", form, EventArgs.Empty);
 
@@ -597,8 +645,8 @@ public sealed class DiffPatchDialogTests
         FormFormatPatch form = new(commands);
         FormFormatPatch.TestAccessor accessor = form.GetTestAccessor();
         accessor.OutputPath.Text = outputPath;
-        accessor.RevisionGrid.GetTestAccessor().SetRevisions([revision]);
-        accessor.RevisionGrid.GetTestAccessor().Revisions.SelectedItem = revision;
+        accessor.RevisionGrid.GetNativeTestAccessor().SetRevisions([revision]);
+        accessor.RevisionGrid._gridView.SelectedItem = revision;
 
         Invoke(form, "FormatPatch_Click", form, EventArgs.Empty);
 
@@ -623,9 +671,9 @@ public sealed class DiffPatchDialogTests
         FormFormatPatch form = new(commands);
         FormFormatPatch.TestAccessor accessor = form.GetTestAccessor();
         accessor.OutputPath.Text = outputPath;
-        accessor.RevisionGrid.GetTestAccessor().SetRevisions([oldestRevision, newestRevision]);
-        accessor.RevisionGrid.GetTestAccessor().Revisions.SelectedItems!.Add(oldestRevision);
-        accessor.RevisionGrid.GetTestAccessor().Revisions.SelectedItems!.Add(newestRevision);
+        accessor.RevisionGrid.GetNativeTestAccessor().SetRevisions([oldestRevision, newestRevision]);
+        accessor.RevisionGrid._gridView.SelectedItems!.Add(oldestRevision);
+        accessor.RevisionGrid._gridView.SelectedItems!.Add(newestRevision);
 
         Invoke(form, "FormatPatch_Click", form, EventArgs.Empty);
 
@@ -648,10 +696,10 @@ public sealed class DiffPatchDialogTests
         FormFormatPatch form = new(commands);
         FormFormatPatch.TestAccessor accessor = form.GetTestAccessor();
         accessor.OutputPath.Text = outputPath;
-        accessor.RevisionGrid.GetTestAccessor().SetRevisions(revisions);
+        accessor.RevisionGrid.GetNativeTestAccessor().SetRevisions(revisions);
         foreach (GitRevision revision in revisions)
         {
-            accessor.RevisionGrid.GetTestAccessor().Revisions.SelectedItems!.Add(revision);
+            accessor.RevisionGrid._gridView.SelectedItems!.Add(revision);
         }
 
         Invoke(form, "FormatPatch_Click", form, EventArgs.Empty);

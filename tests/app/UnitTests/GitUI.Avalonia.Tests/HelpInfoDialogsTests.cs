@@ -1,7 +1,13 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
+using Avalonia.Input;
+using Avalonia.Input.Raw;
+using Avalonia.LogicalTree;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using GitCommands;
 using GitCommands.UserRepositoryHistory;
 using GitExtensions.Extensibility.Git;
@@ -140,13 +146,15 @@ public sealed class HelpInfoDialogsTests
     [AvaloniaTest]
     public void FormOpenDirectory_should_construct_with_the_original_controls_and_keys()
     {
-        FormOpenDirectory form = new();
-        FormOpenDirectory.TestAccessor accessor = form.GetTestAccessor();
+        using AppSettingsTestScope settings = new();
+        using FormOpenDirectory form = new(Substitute.For<IGitExecutorProvider>(), currentModule: null);
 
-        accessor.Directory.Should().NotBeNull();
-        accessor.OpenButton.Should().NotBeNull();
-        accessor.BrowseButton.Should().NotBeNull();
-        accessor.GoUpButton.Should().NotBeNull();
+        form.FindControl<ComboBox>("_NO_TRANSLATE_Directory").Should().NotBeNull();
+        form.FindControl<Button>("Load").Should().NotBeNull();
+        form.FindControl<Button>("folderBrowserButton").Should().NotBeNull();
+        Button goUp = form.FindControl<Button>("folderGoUpButton")!;
+        goUp.Should().NotBeNull();
+        ToolTip.GetShowDelay(goUp).Should().Be(100);
 
         ITranslation translation = Substitute.For<ITranslation>();
         form.AddTranslationItems(translation);
@@ -194,14 +202,17 @@ public sealed class HelpInfoDialogsTests
     }
 
     [AvaloniaTest]
-    public void FormOpenDirectory_should_preserve_directory_order_and_remove_duplicates()
+    public async Task FormOpenDirectory_should_preserve_directory_order_and_remove_duplicates()
     {
+        using AppSettingsTestScope settings = new();
         string first = Path.Combine(Path.GetTempPath(), "ge-first");
         string second = Path.Combine(Path.GetTempPath(), "ge-second");
-        Repository[] history = [new(first), new(first), new(second)];
+        await RepositoryHistoryManager.Locals.SaveRecentHistoryAsync([new(first), new(first), new(second)]);
+        (await RepositoryHistoryManager.Locals.LoadRecentHistoryAsync()).Select(repository => repository.Path)
+            .Should().Equal(first, first, second);
 
-        IReadOnlyList<string> directories = FormOpenDirectory.TestAccessor.GetDirectories(null, history);
-
+        using FormOpenDirectory form = new(Substitute.For<IGitExecutorProvider>(), currentModule: null);
+        IEnumerable<string> directories = form.FindControl<ComboBox>("_NO_TRANSLATE_Directory")!.Items.Cast<string>();
         directories.Should().ContainInOrder(first, second);
         directories.Count(path => path == first).Should().Be(1);
     }
@@ -209,22 +220,109 @@ public sealed class HelpInfoDialogsTests
     [AvaloniaTest]
     public void FormOpenDirectory_should_navigate_to_the_parent_and_update_parent_availability()
     {
-        FormOpenDirectory form = new();
-        FormOpenDirectory.TestAccessor accessor = form.GetTestAccessor();
-        string child = Path.Combine(Path.GetTempPath(), "GitExtensions", "nested");
+        using AppSettingsTestScope settings = new();
+        using FormOpenDirectory form = new(Substitute.For<IGitExecutorProvider>(), currentModule: null);
+        DirectoryInfo temporary = Directory.CreateTempSubdirectory("GitExtensions.OpenDirectory-");
+        try
+        {
+            DirectoryInfo child = temporary.CreateSubdirectory("nested");
+            form.Show();
+            Dispatcher.UIThread.RunJobs();
+            ComboBox directory = form.FindControl<ComboBox>("_NO_TRANSLATE_Directory")!;
+            Button goUp = form.FindControl<Button>("folderGoUpButton")!;
+            directory.Text = child.FullName;
+            goUp.IsEnabled.Should().BeTrue();
+            Point location = goUp.TranslatePoint(new Point(goUp.Bounds.Width / 2, goUp.Bounds.Height / 2), form)!.Value;
+            form.MouseDown(location, MouseButton.Left);
+            form.MouseUp(location, MouseButton.Left);
+            directory.Text.Should().Be(temporary.FullName.EnsureTrailingPathSeparator());
 
-        accessor.Directory.Text = child;
-        accessor.GoUp();
+            directory.Text = Path.GetTempPath();
+            goUp.IsEnabled.Should().BeTrue();
 
-        accessor.Directory.Text.Should().Be(new DirectoryInfo(child).Parent!.FullName.EnsureTrailingPathSeparator());
+            directory.Text = Path.Combine(temporary.FullName, "missing");
+            goUp.IsEnabled.Should().BeFalse();
+        }
+        finally
+        {
+            form.Close();
+            TestDirectory.Delete(temporary.FullName);
+        }
+    }
 
-        accessor.Directory.Text = Path.GetTempPath();
-        accessor.UpdateDirectoryState();
-        accessor.GoUpButton.IsEnabled.Should().BeTrue();
+    [AvaloniaTest]
+    public async Task FormOpenDirectory_should_offer_filesystem_suggestions_without_replacing_recent_history()
+    {
+        using AppSettingsTestScope settings = new();
+        DirectoryInfo temporary = Directory.CreateTempSubdirectory("GitExtensions.OpenDirectory-");
+        try
+        {
+            DirectoryInfo folder = temporary.CreateSubdirectory("project");
+            DirectoryInfo second = temporary.CreateSubdirectory("proposal");
+            DirectoryInfo unrelated = temporary.CreateSubdirectory("unrelated");
+            File.WriteAllText(Path.Combine(temporary.FullName, "profile.txt"), string.Empty);
+            string recent = Path.Combine(temporary.FullName, "recently-opened");
+            await RepositoryHistoryManager.Locals.SaveRecentHistoryAsync([new(recent)]);
+            using FormOpenDirectory form = new(Substitute.For<IGitExecutorProvider>(), currentModule: null);
+            form.Show();
+            try
+            {
+                Dispatcher.UIThread.RunJobs();
+                ComboBox directory = form.FindControl<ComboBox>("_NO_TRANSLATE_Directory")!;
+                TextBox editor = directory.GetVisualDescendants().OfType<TextBox>().Single();
+                editor.Focus().Should().BeTrue();
+                editor.SelectAll();
+                string prefix = Path.Combine(temporary.FullName, "pro");
+                form.KeyTextInput(prefix);
 
-        accessor.Directory.Text = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-        accessor.UpdateDirectoryState();
-        accessor.GoUpButton.IsEnabled.Should().BeFalse();
+                ListBox suggestions = await WaitForSuggestions(2);
+                suggestions.Items.Cast<string>().Should().Equal(folder.FullName, second.FullName);
+                directory.Text.Should().Be(folder.FullName);
+                (editor.SelectionStart, editor.SelectionEnd).Should().Be((prefix.Length, folder.FullName.Length));
+                directory.Items.Cast<string>().Should().Contain(recent).And.NotContain(folder.FullName);
+
+                Button goUp = form.FindControl<Button>("folderGoUpButton")!;
+                Point center = goUp.TranslatePoint(new Point(goUp.Bounds.Width / 2, goUp.Bounds.Height / 2), form)!.Value;
+                form.MouseDown(center, MouseButton.Left);
+                form.MouseUp(center, MouseButton.Left);
+
+                suggestions = await WaitForSuggestions(3);
+                suggestions.Items.Cast<string>().Should().Equal(folder.FullName, second.FullName, unrelated.FullName);
+                directory.Text.Should().Be(temporary.FullName.EnsureTrailingPathSeparator());
+                directory.Items.Cast<string>().Should().Contain(recent).And.NotContain(folder.FullName);
+
+                form.KeyPress(Key.Down, RawInputModifiers.None, PhysicalKey.ArrowDown, null);
+                form.KeyPress(Key.Down, RawInputModifiers.None, PhysicalKey.ArrowDown, null);
+                form.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+                directory.Text.Should().Be(second.FullName);
+                form.IsVisible.Should().BeTrue("accepting a suggestion keeps the Open action available");
+
+                async Task<ListBox> WaitForSuggestions(int count)
+                {
+                    for (int attempt = 0; attempt < 300; attempt++)
+                    {
+                        Dispatcher.UIThread.RunJobs();
+                        if (directory.GetLogicalDescendants().OfType<Popup>().FirstOrDefault(popup =>
+                                popup.IsOpen && ReferenceEquals(popup.PlacementTarget, editor))?.Child is ListBox list && list.ItemCount == count)
+                        {
+                            return list;
+                        }
+
+                        await Task.Delay(10);
+                    }
+
+                    throw new AssertionException("The directory editor never showed filesystem suggestions.");
+                }
+            }
+            finally
+            {
+                form.Close();
+            }
+        }
+        finally
+        {
+            TestDirectory.Delete(temporary.FullName);
+        }
     }
 
     private static void AssertBoundsRelativeTo(Control control, Visual relativeTo, double x, double y, double width, double height)

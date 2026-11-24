@@ -1,5 +1,7 @@
-﻿using System.ComponentModel.Design;
+using System.Collections.Concurrent;
+using System.ComponentModel.Design;
 using System.Diagnostics;
+using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
@@ -20,6 +22,7 @@ using GitUI.CommandsDialogs;
 using GitUI.Compat;
 using GitUI.NBugReports;
 using GitUI.UserControls.RevisionGrid;
+using GitUI.UserControls.RevisionGrid.Columns;
 using GitUIPluginInterfaces;
 using Microsoft.VisualStudio.Threading;
 using NSubstitute;
@@ -38,6 +41,226 @@ public sealed class RevisionGridSelectionTests
     private string _workingDirectory = null!;
     private bool _showArtificialCommits;
     private bool _showStashes;
+    private bool _showReflogReferences;
+
+    [AvaloniaTest]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ReloadRevisions_should_read_log_while_metadata_is_pending_and_wait_before_inserting_rows(bool delayRefs)
+    {
+        using AppSettingsTestScope settings = new();
+        AppSettings.ShowStashes = true;
+        AppSettings.RevisionGraphShowArtificialCommits = false;
+        GitModule repository = CreateRepository();
+        ObjectId head = repository.GetCurrentCheckout();
+        File.WriteAllText(Path.Combine(_workingDirectory, "untracked.txt"), "stash content");
+        repository.GitExecutable.RunCommand(new GitArgumentBuilder("stash") { "push", "--quiet", "--include-untracked" }).Should().BeTrue();
+
+        TaskCompletionSource metadataStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource logStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource loaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using ManualResetEventSlim releaseMetadata = new();
+        using CancellationTokenSource deadline = new();
+        ConcurrentQueue<string> operations = new();
+        IGitExecutor originalExecutor = _serviceContainer.GetRequiredService<IGitExecutorProvider>().GetExecutor(_workingDirectory);
+        IGitCommandRunner runner = Substitute.For<IGitCommandRunner>();
+        runner.RunDetached(Arg.Any<CancellationToken>(), Arg.Any<ArgumentString>(), Arg.Any<bool>(), Arg.Any<bool>(),
+                Arg.Any<bool>(), Arg.Any<Encoding?>(), Arg.Any<bool>())
+            .Returns(call =>
+            {
+                ArgumentString arguments = call.ArgAt<ArgumentString>(1);
+                string command = arguments.ToString();
+                operations.Enqueue($"{Environment.CurrentManagedThreadId}: {command}");
+                bool isLog = command.StartsWith("log ", StringComparison.Ordinal) || command.Contains(" log ", StringComparison.Ordinal);
+                if (!delayRefs && isLog
+                    && command.Contains("--dirstat=files", StringComparison.Ordinal))
+                {
+                    metadataStarted.TrySetResult();
+                    releaseMetadata.Wait(deadline.Token);
+                }
+                else if (isLog
+                    && !command.Contains("--dirstat=files", StringComparison.Ordinal))
+                {
+                    logStarted.TrySetResult();
+                }
+
+                return originalExecutor.GitCommandRunner.RunDetached(call.ArgAt<CancellationToken>(0), arguments,
+                    call.ArgAt<bool>(2), call.ArgAt<bool>(3), call.ArgAt<bool>(4), call.ArgAt<Encoding?>(5), call.ArgAt<bool>(6));
+            });
+        IGitExecutor executor = Substitute.For<IGitExecutor>();
+        executor.WorkingDir.Returns(originalExecutor.WorkingDir);
+        executor.GetGitDirectory().Returns(originalExecutor.GetGitDirectory());
+        executor.GitExecutable.Returns(originalExecutor.GitExecutable);
+        executor.GitCommandRunner.Returns(runner);
+        executor.GitWindowsExecutable.Returns(originalExecutor.GitWindowsExecutable);
+        executor.GitWindowsCommandRunner.Returns(originalExecutor.GitWindowsCommandRunner);
+        executor.WslDistro.Returns(originalExecutor.WslDistro);
+        IGitExecutorProvider provider = Substitute.For<IGitExecutorProvider>();
+        provider.GetExecutor(Arg.Any<string>()).Returns(executor);
+        GitModule module = new(provider, _workingDirectory);
+        RevisionGridControl control = CreateControl(module);
+        control.RevisionsLoaded += (_, _) => loaded.TrySetResult();
+        try
+        {
+            deadline.CancelAfter(TimeSpan.FromSeconds(15));
+            operations.Enqueue($"UI: {Environment.CurrentManagedThreadId}; stashes={AppSettings.ShowStashes}; reflog={AppSettings.ShowReflogReferences.Value}");
+            control.ReloadRevisions(module, getRefs: filter =>
+            {
+                operations.Enqueue($"refs: {Environment.CurrentManagedThreadId}");
+                if (delayRefs)
+                {
+                    metadataStarted.TrySetResult();
+                    releaseMetadata.Wait(deadline.Token);
+                }
+
+                return repository.GetRefs(filter);
+            });
+            await metadataStarted.Task.WaitAsync(deadline.Token);
+            await logStarted.Task.WaitAsync(deadline.Token);
+            control._gridView.ItemCount.Should().Be(0, "the original gates insertion on refs and stash preparation");
+            control.GetTestAccessor().IsDataLoadComplete.Should().BeFalse();
+            releaseMetadata.Set();
+            await loaded.Task.WaitAsync(deadline.Token);
+            control.GetTestAccessor().IsDataLoadComplete.Should().BeTrue();
+            control.SelectedRevision.Should().NotBeNull();
+            control._gridView.Items.OfType<GitRevision>().Should().Contain(revision => revision.ObjectId == head);
+            control._gridView.Items.OfType<GitRevision>().Single(revision => revision.ObjectId == head)
+                .Refs.Should().Contain(gitRef => gitRef.Name == "selection");
+            control._gridView.Items.OfType<GitRevision>().Should().Contain(revision => revision.ReflogSelector == "refs/stash@{0}");
+        }
+        finally
+        {
+            releaseMetadata.Set();
+            control.CancelBackgroundTasks();
+            await TestContext.Out.WriteLineAsync(string.Join(Environment.NewLine, operations));
+        }
+    }
+
+    [AvaloniaTest]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Ref_hover_should_remain_usable_after_grid_reattachment(bool reattach)
+    {
+        using AppSettingsTestScope settings = new();
+        AppSettings.RevisionGraphShowArtificialCommits = false;
+        GitModule module = CreateRepository();
+        AddCommit(module, "second");
+        RevisionGridControl control = CreateControl(module);
+        Window window = new() { Content = control, Width = 1000, Height = 300 };
+        window.Show();
+        try
+        {
+            await ReloadAsync(control, module);
+            if (reattach)
+            {
+                window.Content = null;
+                window.Content = control;
+                await ReloadAsync(control, module);
+            }
+
+            Settle(window);
+            RevisionGridRefRenderer.RefLabelControl label = control._gridView.GetVisualDescendants()
+                .OfType<RevisionGridRefRenderer.RefLabelControl>().Single(candidate => candidate.GitRef?.Name == "selection");
+            Point point = label.TranslatePoint(new Point(label.Bounds.Width / 2, label.Bounds.Height / 2), window)!.Value;
+            (window.InputHitTest(point) as Visual)?.GetSelfAndVisualAncestors().Should().Contain(label);
+            window.MouseMove(point);
+            Settle(window);
+            RevisionGraphColumnProvider provider = control.ColumnProviders
+                .OfType<RevisionGraphColumnProvider>().Single();
+            HoverHighlightCalculator calculator = (HoverHighlightCalculator)typeof(RevisionGraphColumnProvider)
+                .GetField("_hoverHighlight", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(provider)!;
+            ObjectId head = module.GetCurrentCheckout();
+            await WaitUntilAsync(() => calculator.HighlightedIds?.Contains(head) == true);
+            control._gridView.GetVisualDescendants().OfType<RevisionGridRefRenderer.RefLabelControl>()
+                .Single(candidate => candidate.GitRef?.Name == "selection").IsHighlighted.Should().BeTrue();
+        }
+        finally
+        {
+            control.CancelBackgroundTasks();
+            window.Close();
+            ((IDisposable)control).Dispose();
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task FormBrowse_close_should_dispose_its_revision_grid_resources()
+    {
+        using AppSettingsTestScope settings = new();
+        GitModule module = CreateRepository();
+        using FormBrowse form = new(new GitUICommands(_serviceContainer, module), new BrowseArguments());
+        form.Show();
+        try
+        {
+            await WaitUntilAsync(() => form.RevisionGrid.SelectedRevision?.ObjectId == module.GetCurrentCheckout());
+            RevisionGraphColumnProvider provider = form.RevisionGrid.ColumnProviders.OfType<RevisionGraphColumnProvider>().Single();
+            GitRevision revision = form.RevisionGrid.SelectedRevision!;
+            IGitRef branch = revision.Refs.Single(gitRef => gitRef.Name == "selection");
+            form.Close();
+
+            Func<Task> hoverAfterClose = () => provider.SetHoverHighlightAsync(branch, 0);
+            await hoverAfterClose.Should().ThrowAsync<OperationCanceledException>();
+        }
+        finally
+        {
+            form.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task ReloadRevisions_should_use_the_original_translated_autostash_caption()
+    {
+        using AppSettingsTestScope settings = new();
+        AppSettings.ShowStashes = true;
+        AppSettings.RevisionGraphShowArtificialCommits = false;
+        GitModule module = CreateRepository();
+        AddCommit(module, "second");
+        File.AppendAllText(Path.Combine(_workingDirectory, "tracked.txt"), "pending change");
+        ProcessStartInfo startInfo = new(AppSettings.GitCommand)
+        {
+            WorkingDirectory = module.WorkingDir,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (string argument in new[] { "rebase", "--autostash", "--exec", "exit 1", "HEAD~1" })
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using Process rebase = new() { StartInfo = startInfo };
+        using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(30));
+        rebase.Start().Should().BeTrue();
+        try
+        {
+            Task<string> output = rebase.StandardOutput.ReadToEndAsync(timeout.Token);
+            Task<string> error = rebase.StandardError.ReadToEndAsync(timeout.Token);
+            await rebase.WaitForExitAsync(timeout.Token);
+            await Task.WhenAll(output, error);
+            rebase.ExitCode.Should().Be(1);
+            File.Exists(Path.Join(module.WorkingDirGitDir, "rebase-merge", "autostash")).Should().BeTrue();
+            RevisionGridControl control = CreateControl(module);
+            try
+            {
+                await ReloadAsync(control, module);
+
+                control._gridView.Items.OfType<GitRevision>().Should().ContainSingle(revision => revision.IsAutostash)
+                    .Which.Subject.Should().Be(ResourceManager.TranslatedStrings.Autostash);
+            }
+            finally
+            {
+                ((IDisposable)control).Dispose();
+            }
+        }
+        finally
+        {
+            if (!rebase.HasExited)
+            {
+                rebase.Kill(entireProcessTree: true);
+                await rebase.WaitForExitAsync();
+            }
+        }
+    }
 
     [SetUp]
     public void SetUp()
@@ -46,6 +269,8 @@ public sealed class RevisionGridSelectionTests
         ThreadHelper.JoinableTaskContext = new JoinableTaskContext();
         _showArtificialCommits = AppSettings.RevisionGraphShowArtificialCommits;
         _showStashes = AppSettings.ShowStashes;
+        _showReflogReferences = AppSettings.ShowReflogReferences.Value;
+        AppSettings.ShowReflogReferences.Value = false;
         AppSettings.RevisionGraphShowArtificialCommits = true;
         AppSettings.ShowStashes = false;
 
@@ -70,6 +295,7 @@ public sealed class RevisionGridSelectionTests
     {
         AppSettings.RevisionGraphShowArtificialCommits = _showArtificialCommits;
         AppSettings.ShowStashes = _showStashes;
+        AppSettings.ShowReflogReferences.Value = _showReflogReferences;
         _serviceContainer.Dispose();
         TestDirectory.Delete(_workingDirectory);
     }
@@ -89,7 +315,7 @@ public sealed class RevisionGridSelectionTests
             ignore.PerformClick();
             return ignore;
         };
-        using FormBrowse form = new(new GitUICommands(_serviceContainer, module));
+        using FormBrowse form = new(new GitUICommands(_serviceContainer, module), new BrowseArguments());
         try
         {
             form.Show();
@@ -131,7 +357,7 @@ public sealed class RevisionGridSelectionTests
             File.AppendAllText(Path.Combine(_workingDirectory, "tracked.txt"), "dirty");
         }
 
-        using FormBrowse form = new(new GitUICommands(_serviceContainer, module));
+        using FormBrowse form = new(new GitUICommands(_serviceContainer, module), new BrowseArguments());
         form.Show();
         try
         {
@@ -142,7 +368,7 @@ public sealed class RevisionGridSelectionTests
                 .Which.ObjectId.Should().Be(head);
             form.RevisionGrid.SelectedId.Should().Be(default(ObjectId));
             form.RevisionGrid.SelectedRevision?.Refs.Should().Contain(gitRef => gitRef.IsSelected);
-            form.RevisionGrid.GetTestAccessor().Revisions.IsKeyboardFocusWithin.Should().BeTrue();
+            form.RevisionGrid._gridView.IsKeyboardFocusWithin.Should().BeTrue();
         }
         finally
         {
@@ -169,7 +395,7 @@ public sealed class RevisionGridSelectionTests
 
             control.SelectedRevision?.ObjectId.Should().Be(requestedId);
             control.SelectedId.Should().Be(default(ObjectId));
-            control.GetTestAccessor().PendingSelectedObjectIds.Should().BeEmpty();
+            control.GetNativeTestAccessor().PendingSelectedObjectIds.Should().BeEmpty();
         }
         finally
         {
@@ -197,7 +423,7 @@ public sealed class RevisionGridSelectionTests
                 .Should().Equal(ObjectId.WorkTreeId, first);
             control.SelectedRevision?.ObjectId.Should().Be(ObjectId.WorkTreeId);
             control.LatestSelectedRevision?.ObjectId.Should().Be(ObjectId.WorkTreeId);
-            (control.GetTestAccessor().Revisions.SelectedItem as GitRevision)?.ObjectId.Should().Be(first);
+            (control._gridView.SelectedItem as GitRevision)?.ObjectId.Should().Be(first);
         }
         finally
         {
@@ -252,8 +478,8 @@ public sealed class RevisionGridSelectionTests
             form.RevisionGrid.SelectedRevision?.ObjectId.Should().Be(expectedDetails);
             form.GetLatestSelectedRevision()?.ObjectId.Should().Be(expectedDetails);
             form.RevisionInfo.Revision?.ObjectId.Should().Be(expectedDetails);
-            (form.RevisionGrid.GetTestAccessor().Revisions.SelectedItem as GitRevision)?.ObjectId.Should().Be(expectedCurrent);
-            form.RevisionGrid.GetTestAccessor().Revisions.SelectedItems!.OfType<GitRevision>()
+            (form.RevisionGrid._gridView.SelectedItem as GitRevision)?.ObjectId.Should().Be(expectedCurrent);
+            form.RevisionGrid._gridView.SelectedItems!.OfType<GitRevision>()
                 .Select(revision => revision.ObjectId).Should().Equal(expectedCurrent, expectedDetails);
         }
     }
@@ -265,7 +491,7 @@ public sealed class RevisionGridSelectionTests
     {
         GitRevision[] revisions = [Revision(1), Revision(2), Revision(3)];
         RevisionGridControl control = CreatePausedControl(revisions[0].ObjectId, out _);
-        control.GetTestAccessor().SetRevisions(revisions);
+        control.GetNativeTestAccessor().SetRevisions(revisions);
         GitRevision first = reverseSelection ? revisions[2] : revisions[0];
         GitRevision last = reverseSelection ? revisions[0] : revisions[2];
         control.SetSelectedRevision(first.ObjectId).Should().BeTrue();
@@ -276,7 +502,7 @@ public sealed class RevisionGridSelectionTests
         control.GetSelectedRevisions(SortDirection.Descending).Should().Equal(revisions[2], revisions[0]);
         control.GetSelectedRevisionOrDefault().Should().BeSameAs(last);
         control.LatestSelectedRevision.Should().BeSameAs(last);
-        control.GetTestAccessor().Revisions.SelectedItem.Should().BeSameAs(first);
+        control._gridView.SelectedItem.Should().BeSameAs(first);
     }
 
     [AvaloniaTest]
@@ -288,7 +514,7 @@ public sealed class RevisionGridSelectionTests
     {
         GitRevision[] revisions = [Revision(1), Revision(2), Revision(3)];
         RevisionGridControl control = CreatePausedControl(revisions[0].ObjectId, out _);
-        control.GetTestAccessor().SetRevisions(revisions);
+        control.GetNativeTestAccessor().SetRevisions(revisions);
         control.DisableContextMenu();
         Window window = new() { Width = 900, Height = 240, Content = control };
         window.Show();
@@ -298,7 +524,7 @@ public sealed class RevisionGridSelectionTests
             control.SetSelectedRevision(revisions[2].ObjectId, toggleSelection: true).Should().BeTrue();
             Settle(window);
             Point point = clickedIndex < 0
-                ? control.GetTestAccessor().Revisions.TranslatePoint(new Point(100, 180), window)!.Value
+                ? control._gridView.TranslatePoint(new Point(100, 180), window)!.Value
                 : RowPoint(control, window, clickedIndex);
             window.MouseMove(point);
             window.MouseDown(point, MouseButton.Right);
@@ -308,18 +534,18 @@ public sealed class RevisionGridSelectionTests
             if (clickedIndex == 2)
             {
                 control.GetSelectedRevisions().Should().Equal(revisions[2], revisions[0]);
-                control.GetTestAccessor().Revisions.SelectedItem.Should().BeSameAs(revisions[0]);
+                control._gridView.SelectedItem.Should().BeSameAs(revisions[0]);
             }
             else if (clickedIndex >= 0)
             {
                 control.GetSelectedRevisions().Should().Equal(revisions[clickedIndex]);
-                control.GetTestAccessor().Revisions.SelectedItem.Should().BeSameAs(revisions[clickedIndex]);
+                control._gridView.SelectedItem.Should().BeSameAs(revisions[clickedIndex]);
             }
             else
             {
                 control.GetSelectedRevisions().Should().Equal(revisions[2], revisions[0]);
                 control.GetSelectedRevisionOrDefault().Should().BeSameAs(revisions[2]);
-                control.GetTestAccessor().Revisions.SelectedItem.Should().BeSameAs(revisions[0]);
+                control._gridView.SelectedItem.Should().BeSameAs(revisions[0]);
             }
 
             control.LatestSelectedRevision.Should().BeSameAs(clickedIndex >= 0 ? revisions[clickedIndex] : null);
@@ -335,7 +561,7 @@ public sealed class RevisionGridSelectionTests
     {
         GitRevision[] revisions = [Revision(1), Revision(2), Revision(3)];
         RevisionGridControl control = CreatePausedControl(revisions[0].ObjectId, out _);
-        control.GetTestAccessor().SetRevisions(revisions);
+        control.GetNativeTestAccessor().SetRevisions(revisions);
         control.DisableContextMenu();
         Window window = new() { Width = 900, Height = 240, Content = control };
         window.Show();
@@ -343,7 +569,7 @@ public sealed class RevisionGridSelectionTests
         {
             DeselectLatestRow(control, window, revisions);
             IInputElement? caret = window.FocusManager?.GetFocusedElement();
-            caret.Should().BeSameAs(control.GetTestAccessor().Revisions.ContainerFromIndex(2));
+            caret.Should().BeSameAs(control._gridView.ContainerFromIndex(2));
             Point point = RowPoint(control, window, 0);
             window.MouseDown(point, MouseButton.Right);
             window.MouseUp(point, MouseButton.Right);
@@ -374,18 +600,18 @@ public sealed class RevisionGridSelectionTests
         try
         {
             StartControlledLoad(control, module);
-            control.GetTestAccessor().ReadRevisions([first]);
-            control.GetTestAccessor().PendingSelectedObjectIds.Should().Equal(requested.ObjectId);
+            control.GetNativeTestAccessor().ReadRevisions([first]);
+            control.GetNativeTestAccessor().PendingSelectedObjectIds.Should().Equal(requested.ObjectId);
             Settle(window);
-            Point point = control.GetTestAccessor().Revisions.TranslatePoint(new Point(100, 180), window)!.Value;
+            Point point = control._gridView.TranslatePoint(new Point(100, 180), window)!.Value;
             window.MouseDown(point, MouseButton.Right);
             window.MouseUp(point, MouseButton.Right);
             Settle(window);
 
-            control.GetTestAccessor().PendingSelectedObjectIds.Should().BeEmpty();
+            control.GetNativeTestAccessor().PendingSelectedObjectIds.Should().BeEmpty();
             control.GetSelectedRevisions().Should().BeEmpty();
             control.LatestSelectedRevision.Should().BeNull();
-            control.GetTestAccessor().ReadRevisions([requested]);
+            control.GetNativeTestAccessor().ReadRevisions([requested]);
             control.GetSelectedRevisions().Should().BeEmpty();
         }
         finally
@@ -414,10 +640,10 @@ public sealed class RevisionGridSelectionTests
             GitRevision first = Revision(1);
             GitRevision last = Revision(2);
             RevisionGridControl control = CreatePausedControl(first.ObjectId, out _);
-            control.GetTestAccessor().SetRevisions([first, last]);
+            control.GetNativeTestAccessor().SetRevisions([first, last]);
             control.SetSelectedRevision(first.ObjectId).Should().BeTrue();
             control.SetSelectedRevision(last.ObjectId, toggleSelection: true).Should().BeTrue();
-            control.GetTestAccessor().Revisions.RaiseEvent(new KeyEventArgs
+            control._gridView.RaiseEvent(new KeyEventArgs
             {
                 RoutedEvent = InputElement.KeyDownEvent,
                 Key = Key.C,
@@ -452,7 +678,7 @@ public sealed class RevisionGridSelectionTests
     {
         GitRevision[] revisions = [Revision(1), Revision(2), Revision(3)];
         RevisionGridControl control = CreatePausedControl(revisions[0].ObjectId, out _);
-        control.GetTestAccessor().SetRevisions(revisions);
+        control.GetNativeTestAccessor().SetRevisions(revisions);
         control.DisableContextMenu();
         Window window = new() { Width = 900, Height = 240, Content = control };
         window.Show();
@@ -503,7 +729,7 @@ public sealed class RevisionGridSelectionTests
         revisions[1].ParentIds = [revisions[2].ObjectId];
         revisions[2].ParentIds = [revisions[3].ObjectId];
         RevisionGridControl control = CreatePausedControl(revisions[0].ObjectId, out _);
-        control.GetTestAccessor().SetRevisions(revisions);
+        control.GetNativeTestAccessor().SetRevisions(revisions);
         control.DisableContextMenu();
         Window window = new() { Width = 900, Height = 240, Content = control };
         window.Show();
@@ -526,7 +752,7 @@ public sealed class RevisionGridSelectionTests
     {
         GitRevision[] revisions = [Revision(1), Revision(2), Revision(3)];
         RevisionGridControl control = CreatePausedControl(revisions[0].ObjectId, out _);
-        control.GetTestAccessor().SetRevisions(revisions);
+        control.GetNativeTestAccessor().SetRevisions(revisions);
         control.DisableContextMenu();
         Window window = new() { Width = 900, Height = 240, Content = control };
         window.Show();
@@ -563,7 +789,7 @@ public sealed class RevisionGridSelectionTests
             control.ResumeRefreshRevisions();
         }
 
-        control.GetTestAccessor().SetRevisions(revisions);
+        control.GetNativeTestAccessor().SetRevisions(revisions);
         control.SetSelectedRevision(revisions[0].ObjectId).Should().BeTrue();
         control.SetSelectedRevision(revisions[2].ObjectId, toggleSelection: true).Should().BeTrue();
         int filtersChanged = 0;
@@ -576,7 +802,7 @@ public sealed class RevisionGridSelectionTests
         filtersChanged.Should().Be(0);
         loadsStarted.Should().Be(0);
         control.GetSelectedRevisions().Should().Equal(revisions[2], revisions[0]);
-        control.GetTestAccessor().Revisions.SelectedItem.Should().BeSameAs(revisions[0]);
+        control._gridView.SelectedItem.Should().BeSameAs(revisions[0]);
         return;
 
         void ApplyMode()
@@ -615,7 +841,7 @@ public sealed class RevisionGridSelectionTests
                 new(ObjectId.Parse(new string('c', 40))),
             ];
             RevisionGridControl control = CreatePausedControl(revisions[0].ObjectId, out _);
-            control.GetTestAccessor().SetRevisions(revisions);
+            control.GetNativeTestAccessor().SetRevisions(revisions);
             foreach (GitRevision revision in revisions)
             {
                 control.SetSelectedRevision(revision.ObjectId).Should().BeTrue();
@@ -627,7 +853,7 @@ public sealed class RevisionGridSelectionTests
                 control.NavigateBackward();
             }
 
-            control.GetTestAccessor().SetRevisions([revisions[0], revisions[2]]);
+            control.GetNativeTestAccessor().SetRevisions([revisions[0], revisions[2]]);
             if (forward)
             {
                 control.NavigateForward();
@@ -733,10 +959,10 @@ public sealed class RevisionGridSelectionTests
             await ReloadAsync(control, module, revisionFilter: "--all --grep=visible --date-order");
 
             control.CurrentCheckout.Should().Be(head);
-            ObjectId[] rows = control.GetTestAccessor().Revisions.Items.OfType<GitRevision>()
+            ObjectId[] rows = control._gridView.Items.OfType<GitRevision>()
                 .Select(revision => revision.ObjectId).ToArray();
             rows.Should().Equal(unrelated, ObjectId.WorkTreeId, ObjectId.IndexId, ancestor);
-            control.GetTestAccessor().HasGraphParent(ObjectId.WorkTreeId, ObjectId.IndexId).Should().BeTrue();
+            control.GetNativeTestAccessor().HasGraphParent(ObjectId.WorkTreeId, ObjectId.IndexId).Should().BeTrue();
         }
         finally
         {
@@ -755,7 +981,7 @@ public sealed class RevisionGridSelectionTests
             await ReloadAsync(control, module, selectedObjectId: ObjectId.Parse(new string('a', 40)));
 
             control.SelectedRevision?.ObjectId.Should().Be(first);
-            control.GetTestAccessor().PendingSelectedObjectIds.Should().BeEmpty();
+            control.GetNativeTestAccessor().PendingSelectedObjectIds.Should().BeEmpty();
         }
         finally
         {
@@ -783,7 +1009,7 @@ public sealed class RevisionGridSelectionTests
             else
             {
                 control.SelectedRevision.Should().BeNull();
-                control.GetTestAccessor().CurrentPage.Should().BeOfType<EmptyRepoControl>();
+                control.revisionPage.Content.Should().BeOfType<EmptyRepoControl>();
             }
         }
         finally
@@ -803,19 +1029,19 @@ public sealed class RevisionGridSelectionTests
             control.FirstId = first.ObjectId;
             control.SelectedId = selected.ObjectId;
             StartControlledLoad(control, module);
-            control.GetTestAccessor().PendingSelectedObjectIds.Should().Equal(first.ObjectId, selected.ObjectId);
+            control.GetNativeTestAccessor().PendingSelectedObjectIds.Should().Equal(first.ObjectId, selected.ObjectId);
 
-            control.GetTestAccessor().ReadRevisions([first]);
+            control.GetNativeTestAccessor().ReadRevisions([first]);
             control.SelectedRevision.Should().BeNull();
-            control.GetTestAccessor().PendingSelectedObjectIds.Should().Equal(first.ObjectId, selected.ObjectId);
+            control.GetNativeTestAccessor().PendingSelectedObjectIds.Should().Equal(first.ObjectId, selected.ObjectId);
 
-            control.GetTestAccessor().ReadRevisions([selected]);
+            control.GetNativeTestAccessor().ReadRevisions([selected]);
             control.GetSelectedRevisions().Select(revision => revision.ObjectId)
                 .Should().Equal(selected.ObjectId, first.ObjectId);
             control.GetSelectedRevisionOrDefault().Should().BeSameAs(selected);
             control.LatestSelectedRevision.Should().BeSameAs(selected);
-            control.GetTestAccessor().Revisions.SelectedItem.Should().BeSameAs(first);
-            control.GetTestAccessor().PendingSelectedObjectIds.Should().BeEmpty();
+            control._gridView.SelectedItem.Should().BeSameAs(first);
+            control.GetNativeTestAccessor().PendingSelectedObjectIds.Should().BeEmpty();
         }
         finally
         {
@@ -836,13 +1062,13 @@ public sealed class RevisionGridSelectionTests
             StartControlledLoad(control, module);
             StartControlledLoad(control, module);
 
-            control.GetTestAccessor().PendingSelectedObjectIds.Should().Equal(first.ObjectId, selected.ObjectId);
+            control.GetNativeTestAccessor().PendingSelectedObjectIds.Should().Equal(first.ObjectId, selected.ObjectId);
 
             control.SelectedId = first.ObjectId;
             StartControlledLoad(control, module);
 
-            control.GetTestAccessor().PendingSelectedObjectIds.Should().Equal(first.ObjectId);
-            control.GetTestAccessor().ReadRevisions([first, selected]);
+            control.GetNativeTestAccessor().PendingSelectedObjectIds.Should().Equal(first.ObjectId);
+            control.GetNativeTestAccessor().ReadRevisions([first, selected]);
             control.GetSelectedRevisions().Should().ContainSingle().Which.Should().BeSameAs(first);
         }
         finally
@@ -862,12 +1088,12 @@ public sealed class RevisionGridSelectionTests
             control.FirstId = first.ObjectId;
             control.SelectedId = selected.ObjectId;
             StartControlledLoad(control, module);
-            control.GetTestAccessor().ReadRevisions([first]);
+            control.GetNativeTestAccessor().ReadRevisions([first]);
 
-            control.GetTestAccessor().CompleteLoading();
+            control.GetNativeTestAccessor().CompleteLoading();
 
             control.GetSelectedRevisions().Should().ContainSingle().Which.Should().BeSameAs(first);
-            control.GetTestAccessor().PendingSelectedObjectIds.Should().BeEmpty();
+            control.GetNativeTestAccessor().PendingSelectedObjectIds.Should().BeEmpty();
         }
         finally
         {
@@ -890,24 +1116,24 @@ public sealed class RevisionGridSelectionTests
         try
         {
             StartControlledLoad(control, module);
-            control.GetTestAccessor().ReadRevisions([first]);
+            control.GetNativeTestAccessor().ReadRevisions([first]);
             if (programmatic)
             {
                 control.SetSelectedRevision(first.ObjectId).Should().BeTrue();
             }
             else
             {
-                control.GetTestAccessor().Revisions.SelectedItem = first;
+                control._gridView.SelectedItem = first;
             }
 
             otherControl.Focus(NavigationMethod.Pointer).Should().BeTrue();
 
-            control.GetTestAccessor().ReadRevisions([selected]);
-            control.GetTestAccessor().CompleteLoading();
+            control.GetNativeTestAccessor().ReadRevisions([selected]);
+            control.GetNativeTestAccessor().CompleteLoading();
 
             control.SelectedRevision.Should().BeSameAs(first);
             otherControl.IsKeyboardFocusWithin.Should().BeTrue();
-            control.GetTestAccessor().PendingSelectedObjectIds.Should().BeEmpty();
+            control.GetNativeTestAccessor().PendingSelectedObjectIds.Should().BeEmpty();
         }
         finally
         {
@@ -930,11 +1156,11 @@ public sealed class RevisionGridSelectionTests
         {
             Dispatcher.UIThread.RunJobs();
             StartControlledLoad(control, module);
-            control.GetTestAccessor().Revisions.IsKeyboardFocusWithin.Should().BeTrue();
+            control._gridView.IsKeyboardFocusWithin.Should().BeTrue();
             otherControl.Focus(NavigationMethod.Pointer).Should().BeTrue();
 
-            control.GetTestAccessor().ReadRevisions([selected]);
-            control.GetTestAccessor().CompleteLoading();
+            control.GetNativeTestAccessor().ReadRevisions([selected]);
+            control.GetNativeTestAccessor().CompleteLoading();
 
             control.SelectedRevision.Should().BeSameAs(selected);
             otherControl.IsKeyboardFocusWithin.Should().BeTrue();
@@ -953,7 +1179,7 @@ public sealed class RevisionGridSelectionTests
     {
         RevisionGridControl control = CreatePausedControl(Revision(1).ObjectId, out _);
         GitRevision[] revisions = [Revision(1), Revision(2)];
-        control.GetTestAccessor().SetRevisions(revisions);
+        control.GetNativeTestAccessor().SetRevisions(revisions);
         control.SetSelectedRevision(revisions[0].ObjectId).Should().BeTrue();
         if (multipleSelection)
         {
@@ -965,7 +1191,7 @@ public sealed class RevisionGridSelectionTests
         int notifications = 0;
         control.SelectionChanged += (_, _) => notifications++;
 
-        control.GetTestAccessor().SetRevisions(revisions.Reverse());
+        control.GetNativeTestAccessor().SetRevisions(revisions.Reverse());
         await Task.Delay(100);
         Dispatcher.UIThread.RunJobs();
 
@@ -973,7 +1199,7 @@ public sealed class RevisionGridSelectionTests
         control.SelectedRevision.Should().BeSameAs(expectedDetails);
         control.GetSelectedRevisionOrDefault().Should().BeSameAs(expectedDetails);
         control.LatestSelectedRevision.Should().BeSameAs(expectedDetails);
-        control.GetTestAccessor().Revisions.SelectedItem.Should().BeSameAs(revisions[0]);
+        control._gridView.SelectedItem.Should().BeSameAs(revisions[0]);
         control.GetSelectedRevisions().Should().Equal(multipleSelection ? [revisions[1], revisions[0]] : [revisions[0]]);
         notifications.Should().Be(0);
     }
@@ -986,7 +1212,7 @@ public sealed class RevisionGridSelectionTests
         GitRevision first = Revision(1);
         GitRevision second = Revision(2);
         RevisionGridControl control = CreatePausedControl(first.ObjectId, out IGitModule module);
-        control.GetTestAccessor().SetRevisions([first, second]);
+        control.GetNativeTestAccessor().SetRevisions([first, second]);
         control.SetSelectedRevision(first.ObjectId).Should().BeTrue();
         ObjectId targetId = changesSelection ? second.ObjectId : first.ObjectId;
         IGitRef relatedRef = new GitRef(null!, targetId, "refs/remotes/origin/related");
@@ -999,30 +1225,102 @@ public sealed class RevisionGridSelectionTests
     }
 
     [AvaloniaTest]
-    public void Cancelled_stream_callbacks_should_not_replace_selection_or_focus_from_the_active_load()
+    public async Task Cancelled_stream_callbacks_should_not_replace_selection_or_focus_from_the_active_load()
     {
-        GitRevision first = Revision(1);
-        GitRevision selected = Revision(2);
-        RevisionGridControl control = CreatePausedControl(selected.ObjectId, out IGitModule module);
-        using CancellationTokenSource staleLoad = new();
+        using AppSettingsTestScope settings = new();
+        AppSettings.RevisionGraphShowArtificialCommits = false;
+        GitModule module = CreateRepository();
+        RevisionGridControl control = CreateControl(module);
+        TaskCompletionSource staleMetadataStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource staleMetadataFinished = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using ManualResetEventSlim releaseStaleMetadata = new();
+        using CancellationTokenSource deadline = new(TimeSpan.FromSeconds(15));
         try
         {
-            StartControlledLoad(control, module);
-            control.GetTestAccessor().ReadRevisions([selected]);
-            staleLoad.Cancel();
-
-            IObserver<IReadOnlyList<GitRevision>> staleObserver = control.GetTestAccessor().CreateRevisionObserver(staleLoad.Token);
-            staleObserver.OnNext([first]);
-            staleObserver.OnCompleted();
+            control.ReloadRevisions(module, getRefs: filter =>
+            {
+                staleMetadataStarted.TrySetResult();
+                try
+                {
+                    releaseStaleMetadata.Wait(deadline.Token);
+                    return module.GetRefs(filter);
+                }
+                finally
+                {
+                    staleMetadataFinished.TrySetResult();
+                }
+            });
+            await staleMetadataStarted.Task.WaitAsync(deadline.Token);
+            await ReloadAsync(control, module);
+            GitRevision selected = control.SelectedRevision!;
+            selected.ObjectId.Should().Be(module.GetCurrentCheckout());
+            releaseStaleMetadata.Set();
+            await staleMetadataFinished.Task.WaitAsync(deadline.Token);
+            control.CancelBackgroundTasks();
             Dispatcher.UIThread.RunJobs();
 
-            control.GetTestAccessor().Revisions.Items.OfType<GitRevision>().Should().ContainSingle()
+            control._gridView.Items.OfType<GitRevision>().Should().ContainSingle()
                 .Which.Should().BeSameAs(selected);
             control.SelectedRevision.Should().BeSameAs(selected);
         }
         finally
         {
+            releaseStaleMetadata.Set();
             control.CancelBackgroundTasks();
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task Ref_menu_should_use_the_original_tag_icon_and_repository_wide_unambiguous_name()
+    {
+        string? previousShowTags = AppSettings.SettingsContainer.GetValue("showtags");
+        try
+        {
+            AppSettings.ShowTags = true;
+            GitModule module = CreateRepository();
+            module.GitExecutable.RunCommand(new GitArgumentBuilder("branch") { "same" }).Should().BeTrue();
+            AddCommit(module, "tagged");
+            module.GitExecutable.RunCommand(new GitArgumentBuilder("tag") { "same" }).Should().BeTrue();
+            IGitUICommands commands = Substitute.For<IGitUICommands>();
+            commands.Module.Returns(module);
+            commands.RepoChangedNotifier.Returns(Substitute.For<ILockableNotifier>());
+            commands.GetService(Arg.Any<Type>()).Returns(call => _serviceContainer.GetService(call.Arg<Type>()));
+            IGitUICommandsSource source = Substitute.For<IGitUICommandsSource>();
+            source.UICommands.Returns(commands);
+            RevisionGridControl control = new() { UICommandsSource = source };
+            Window window = new() { Width = 1000, Height = 300, Content = control };
+            try
+            {
+                window.Show();
+                await ReloadAsync(control, module);
+                control.SetSelectedRevision(module.GetCurrentCheckout()).Should().BeTrue();
+                Settle(window);
+                ListBoxItem row = control._gridView.GetVisualDescendants().OfType<ListBoxItem>()
+                    .Single(item => item.DataContext is GitRevision revision && revision.ObjectId == module.GetCurrentCheckout());
+                Point position = row.TranslatePoint(new Point(row.Bounds.Width - 40, row.Bounds.Height / 2), window)!.Value;
+                window.MouseDown(position, MouseButton.Right, RawInputModifiers.None);
+                window.MouseUp(position, MouseButton.Right, RawInputModifiers.None);
+                Dispatcher.UIThread.RunJobs();
+                ContextMenu menu = control.FindControl<ContextMenu>("mainContextMenu")!;
+                menu.IsOpen.Should().BeTrue();
+                MenuItem merge = control.FindControl<MenuItem>("mergeBranchToolStripMenuItem")!.Items
+                    .OfType<MenuItem>().Single(item => item.Header as string == "same");
+                using AwesomeAssertions.Execution.AssertionScope assertions = new();
+                ((Image)merge.Icon!).Source.Should().BeSameAs(GitUI.Properties.Images.BranchLocal);
+                merge.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                commands.ReceivedCalls().Where(call => call.GetMethodInfo().Name == nameof(IGitUICommands.StartMergeBranchDialog))
+                    .Select(call => call.GetArguments()[1]).Should().Equal("refs/tags/same");
+                menu.Close();
+            }
+            finally
+            {
+                window.Close();
+                control.CancelBackgroundTasks();
+            }
+        }
+        finally
+        {
+            AppSettings.SettingsContainer.SetValue("showtags", previousShowTags);
         }
     }
 
@@ -1037,7 +1335,8 @@ public sealed class RevisionGridSelectionTests
             AddCommit(module, "initial");
         }
 
-        return module;
+        // GitModule snapshots its Git-directory path, so construct the UI input after git init.
+        return new GitModule(_serviceContainer.GetRequiredService<IGitExecutorProvider>(), _workingDirectory);
     }
 
     private RevisionGridControl CreateControl(GitModule module)
@@ -1060,6 +1359,7 @@ public sealed class RevisionGridSelectionTests
         IGitUICommands commands = Substitute.For<IGitUICommands>();
         module = Substitute.For<IGitModule>();
         module.GetCurrentCheckout().Returns(head);
+        module.ConfigureCancelledRevisionRead();
         commands.Module.Returns(module);
         commands.GetService(typeof(IHotkeySettingsLoader)).Returns(Substitute.For<IHotkeySettingsLoader>());
         source.UICommands.Returns(commands);
@@ -1083,7 +1383,7 @@ public sealed class RevisionGridSelectionTests
 
     private static Point RowPoint(RevisionGridControl control, Window window, int rowIndex)
     {
-        ListBoxItem row = (ListBoxItem)control.GetTestAccessor().Revisions.ContainerFromIndex(rowIndex)!;
+        ListBoxItem row = (ListBoxItem)control._gridView.ContainerFromIndex(rowIndex)!;
         Point point = row.TranslatePoint(new Point(100, row.Bounds.Height / 2), window)!.Value;
         (window.InputHitTest(point) as Visual)?.GetSelfAndVisualAncestors().OfType<ListBoxItem>()
             .FirstOrDefault().Should().BeSameAs(row);
@@ -1120,9 +1420,10 @@ public sealed class RevisionGridSelectionTests
 
     private static void StartControlledLoad(RevisionGridControl control, IGitModule module)
     {
-        // Deliver deterministic stream callbacks without blocking a pool-backed headless UI context.
-        // TaskManager handles the interrupted provider; real Git reads are covered separately above.
-        control.ReloadRevisions(module, getRefs: _ => throw new OperationCanceledException());
+        // Let production prepare its metadata while the fixture cancels external log I/O.
+        // Streamed-row assertions then use the same pending selection as the real refs stage.
+        control.ReloadRevisions(module, getRefs: _ => []);
+        control.GetNativeTestAccessor().JoinBackgroundOperations();
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition)

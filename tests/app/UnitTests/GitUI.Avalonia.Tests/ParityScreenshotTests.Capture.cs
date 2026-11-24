@@ -19,6 +19,7 @@ using AvaloniaEdit;
 using GitCommands;
 using GitCommands.Settings;
 using GitCommands.UserRepositoryHistory;
+using GitExtensions.Extensibility;
 using GitExtensions.Extensibility.Git;
 using GitExtensions.Extensibility.Settings;
 using GitExtensions.ParityCapture;
@@ -70,13 +71,15 @@ public sealed partial class ParityScreenshotTests
             favourites.Should().ContainSingle(item => item.Repo.Path == context.Module.WorkingDir && item.Repo.Category == "Development");
         }
 
-        FormBrowse browse = new(context.Commands);
+        FormBrowse browse = new(context.Commands, new BrowseArguments());
         try
         {
             await PrepareViewAsync(browse, context);
-            RepositoryHistorySnapshot snapshot = context.Commands.GetRequiredService<IRepositoryHistoryUIService>().LoadSnapshot();
-            snapshot.Favourites.Should().ContainSingle(item => item.Repository.Path == context.Module.WorkingDir
-                && item.Repository.Category == "Development",
+            GitUI.Compat.WinFormsControls.ToolStripDropDownItem favourites = new();
+            context.Commands.GetRequiredService<IRepositoryHistoryUIService>().PopulateFavouriteRepositoriesMenu(favourites);
+            favourites.Items.OfType<MenuItem>().SelectMany(category => category.Items.OfType<MenuItem>())
+                .Select(item => (Repository)item.Tag!).Should().ContainSingle(item => item.Path == context.Module.WorkingDir
+                && item.Category == "Development",
                 "Browse and Dashboard must receive the same explicit native-reference history input");
         }
         finally
@@ -1340,13 +1343,7 @@ public sealed partial class ParityScreenshotTests
             descriptors.Should().ContainKey(component.TypeName);
         }
 
-        string outputDirectory = Path.Combine(GetOutputDirectory(), "avalonia");
-        if (Directory.Exists(outputDirectory))
-        {
-            TestDirectory.Delete(outputDirectory);
-        }
-
-        Directory.CreateDirectory(outputDirectory);
+        string outputDirectory = PrepareCaptureOutputDirectory();
         List<CaptureManifestEntry> entries = [];
         using CaptureContext context = new();
         string repositoryRoot = FindRepositoryRoot(Path.Combine(AppContext.BaseDirectory, "GitUI.Avalonia.Tests.dll"));
@@ -1998,7 +1995,7 @@ public sealed partial class ParityScreenshotTests
             ShellExtensionSettingsPage => view.FindControl<Control>("cbAlwaysShowAllCommands"),
             FormChooseTranslation => view.FindControl<ListBox>("lvTranslations")?
                 .GetLogicalDescendants().OfType<ListBoxItem>().FirstOrDefault(),
-            FormCommitTemplateSettings form => form.GetTestAccessor().Ok,
+            FormCommitTemplateSettings form => form.FindControl<Button>("buttonOk")!,
             FormResetAnotherBranch form => form.GetTestAccessor().Branches,
             _ => null,
         };

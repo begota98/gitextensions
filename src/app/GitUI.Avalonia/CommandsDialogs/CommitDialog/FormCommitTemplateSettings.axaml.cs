@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using Avalonia.Controls;
+using Avalonia.Threading;
 using GitCommands;
 using GitExtensions.Extensibility.Git;
 using Microsoft;
@@ -9,6 +10,11 @@ namespace GitUI.CommandsDialogs.CommitDialog;
 
 public sealed partial class FormCommitTemplateSettings : GitExtensionsDialog
 {
+    // Avalonia keeps the tooltip caption on the checkbox and has no AutoPopDelay property.
+#pragma warning disable SX1309 // Preserve the original Designer field name.
+    private readonly DispatcherTimer toolTipRegex = new() { Interval = TimeSpan.FromMilliseconds(20000) };
+#pragma warning restore SX1309
+
     private readonly TranslationString _emptyTemplate =
         new("empty");
 
@@ -28,6 +34,7 @@ public sealed partial class FormCommitTemplateSettings : GitExtensionsDialog
     public FormCommitTemplateSettings()
     {
         InitializeComponent();
+        InitializeToolTipRegex();
         InitializeComplete();
     }
 
@@ -35,6 +42,7 @@ public sealed partial class FormCommitTemplateSettings : GitExtensionsDialog
         : base(commands, enablePositionRestore: false)
     {
         InitializeComponent();
+        InitializeToolTipRegex();
         buttonOk.Click += buttonOk_Click;
         buttonCancel.Click += buttonCancel_Click;
         _NO_TRANSLATE_comboBoxCommitTemplates.ItemsSource = _commitTemplateNames;
@@ -215,31 +223,20 @@ public sealed partial class FormCommitTemplateSettings : GitExtensionsDialog
         template.IsRegex = isRegex;
     }
 
-    internal TestAccessor GetTestAccessor() => new(this);
-
-    internal readonly struct TestAccessor(FormCommitTemplateSettings form)
+    private void InitializeToolTipRegex()
     {
-        public ComboBox CommitTemplates => form._NO_TRANSLATE_comboBoxCommitTemplates;
-        public TextBox TemplateName => form._NO_TRANSLATE_textBoxCommitTemplateName;
-        public TextBox TemplateText => form._NO_TRANSLATE_textCommitTemplateText;
-        public CheckBox RegexEnabled => form.checkBoxRegexEnabled;
-        public CheckBox AutoWrap => form.checkBoxAutoWrap;
-        public CheckBox UseIndent => form.checkBoxUseIndent;
-        public CheckBox SecondLineEmpty => form.checkBoxSecondLineEmpty;
-        public NumericUpDown MaxFirstLineLength => form._NO_TRANSLATE_numericMaxFirstLineLength;
-        public NumericUpDown MaxLineLength => form._NO_TRANSLATE_numericMaxLineLength;
-        public TextBox ValidationRegex => form._NO_TRANSLATE_textBoxCommitValidationRegex;
-        public TabControl Tabs => form.tabControl1;
-        public TabItem TemplatesTab => form.tabPage1;
-        public TabItem ValidationTab => form.tabPage2;
-        public Grid ControlsPanel => form.ControlsPanel;
-        public Grid TemplateLayout => form.tableLayoutPanel5;
-        public Grid ValidationLayout => form.tableLayoutPanel3;
-        public Button Ok => form.buttonOk;
-        public Button Cancel => form.buttonCancel;
-        public IReadOnlyList<CommitTemplateItem> Templates => form._commitTemplates!;
-
-        public void LoadSettings() => form.LoadSettings();
-        public void SaveSettings() => form.SaveSettings();
+        toolTipRegex.Tick += (_, _) =>
+        {
+            toolTipRegex.Stop();
+            ToolTip.SetIsOpen(checkBoxRegexEnabled, false);
+        };
+        checkBoxRegexEnabled.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == ToolTip.IsOpenProperty)
+            {
+                toolTipRegex.IsEnabled = ToolTip.GetIsOpen(checkBoxRegexEnabled);
+            }
+        };
+        checkBoxRegexEnabled.DetachedFromVisualTree += (_, _) => toolTipRegex.Stop();
     }
 }

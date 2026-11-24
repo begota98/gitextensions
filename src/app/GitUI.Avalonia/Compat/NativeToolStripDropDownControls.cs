@@ -55,7 +55,7 @@ public sealed class NativeToolStripDropDownPresenter : MenuFlyoutPresenter
 /// <summary>
 ///  Keeps MenuItem's interaction implementation while its owned source layout supplies RTL coordinates.
 /// </summary>
-public sealed class NativeToolStripDropDownMenuItem : MenuItem
+public sealed class NativeToolStripDropDownMenuItem : WinFormsControls.ToolStripMenuItem
 {
     public static readonly AttachedProperty<bool> UseSystemVisualStyleProperty =
         AvaloniaProperty.RegisterAttached<NativeToolStripDropDownMenuItem, Control, bool>("UseSystemVisualStyle");
@@ -64,7 +64,15 @@ public sealed class NativeToolStripDropDownMenuItem : MenuItem
     {
     }
 
-    internal bool UseSourceMnemonicRouting { get; set; }
+    // The owning native dropdown already supplies sizing and directional coordinates.
+    protected override bool UseDefaultDropDownLayout => false;
+
+    internal override bool UseSourceMnemonicRouting { get; set; }
+
+    internal override WinFormsControls.ToolStripMenuItem CreateMenuItem()
+        => new NativeToolStripDropDownMenuItem { UseSourceMnemonicRouting = true, Classes = { "gitextensions-working-directory-entry" } };
+
+    internal override Separator CreateSeparator() => new NativeToolStripDropDownSeparator();
 
     protected override Type StyleKeyOverride => typeof(MenuItem);
 

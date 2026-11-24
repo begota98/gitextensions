@@ -44,6 +44,9 @@ public sealed class NativeToolStripSplitContentTests
         }
     }
 
+    [TearDown]
+    public void TearDown() => WorkingDirectoryTestSupport.Reset();
+
     [AvaloniaTest]
     [TestCaseSource(nameof(PreferredCases))]
     public void Native_content_should_measure_the_actual_item_font_and_arrange_source_padded_image_and_caption(
@@ -82,6 +85,44 @@ public sealed class NativeToolStripSplitContentTests
             caption.FontStyle.Should().Be(button.FontStyle);
             caption.FontWeight.Should().Be(button.FontWeight);
             button.GetVisualDescendants().OfType<Button>().Single(part => part.Name == "PART_PrimaryButton").Content.Should().BeSameAs(button.Content);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaTest]
+    [TestCase("Avalonia_Port", false, false)]
+    [TestCase("Avalonia_Port", true, false)]
+    [TestCase("feature/Avalonia_Port/rendering/Avalonia_Port_text_clipping", true, false)]
+    [TestCase("feature/Avalonia_Port/Avalonia_Port/Avalonia_Port/Avalonia_Port", true, false)]
+    [TestCase("feature/Avalonia_Port/Avalonia_Port/Avalonia_Port/Avalonia_Port", true, true)]
+    public void Autosized_split_button_caption_should_fit_inside_its_actual_clip(string text, bool bold, bool rightToLeft)
+    {
+        IconSplitButton button = NewButton(9, "Segoe UI", bold, false, false, rightToLeft);
+        TranslationCompat.SetConvertMnemonics(button, false);
+        button.Content = text;
+        Window window = NewWindow(button);
+        try
+        {
+            window.Show();
+            window.UpdateLayout();
+            TextBlock caption = Caption(button);
+            DrawingGroup drawing = new();
+            using (DrawingContext context = drawing.Open())
+            {
+                caption.Render(context);
+            }
+
+            Rect painted = drawing.GetBounds();
+            TestContext.Out.WriteLine($"{text} ({caption.FontWeight}): GDI {CaptionSize(button)}, paint {painted}, clip {caption.Bounds.Size}");
+            caption.ClipToBounds.Should().BeTrue();
+            painted.Width.Should().BeGreaterThan(0);
+            painted.Left.Should().BeGreaterThanOrEqualTo(0);
+            painted.Right.Should().BeLessThanOrEqualTo(caption.Bounds.Width);
+            caption.Bounds.Width.Should().Be(Math.Max(CaptionSize(button).Width,
+                Math.Ceiling(caption.Padding.Left + caption.TextLayout.WidthIncludingTrailingWhitespace)));
         }
         finally
         {

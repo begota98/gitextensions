@@ -28,7 +28,13 @@ GITEXTENSIONS_FLATPAK_PREBUILT=/tmp/gitextensions-flatpak-publish \
 The smoke uses `com.github.gitextensions.GitExtensions.Avalonia.P83Smoke`, a throwaway
 repository under `~/.local/share`, isolated Flatpak settings, an inaccessible-plugin probe,
 a custom theme, and a nested Wayland compositor. It validates the installed permissions and
-captures the compositor-rendered window. Generated publish and builder output remain ignored.
+captures the compositor-rendered window. It also observes the session bus for the
+`com.canonical.Unity.LauncherEntry` update the confined Browse sends, and reads the repository
+it records in the shared `recently-used.xbel` with GLib's bookmark parser; the application's
+host data directory points at a scratch copy so the user's own file is never written. Finally it
+checks that the exported desktop entry offers the Commit, Push, Pull and Close all windows actions
+and starts Close all windows from a second sandbox, which must close the running Browse over the
+session bus. None of this needs a permission beyond the ones above. Generated publish and builder output remain ignored.
 
 After the smoke has installed that isolated ID, run every confined host-facing action:
 
@@ -57,7 +63,9 @@ standard streams and exit status through `flatpak-spawn --host --watch-bus`. Its
 group guard also stops descendants on cancellation. Only a missing, unsupported or unavailable
 host Git causes fallback before the requested operation starts; a failed Git command is not
 replayed. The application supplies the original minimum Git version and translated fallback
-messages. Port-owned text uses the existing translator with `English.Avalonia.xlf` and optional
+messages. When the default `ssh-askpass` name is not on the host `PATH`, the launcher uses the
+first executable askpass program in the standard distribution locations, so host SSH can ask
+for a key passphrase; an explicit `SSH_ASKPASS` is kept as set. Port-owned text uses the existing translator with `English.Avalonia.xlf` and optional
 language-specific companion catalogs.
 
 Both harnesses are parity scaffolding and use only disposable application data and

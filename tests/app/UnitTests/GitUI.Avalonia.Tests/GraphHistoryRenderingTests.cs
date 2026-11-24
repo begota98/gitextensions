@@ -8,6 +8,7 @@ using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Templates;
 using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
+using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
@@ -55,35 +56,99 @@ public sealed class GraphHistoryRenderingTests
     }
 
     [AvaloniaTest]
-    public async Task RenderGraphToCacheAsync_should_publish_worker_results_on_the_realized_grid_thread()
+    public async Task Loaded_graph_should_publish_on_the_grid_thread_and_replace_the_old_viewport()
     {
-        RevisionGraph graph = BuildGraph();
-        RevisionGridControl grid = new() { UICommandsSource = CreateCommandsSource() };
-        GitRevision revision = graph.GetNodeForRow(0)!.GitRevision!;
-        grid.GetTestAccessor().SetRevisions([revision]);
-        Window window = new() { Width = 800, Height = 180, Content = grid };
-        using RevisionGraphColumnProvider provider = new(graph, grid, Substitute.For<IGitRevisionSummaryBuilder>());
-        VisibleRowRange range = new(fromIndex: 0, count: 16);
+        using AppSettingsTestScope settings = new();
+        AppSettings.RevisionGraphShowArtificialCommits = false;
+        AppSettings.ShowRevisionGridGraphColumn = true;
+        using GitModuleTestHelper first = new();
+        using GitModuleTestHelper second = new();
+        ImportHistory(first.Module);
+        second.Module.GitExecutable.GetOutput("commit --allow-empty -m replacement");
+        IGitUICommandsSource source = CreateCommandsSource();
+        RevisionGridControl grid = new() { UICommandsSource = source };
+        Window window = new() { Width = 1_000, Height = 400, Content = grid };
 
         window.Show();
         try
         {
+            await ReloadAsync(first.Module);
+            RevisionGraph graph = (RevisionGraph)(typeof(RevisionGridControl)
+                .GetField("_revisionGraph", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(grid)!);
+            graph.GetCachedCount().Should().Be(graph.Count);
+            ScrollContentPresenter viewport = grid._gridView.GetVisualDescendants()
+                .OfType<ScrollContentPresenter>().Single();
+            ScrollViewer scroll = grid._gridView.GetVisualDescendants().OfType<ScrollViewer>().Single();
+            double rowHeight = RevisionGridControl.GetRowHeight(grid);
+            RevisionGraphColumnProvider provider = grid.ColumnProviders.OfType<RevisionGraphColumnProvider>().Single();
+
+            foreach (int lastRow in new[] { 5, 15 })
+            {
+                SetViewportHeight(rowHeight * (lastRow + 0.5));
+                int[] rows = GetVisibleRows(graph, viewport);
+                rows.Should().Equal(Enumerable.Range(0, lastRow + 1));
+                provider.Column.Width.Value.Should().Be(GetSourceWidth(
+                    rows.Max(index => graph.GetSegmentsForRow(index)!.GetLaneCount())));
+            }
+
+            int threeLaneRow = Enumerable.Range(0, graph.Count)
+                .First(index => graph.GetSegmentsForRow(index)!.GetLaneCount() == 3);
+            SetViewportHeight(rowHeight / 2);
+            scroll.Offset = new Vector(scroll.Offset.X, rowHeight * (threeLaneRow + 0.25));
+            window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
-            grid.GetTestAccessor().Revisions.GetRealizedContainers().Should().NotBeEmpty();
+            GetVisibleRows(graph, viewport).Should().Equal(threeLaneRow);
+            provider.Column.Width.Value.Should().Be(54, "the source reserves a 6-DIP left margin and three 16-DIP lanes");
 
-            await Task.Run(() => provider.RenderGraphToCacheAsync(range, toRowIndex: 15, RowHeight, CancellationToken.None));
+            window.Height = 400;
+            await ReloadAsync(second.Module);
+            GitRevision revision = grid._gridView.Items.OfType<GitRevision>().Should().ContainSingle().Which;
+            revision.Subject.Should().Be("replacement");
+            graph.GetCachedCount().Should().Be(1);
+            provider.Column.Width.Value.Should().Be(GetSourceWidth(1));
 
-            Dispatcher.UIThread.CheckAccess().Should().BeTrue();
-            provider.GetTestAccessor().CachedVisibleRange.Should().Equal(range);
-            provider.GetTestAccessor().LastRenderedRow.Should().Be(15);
-            provider.Column.Width.Value.Should().Be(RevisionGraphColumnProvider.CalculateGraphColumnWidth(
-                range.Max(index => graph.GetSegmentsForRow(index)!.GetLaneCount())));
+            void SetViewportHeight(double height)
+            {
+                window.Height += height - viewport.Bounds.Height;
+                window.UpdateLayout();
+                Dispatcher.UIThread.RunJobs();
+            }
         }
         finally
         {
             window.Close();
             grid.CancelBackgroundTasks();
         }
+
+        async Task ReloadAsync(GitModule module)
+        {
+            source.UICommands.Module.Returns(module);
+            TaskCompletionSource<bool> loaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            EventHandler<RevisionLoadEventArgs> handler = (_, _) => loaded.TrySetResult(Dispatcher.UIThread.CheckAccess());
+            grid.RevisionsLoaded += handler;
+            try
+            {
+                grid.ReloadRevisions(module);
+                (await loaded.Task.WaitAsync(TimeSpan.FromSeconds(15))).Should().BeTrue();
+                window.UpdateLayout();
+                Dispatcher.UIThread.RunJobs();
+            }
+            finally
+            {
+                grid.RevisionsLoaded -= handler;
+            }
+        }
+
+        int[] GetVisibleRows(RevisionGraph graph, ScrollContentPresenter viewport)
+            => [.. grid.GetVisualDescendants().OfType<Control>()
+                .Where(cell => cell.Classes.Contains("revision-graph-cell")
+                    && cell.TranslatePoint(default, viewport) is Point origin
+                    && origin.Y < viewport.Bounds.Height
+                    && origin.Y + cell.Bounds.Height > 0)
+                .Select(cell => (GitRevision)cell.DataContext!)
+                .Select(revision => graph.TryGetRowIndex(revision.ObjectId, out int index) ? index : -1)
+                .Order()];
     }
 
     [AvaloniaTest]
@@ -117,23 +182,23 @@ public sealed class GraphHistoryRenderingTests
         int firstLaneCount = graph.GetSegmentsForRow(0)!.GetLaneCount();
         int firstWiderRowIndex = Enumerable.Range(1, graph.Count - 1)
             .First(index => graph.GetSegmentsForRow(index)!.GetLaneCount() > firstLaneCount);
-        grid.GetTestAccessor().Revisions.ItemsPanel = new FuncTemplate<Panel?>(
+        grid._gridView.ItemsPanel = new FuncTemplate<Panel?>(
             () => new VirtualizingStackPanel { CacheLength = 1 });
-        grid.GetTestAccessor().SetRevisions(orderedRevisions);
+        grid.GetNativeTestAccessor().SetRevisions(orderedRevisions);
         Window window = new() { Width = 1200, Height = 155, Content = grid };
         window.Show();
         try
         {
             Dispatcher.UIThread.RunJobs();
             window.UpdateLayout();
-            ScrollContentPresenter viewport = grid.GetTestAccessor().Revisions.GetVisualDescendants()
+            ScrollContentPresenter viewport = grid._gridView.GetVisualDescendants()
                 .OfType<ScrollContentPresenter>().Single();
             double rowHeight = RevisionGridControl.GetRowHeight(grid);
             double targetViewportHeight = (firstWiderRowIndex * rowHeight) - (rowHeight / 2);
             window.Height += targetViewportHeight - viewport.Bounds.Height;
             window.UpdateLayout();
             AssertViewportWidth(requireOverscan: true);
-            ScrollViewer scroll = grid.GetTestAccessor().Revisions.GetVisualDescendants().OfType<ScrollViewer>().Single();
+            ScrollViewer scroll = grid._gridView.GetVisualDescendants().OfType<ScrollViewer>().Single();
             scroll.Offset = new Vector(scroll.Offset.X, (rowHeight * firstWiderRowIndex) + (rowHeight / 3));
             AssertViewportWidth(requireOverscan: false);
             scroll.Offset = default;
@@ -153,7 +218,7 @@ public sealed class GraphHistoryRenderingTests
             Dispatcher.UIThread.RunJobs();
             using WriteableBitmap frame = window.CaptureRenderedFrame()
                 ?? throw new InvalidOperationException("The actual virtualized grid did not render.");
-            ScrollContentPresenter viewport = grid.GetTestAccessor().Revisions.GetVisualDescendants()
+            ScrollContentPresenter viewport = grid._gridView.GetVisualDescendants()
                 .OfType<ScrollContentPresenter>().Single();
             Control[] cells = [.. grid.GetVisualDescendants().OfType<Control>()
                 .Where(control => control.Classes.Contains("revision-graph-cell"))];
@@ -161,7 +226,7 @@ public sealed class GraphHistoryRenderingTests
                 && origin.Y < viewport.Bounds.Height && origin.Y + cell.Bounds.Height > 0)];
             visible.Should().NotBeEmpty();
             int visibleLaneCount = visible.Max(Lanes);
-            int expectedWidth = RevisionGraphColumnProvider.CalculateGraphColumnWidth(visibleLaneCount);
+            int expectedWidth = GetSourceWidth(visibleLaneCount);
             if (requireOverscan)
             {
                 cells.Max(Lanes).Should().BeGreaterThan(visibleLaneCount,
@@ -183,6 +248,106 @@ public sealed class GraphHistoryRenderingTests
             => cell.DataContext is GitRevision revision && graph.TryGetRowIndex(revision.ObjectId, out int rowIndex)
                 ? graph.GetSegmentsForRow(rowIndex)!.GetLaneCount()
                 : 0;
+    }
+
+    [AvaloniaTest]
+    [TestCase(0)]
+    [TestCase(3)]
+    public async Task ReloadRevisions_should_draw_superproject_refs_after_the_matching_local_ref(int extraRefs)
+    {
+        using AppSettingsTestScope settings = new();
+        AppSettings.RevisionGraphShowArtificialCommits = false;
+        AppSettings.ShowRemoteBranches = false;
+        AppSettings.ShowSuperprojectBranches = true;
+        using GitModuleTestHelper sourceRepository = new("submodule-source");
+        using GitModuleTestHelper superproject = new("superproject");
+        sourceRepository.Module.GitExecutable.RunCommand("commit --allow-empty -m submodule").Should().BeTrue();
+        sourceRepository.Module.GitExecutable.RunCommand("branch -M main").Should().BeTrue();
+        superproject.Module.GitExecutable.RunCommand(
+            $"-c protocol.file.allow=always submodule add {sourceRepository.Module.WorkingDir.RemoveTrailingPathSeparator().Quote()} submodule")
+            .Should().BeTrue();
+        superproject.Module.GitExecutable.RunCommand("commit -m superproject").Should().BeTrue();
+        superproject.Module.GitExecutable.RunCommand("branch -M main").Should().BeTrue();
+        superproject.Module.GitExecutable.RunCommand("branch release").Should().BeTrue();
+        for (int index = 0; index < extraRefs; index++)
+        {
+            superproject.Module.GitExecutable.RunCommand($"branch release-{index}").Should().BeTrue();
+        }
+
+        IGitModule submodule = superproject.Module.GetSubmodule("submodule");
+        submodule.SuperprojectModule.Should().NotBeNull("GitModule must discover the actual superproject");
+        submodule.GitExecutable.RunCommand("checkout main").Should().BeTrue();
+
+        IGitUICommandsSource commandsSource = CreateCommandsSource();
+        commandsSource.UICommands.Module.Returns(submodule);
+        RevisionGridControl grid = new() { UICommandsSource = commandsSource };
+        bool loaded = false;
+        grid.RevisionsLoaded += (_, _) => loaded = true;
+        Window window = new() { Width = 1100, Height = 320, Content = grid };
+        window.Show();
+        try
+        {
+            grid.ReloadRevisions(submodule);
+            Stopwatch timeout = Stopwatch.StartNew();
+            while (!loaded && timeout.Elapsed < TimeSpan.FromSeconds(15))
+            {
+                Dispatcher.UIThread.RunJobs();
+                await Task.Delay(10);
+            }
+
+            loaded.Should().BeTrue("the real revision reader must publish the submodule commit");
+            RevisionGridRefRenderer.RefLabelControl[] labels;
+            int expectedLabelCount = extraRefs == 0 ? 3 : 6;
+            timeout.Restart();
+            do
+            {
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                labels = [.. grid.GetVisualDescendants().OfType<RevisionGridRefRenderer.RefLabelControl>()];
+                if (labels.Length >= expectedLabelCount)
+                {
+                    break;
+                }
+
+                await Task.Delay(10);
+            }
+            while (timeout.Elapsed < TimeSpan.FromSeconds(15));
+
+            labels.Should().HaveCount(expectedLabelCount);
+            labels.Take(2).Select(label => label.Label).Should().Equal(string.Empty, "main");
+            labels[0].Icon.Should().Be(RefLabelIcon.Head);
+            labels[1].IsDashed.Should().BeTrue("the local branch also references the superproject checkout");
+            labels.Skip(2).Should().OnlyContain(label => label.IsDashed, "these refs belong only to the superproject");
+            if (extraRefs == 0)
+            {
+                labels[2].Label.Should().Be("release");
+            }
+            else
+            {
+                labels.Skip(2).Take(3).Should().OnlyContain(label => label.Label.StartsWith("release", StringComparison.Ordinal));
+                labels[^1].Label.Should().Be("…", "the source reserves its fourth additional slot for the ellipsis");
+            }
+
+            using WriteableBitmap frame = window.CaptureRenderedFrame()!;
+            frame.Should().NotBeNull("the actual revision cell must be rendered for pointer input");
+            Point localPoint = labels[1].TranslatePoint(new Point(labels[1].Bounds.Width / 2, labels[1].Bounds.Height / 2), window)!.Value;
+            Point superprojectPoint = labels[2].TranslatePoint(new Point(labels[2].Bounds.Width / 2, labels[2].Bounds.Height / 2), window)!.Value;
+            window.MouseMove(localPoint, RawInputModifiers.None);
+            Dispatcher.UIThread.RunJobs();
+            labels[1].IsHighlighted.Should().BeTrue("the matching local ref owns a real hit-box");
+            window.MouseMove(superprojectPoint, RawInputModifiers.None);
+            Dispatcher.UIThread.RunJobs();
+            labels[1].IsHighlighted.Should().BeFalse();
+            labels[2].IsHighlighted.Should().BeFalse("the original paints additional superproject refs without registering hit-boxes");
+        }
+        finally
+        {
+            grid.CancelBackgroundTasks();
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            using CancellationTokenSource cancellation = new(TimeSpan.FromSeconds(10));
+            await ThreadHelper.JoinPendingOperationsAsync(cancellation.Token);
+        }
     }
 
     [AvaloniaTest]
@@ -227,7 +392,7 @@ public sealed class GraphHistoryRenderingTests
                 .GetField("_revisionGraph", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .GetValue(grid)!);
             graph.GetCachedCount().Should().Be(graph.Count);
-            grid.GetTestAccessor().Revisions.Items.Count.Should().Be(600 + (showArtificial ? 2 : 0));
+            grid._gridView.Items.Count.Should().Be(600 + (showArtificial ? 2 : 0));
             using WriteableBitmap frame = window.CaptureRenderedFrame()
                 ?? throw new InvalidOperationException("The actual history grid did not render a frame.");
             using MemoryStream stream = new();
@@ -237,7 +402,7 @@ public sealed class GraphHistoryRenderingTests
                 .OfType<Control>()
                 .Where(control => control.Classes.Contains("revision-graph-cell"))];
             cells.Should().NotBeEmpty();
-            ScrollContentPresenter viewport = grid.GetTestAccessor().Revisions.GetVisualDescendants()
+            ScrollContentPresenter viewport = grid._gridView.GetVisualDescendants()
                 .OfType<ScrollContentPresenter>().Single();
             int visibleLaneCount = cells
                 .Where(cell => cell.TranslatePoint(default, viewport) is Point origin
@@ -253,7 +418,7 @@ public sealed class GraphHistoryRenderingTests
             {
                 Grid row = cell.GetVisualParent<Grid>()!;
                 row.ColumnDefinitions[Grid.GetColumn(cell)].Width.Value.Should()
-                    .Be(RevisionGraphColumnProvider.CalculateGraphColumnWidth(visibleLaneCount));
+                    .Be(GetSourceWidth(visibleLaneCount));
             }
 
             int realNodes = 0;
@@ -303,7 +468,7 @@ public sealed class GraphHistoryRenderingTests
 
             // Retire the painted rows before draining detail-loading callbacks, while
             // their repository and joinable context are still available.
-            grid?.GetTestAccessor().SetRevisions([]);
+            grid?.GetNativeTestAccessor().SetRevisions([]);
             window?.Close();
             Dispatcher.UIThread.RunJobs();
             using CancellationTokenSource cancellation = new(TimeSpan.FromSeconds(10));
@@ -368,6 +533,9 @@ public sealed class GraphHistoryRenderingTests
             AppSettings.MergeGraphLanesHavingCommonParent.Value = previousMergeCommonParents;
         }
     }
+
+    private static int GetSourceWidth(int visibleLaneCount)
+        => 6 + Math.Max(GraphRenderer.LaneWidth, GraphRenderer.LaneWidth * Math.Min(visibleLaneCount, GraphRenderer.MaxLanes));
 
     private static RevisionGraph BuildGraph()
     {

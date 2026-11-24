@@ -1,7 +1,11 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
 using Avalonia.Media;
+using Avalonia.VisualTree;
 using AvaloniaEdit;
 using AvaloniaEdit.Document;
 using AvaloniaEdit.Highlighting;
@@ -26,6 +30,7 @@ namespace GitUI.Editor;
 public partial class FileViewerInternal : GitModuleControl, IFileViewer
 {
     private readonly CommitMessageValidationRenderer _validationRenderer;
+    private PointerPointProperties? _validationPointerButtons;
     private readonly SelectionOccurrenceRenderer _selectionOccurrenceRenderer;
     private readonly List<HighlightedLines> _lineHighlights = [];
     private GetNextFileFnc? _findAndReplaceFileLoader;
@@ -66,6 +71,7 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
         TextEditor.TextArea.TextView.BackgroundRenderers.Add(_validationRenderer);
         TextEditor.TextArea.TextView.BackgroundRenderers.Add(_selectionOccurrenceRenderer);
         TextEditor.TextArea.TextView.BackgroundRenderers.Add(new HighlightBackgroundRenderer(_lineHighlights));
+        TextEditor.TextArea.TextView.LineTransformers.Add(_selectionOccurrenceRenderer);
         TextEditor.TextChanged += (sender, e) =>
         {
             UpdateValidationMarkers();
@@ -74,26 +80,88 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
         };
         TextEditor.LayoutUpdated += (_, _) => UpdateScrollBelowDocument();
         TextEditor.TextArea.SelectionChanged += SelectionManagerSelectionChanged;
-        TextEditor.TextArea.Caret.PositionChanged += (_, _) =>
-            SelectedLineChanged?.Invoke(this, new SelectedLineEventArgs(TextEditor.TextArea.Caret.Line - 1));
+        Vector lastScrollOffset = TextEditor.TextArea.TextView.ScrollOffset;
         TextEditor.TextArea.TextView.ScrollOffsetChanged += (_, _) =>
         {
-            HScrollPositionChanged?.Invoke(this, EventArgs.Empty);
-            VScrollPositionChanged?.Invoke(this, EventArgs.Empty);
+            Vector previousOffset = lastScrollOffset;
+            Vector scrollOffset = TextEditor.TextArea.TextView.ScrollOffset;
+            lastScrollOffset = scrollOffset;
+            if (previousOffset.X != scrollOffset.X)
+            {
+                OnHScrollPositionChanged(EventArgs.Empty);
+            }
+
+            if (previousOffset.Y != scrollOffset.Y)
+            {
+                OnVScrollPositionChanged(EventArgs.Empty);
+            }
         };
-        TextEditor.PointerMoved += (sender, e) => MouseMove?.Invoke(sender, e);
-        TextEditor.PointerEntered += (sender, e) => MouseEnter?.Invoke(sender, e);
-        TextEditor.PointerExited += (sender, e) => MouseLeave?.Invoke(sender, e);
-        TextEditor.KeyDown += (sender, e) =>
+
+        // AvaloniaEdit places scrollbars outside the native text area.
+        TextEditor.TextArea.PointerMoved += (sender, e) => MouseMove?.Invoke(sender, e);
+        TextEditor.TextArea.PointerEntered += (sender, e) => MouseEnter?.Invoke(sender, e);
+        TextEditor.TextArea.PointerExited += (sender, e) => MouseLeave?.Invoke(sender, e);
+
+        // AvaloniaEdit supplies the source editor's delayed hover event for validation markers.
+        TextView textView = TextEditor.TextArea.TextView;
+        textView.PointerHover += (_, e) => UpdateValidationToolTip(e);
+        textView.PointerMoved += (_, e) =>
         {
-            if (e.Key == Key.Escape && TextEditor.SelectionLength == 0)
+            _validationPointerButtons = e.Properties;
+            if (ToolTip.GetIsOpen(textView))
+            {
+                UpdateValidationToolTip(e);
+            }
+        };
+        textView.PointerExited += (_, _) =>
+        {
+            _validationPointerButtons = null;
+            ToolTip.SetTip(textView, null);
+        };
+
+        // AvaloniaEdit exposes printable text entry before the document changes.
+        TextEditor.TextArea.TextEntering += (_, e) =>
+        {
+            if (!TextEditor.IsReadOnly && e.Text?.Any(character => character >= ' ') == true)
+            {
+                ToolTip.SetTip(textView, null);
+            }
+        };
+
+        TextEditor.AddHandler(InputElement.KeyDownEvent, (_, e) =>
+        {
+            if (e.Key != Key.Escape)
+            {
+                return;
+            }
+
+            if (TextEditor.SelectionLength == 0)
             {
                 EscapePressed?.Invoke();
             }
-        };
-        TextEditor.KeyUp += (sender, e) => KeyUp?.Invoke(sender, e);
-        TextEditor.DoubleTapped += (_, _) => DoubleClick?.Invoke(this, EventArgs.Empty);
-        TextEditor.PointerWheelChanged += TextArea_MouseWheel;
+            else
+            {
+                // AvaloniaEdit has no default Escape action for clearing the editor selection.
+                TextEditor.TextArea.ClearSelection();
+            }
+
+            e.Handled = true;
+        }, RoutingStrategies.Tunnel);
+        TextEditor.TextArea.KeyUp += (s, e) => KeyUp?.Invoke(s, e);
+
+        // Avalonia's routed double tap stays on the source text area, outside the scrollbar route.
+        TextEditor.TextArea.DoubleTapped += (s, e) => DoubleClick?.Invoke(s, e);
+        TextEditor.TextArea.AddHandler(InputElement.PointerPressedEvent, (_, e) =>
+        {
+            _validationPointerButtons = e.Properties;
+            ToolTip.SetTip(textView, null);
+            int y = (int)e.GetPosition(TextEditor.TextArea.TextView).Y;
+            SelectedLineChanged?.Invoke(this, new SelectedLineEventArgs(GetLineFromVisualPosY(y)));
+        }, RoutingStrategies.Tunnel);
+        TextEditor.TextArea.AddHandler(InputElement.PointerReleasedEvent, (_, e) => _validationPointerButtons = e.Properties, RoutingStrategies.Tunnel);
+
+        // AvaloniaEdit routes the wheel through TextArea before the enclosing ScrollViewer.
+        TextEditor.TextArea.PointerWheelChanged += TextArea_MouseWheel;
         AttachedToVisualTree += (_, _) => TextEditor.ContextMenu = ContextMenu;
         DetachedFromVisualTree += (_, _) =>
         {
@@ -132,8 +200,15 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
     {
         string word = TextEditor.SelectedText;
         List<global::GitUI.TextRange> markers = GetTextMarkersMatchingWord(word);
+        if (_selectionOccurrenceRenderer.Markers.Count == 0 && markers.Count == 0)
+        {
+            return;
+        }
+
         _selectionOccurrenceRenderer.Markers = markers;
-        TextEditor.TextArea.TextView.InvalidateLayer(KnownLayer.Selection);
+
+        // The occurrence foreground is stored on formatted visual lines.
+        TextEditor.TextArea.TextView.Redraw();
     }
 
     /// <summary>
@@ -202,8 +277,9 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
             .FirstOrDefault(candidate => candidate.Offset > offset);
         if (marker is not null)
         {
+            // AvaloniaEdit caret offsets leave viewport scrolling to the caller.
             TextEditor.TextArea.Caret.Offset = marker.Offset;
-            TextEditor.ScrollToLine(TextEditor.Document.GetLineByOffset(marker.Offset).LineNumber);
+            TextEditor.TextArea.Caret.BringCaretToView();
         }
     }
 
@@ -217,8 +293,9 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
             .LastOrDefault(candidate => candidate.Offset < offset);
         if (marker is not null)
         {
+            // AvaloniaEdit caret offsets leave viewport scrolling to the caller.
             TextEditor.TextArea.Caret.Offset = marker.Offset;
-            TextEditor.ScrollToLine(TextEditor.Document.GetLineByOffset(marker.Offset).LineNumber);
+            TextEditor.TextArea.Caret.BringCaretToView();
         }
     }
 
@@ -230,16 +307,16 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
 
     public async Task FindNextAsync(bool searchForwardOrOpenWithDifftool)
     {
-        FindAndReplaceForm findAndReplaceForm = GetOrCreateFindAndReplaceForm();
+        // Avalonia creates a native window during construction, so check the current query first.
         if (searchForwardOrOpenWithDifftool
             && OpenWithDifftool is not null
-            && string.IsNullOrEmpty(findAndReplaceForm.LookFor))
+            && string.IsNullOrEmpty(_findAndReplaceForm?.LookFor))
         {
             OpenWithDifftool();
             return;
         }
 
-        await findAndReplaceForm.FindNextAsync(
+        await GetOrCreateFindAndReplaceForm().FindNextAsync(
             viaF3: true,
             searchBackward: !searchForwardOrOpenWithDifftool,
             messageIfNotFound: "Text not found");
@@ -262,10 +339,24 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
 
     public string GetText() => TextEditor.Text;
 
+    private bool? _showLineNumbers;
+
     public bool? ShowLineNumbers
     {
-        get => TextEditor.ShowLineNumbers;
-        set => TextEditor.ShowLineNumbers = value ?? false;
+        get => _showLineNumbers;
+        set
+        {
+            _showLineNumbers = value;
+            UpdateLineNumberVisibility();
+
+            // Avalonia paints the inset through its ContentPresenter background.
+            Classes.Set("fileviewer-hide-ordinary-line-numbers", value is false);
+        }
+    }
+
+    internal void UpdateLineNumberVisibility()
+    {
+        TextEditor.ShowLineNumbers = ShowLineNumbers ?? (DiffHighlightService is null);
     }
 
     /// <summary>
@@ -290,8 +381,19 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
         _currentViewPositionCache.Capture();
         OpenWithDifftool = openWithDifftool;
         ClearHighlighting();
+        if (viewMode != ViewMode.Difftastic && VRulerPosition != AppSettings.DiffVerticalRulerPosition)
+        {
+            // Reset if Difftastic changed the position
+            VRulerPosition = AppSettings.DiffVerticalRulerPosition;
+        }
+
         TextEditor.Document ??= new TextDocument();
         TextEditor.Document.Text = text;
+
+        if (ShowLineNumbers is false)
+        {
+            Padding = new Thickness(5, Padding.Top, Padding.Right, Padding.Bottom);
+        }
 
         // important to set after the text was changed
         // otherwise the may be rendering artifacts as noted in #5568
@@ -309,20 +411,26 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
             TextEditor.ScrollToHome();
         }
 
-        if (_shouldScrollToBottom)
+        if (_shouldScrollToTop || _shouldScrollToBottom)
         {
-            TextEditor.ScrollToEnd();
-            TextEditor.ScrollToVerticalOffset(Math.Max(0, VScrollPosition - _bottomBlankHeight));
-            positionSet = true;
-        }
-        else if (_shouldScrollToTop)
-        {
-            TextEditor.ScrollToHome();
-            positionSet = true;
+            // Avalonia measures scroll extents during layout and allows more travel below the document.
+            TextEditor.UpdateLayout();
+            if (TextEditor.TextArea.FindAncestorOfType<ScrollViewer>() is { } scrollViewer && scrollViewer.ScrollBarMaximum.Y > 0)
+            {
+                TextView textView = TextEditor.TextArea.TextView;
+                double viewportHeight = scrollViewer.Viewport.Height;
+                double lineHeight = textView.DefaultLineHeight;
+                int visibleLineCount = 1 + (int)(viewportHeight / lineHeight);
+                double maximum = textView.DocumentHeight + ((visibleLineCount * 2 / 3) * lineHeight);
+                double offset = _shouldScrollToTop ? 0 : Math.Max(0, maximum - viewportHeight - _bottomBlankHeight);
+                scrollViewer.Offset = new Vector(scrollViewer.Offset.X, offset);
+                positionSet = true;
+            }
+
+            _shouldScrollToTop = false;
+            _shouldScrollToBottom = false;
         }
 
-        _shouldScrollToTop = false;
-        _shouldScrollToBottom = false;
         return positionSet;
     }
 
@@ -335,15 +443,50 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
 
     public void SetHighlightingForFile(string filename)
     {
+        bool isRebaseTodo = filename.EndsWith("git-rebase-todo", StringComparison.Ordinal);
+        bool isGitMessage = isRebaseTodo || filename.EndsWith("COMMIT_EDITMSG", StringComparison.Ordinal);
+        IGitUICommands? commands = null;
+
+        // Avalonia's inner editor can apply highlighting before its owning viewer is attached.
+        if (isGitMessage && !TryGetUICommandsDirect(out commands)
+            && this.GetLogicalAncestors().OfType<FileViewer>().FirstOrDefault() is { } viewer)
+        {
+            _ = viewer.TryGetUICommandsDirect(out commands);
+        }
+
+        GitHighlightingStrategyBase? gitHighlightingStrategy = null;
+        if (commands?.Module is { } module)
+        {
+            gitHighlightingStrategy = isRebaseTodo
+                ? new RebaseTodoHighlightingStrategy(module)
+                : new CommitMessageHighlightingStrategy(module);
+        }
+
         string extension = Path.GetExtension(filename);
-        SetHighlightingStrategy(string.IsNullOrEmpty(extension)
+        SetHighlightingStrategy(isGitMessage || string.IsNullOrEmpty(extension)
             ? null
-            : HighlightingManager.Instance.GetDefinitionByExtension(extension));
+            : HighlightingManager.Instance.GetDefinitionByExtension(extension), gitHighlightingStrategy);
     }
 
-    private void SetHighlightingStrategy(IHighlightingDefinition? highlightingStrategy)
+    // Avalonia uses a syntax definition and a separate line transformer for Git files.
+    private void SetHighlightingStrategy(
+        IHighlightingDefinition? highlightingStrategy,
+        GitHighlightingStrategyBase? gitHighlightingStrategy = null)
     {
+        IList<IVisualLineTransformer> transformers = TextEditor.TextArea.TextView.LineTransformers;
+        if (_gitHighlightingStrategy is not null)
+        {
+            transformers.Remove(_gitHighlightingStrategy);
+        }
+
+        _gitHighlightingStrategy = gitHighlightingStrategy;
+        if (_gitHighlightingStrategy is not null)
+        {
+            transformers.Insert(transformers.IndexOf(_selectionOccurrenceRenderer), _gitHighlightingStrategy);
+        }
+
         TextEditor.SyntaxHighlighting = highlightingStrategy;
+        UpdateValidationMarkers();
         TextEditor.TextArea.TextView.Redraw();
     }
 
@@ -588,16 +731,29 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
         ClipboardUtil.TrySetText(text.AdjustLineEndings(Module.GetEffectiveSetting<AutoCRLFType>("core.autocrlf")));
     }
 
+    // The AvaloniaEdit offset methods only apply the template.
     public int HScrollPosition
     {
         get => (int)TextEditor.TextArea.TextView.ScrollOffset.X;
-        set => TextEditor.ScrollToHorizontalOffset(value);
+        set
+        {
+            if (TextEditor.TextArea.FindAncestorOfType<ScrollViewer>() is { } scrollViewer)
+            {
+                scrollViewer.Offset = new Vector(value, scrollViewer.Offset.Y);
+            }
+        }
     }
 
     public int VScrollPosition
     {
         get => (int)TextEditor.TextArea.TextView.ScrollOffset.Y;
-        set => TextEditor.ScrollToVerticalOffset(value);
+        set
+        {
+            if (TextEditor.TextArea.FindAncestorOfType<ScrollViewer>() is { } scrollViewer)
+            {
+                scrollViewer.Offset = new Vector(scrollViewer.Offset.X, value);
+            }
+        }
     }
 
     public EolMarkerStyle EolMarkerStyle
@@ -653,14 +809,32 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
             return first?.FirstDocumentLine.LineNumber - 1 ?? 0;
         }
 
-        set => TextEditor.ScrollToLine(Math.Max(1, value + 1));
+        set
+        {
+            int documentLine = Math.Max(1, value + 1);
+            if (TextEditor.Document is { } document
+                && TextEditor.TextArea.FindAncestorOfType<ScrollViewer>() is { } scrollViewer)
+            {
+                // AvaloniaEdit's ScrollToLine can center its target. Set the viewport's top directly.
+                TextView textView = TextEditor.TextArea.TextView;
+                double top = textView.GetVisualTopByDocumentLine(Math.Min(documentLine, document.LineCount));
+
+                // AvaloniaEdit includes the previous row at its exact bottom edge.
+                scrollViewer.Offset = new Vector(scrollViewer.Offset.X, top > 0 ? Math.BitIncrement(top) : 0);
+            }
+            else
+            {
+                TextEditor.ScrollToLine(documentLine);
+            }
+        }
     }
 
     public int GetLineFromVisualPosY(int visualPosY)
     {
+        // Avalonia can publish a scroll offset before realizing the new viewport's visual lines.
         TextView textView = TextEditor.TextArea.TextView;
-        VisualLine? visualLine = textView.GetVisualLineFromVisualTop(visualPosY + textView.ScrollOffset.Y);
-        return visualLine is null ? int.MaxValue : visualLine.FirstDocumentLine.LineNumber - 1;
+        double documentY = Math.Max(0, visualPosY + textView.ScrollOffset.Y);
+        return documentY < textView.DocumentHeight ? textView.GetDocumentLineByVisualTop(documentY).LineNumber - 1 : int.MaxValue;
     }
 
     private string GetLineText(int line)
@@ -696,7 +870,7 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
     /// <returns>The caret offset</returns>
     private int GetCaretOffset(int lineNumber, bool rightFile)
     {
-        if (ShowLineNumbers == true)
+        if (TextEditor.ShowLineNumbers)
         {
             // All contents is shown, just translate the lineNumber (that is an offset)
             return lineNumber - 1;
@@ -718,7 +892,7 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
         return 0;
     }
 
-    public int MaxLineNumber => ShowLineNumbers == true
+    public int MaxLineNumber => TextEditor.ShowLineNumbers
         ? TotalNumberOfLines
         : Math.Max(1, _lineNumbersControl.MaxLineNumber);
 
@@ -835,10 +1009,7 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
             _showGutterAvatars = value;
             if (!_showGutterAvatars)
             {
-                if (_authorsAvatarMargin is not null)
-                {
-                    _authorsAvatarMargin.IsVisible = false;
-                }
+                _authorsAvatarMargin?.SetVisiblity(false);
 
                 return;
             }
@@ -852,7 +1023,7 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
             }
             else
             {
-                _authorsAvatarMargin.IsVisible = true;
+                _authorsAvatarMargin.SetVisiblity(true);
             }
         }
     }
@@ -1029,7 +1200,6 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
         }
 
         public ThemeAwareTextEditor TextEditor => _control.TextEditor;
-        public GitHighlightingStrategyBase? HighlightingStrategy => _control._gitHighlightingStrategy;
         public IReadOnlyList<global::GitUI.TextRange> SelectionOccurrences => _control._selectionOccurrenceRenderer.Markers;
         public bool IsFindAndReplaceFormCreated => _control._findAndReplaceForm is not null;
         public FindAndReplaceForm FindAndReplaceForm => _control.GetOrCreateFindAndReplaceForm();
@@ -1083,29 +1253,6 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
         form.Close();
     }
 
-    internal void SetHighlightingForFile(string? filename, IGitModule? module)
-    {
-        if (_gitHighlightingStrategy is not null)
-        {
-            TextEditor.TextArea.TextView.LineTransformers.Remove(_gitHighlightingStrategy);
-        }
-
-        _gitHighlightingStrategy = filename switch
-        {
-            not null when module is not null && filename.EndsWith("git-rebase-todo", StringComparison.Ordinal) => new RebaseTodoHighlightingStrategy(module),
-            not null when module is not null && filename.EndsWith("COMMIT_EDITMSG", StringComparison.Ordinal) => new CommitMessageHighlightingStrategy(module),
-            _ => null,
-        };
-
-        if (_gitHighlightingStrategy is not null)
-        {
-            TextEditor.TextArea.TextView.LineTransformers.Add(_gitHighlightingStrategy);
-        }
-
-        UpdateValidationMarkers();
-        TextEditor.TextArea.TextView.Redraw();
-    }
-
     private void UpdateValidationMarkers()
     {
         if (_gitHighlightingStrategy is CommitMessageHighlightingStrategy commitStrategy
@@ -1122,6 +1269,32 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
         TextEditor.TextArea.TextView.InvalidateLayer(KnownLayer.Selection);
     }
 
+    private void UpdateValidationToolTip(PointerEventArgs e)
+    {
+        TextView textView = TextEditor.TextArea.TextView;
+        PointerPoint pointer = e.GetCurrentPoint(textView);
+
+        // AvaloniaEdit's delayed hover can carry motion from before the last press or release.
+        PointerPointProperties buttons = _validationPointerButtons ?? pointer.Properties;
+        string? toolTip = null;
+        if (_validationRenderer.Markers.Count > 0
+            && !buttons.IsLeftButtonPressed && !buttons.IsRightButtonPressed && !buttons.IsMiddleButtonPressed
+            && !buttons.IsXButton1Pressed && !buttons.IsXButton2Pressed
+            && textView.Document is TextDocument document
+            && textView.GetPosition(pointer.Position + textView.ScrollOffset) is TextViewPosition position)
+        {
+            int offset = document.GetOffset(position.Line, position.Column);
+            toolTip = _validationRenderer.Markers
+                .FirstOrDefault(marker => offset >= marker.Offset && offset - marker.Offset < marker.Length)?.ToolTip;
+        }
+
+        ToolTip.SetTip(textView, toolTip);
+        if (toolTip is not null)
+        {
+            ToolTip.SetIsOpen(textView, true);
+        }
+    }
+
     private sealed class CommitMessageValidationRenderer : IBackgroundRenderer
     {
         public IReadOnlyList<CommitMessageValidationMarker> Markers { get; set; } = [];
@@ -1135,7 +1308,6 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
                 return;
             }
 
-            Pen pen = new(Brushes.Red, 1);
             foreach (CommitMessageValidationMarker marker in Markers)
             {
                 if (marker.Length <= 0 || marker.Offset >= textView.Document.TextLength)
@@ -1143,6 +1315,7 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
                     continue;
                 }
 
+                Pen pen = new(new SolidColorBrush(marker.Color), 1);
                 SimpleSegment segment = new(marker.Offset, Math.Min(marker.Length, textView.Document.TextLength - marker.Offset));
                 foreach (Avalonia.Rect rectangle in BackgroundGeometryBuilder.GetRectsForSegment(textView, segment))
                 {
@@ -1157,11 +1330,35 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
         }
     }
 
-    private sealed class SelectionOccurrenceRenderer : IBackgroundRenderer
+    private sealed class SelectionOccurrenceRenderer : DocumentColorizingTransformer, IBackgroundRenderer
     {
         public IReadOnlyList<global::GitUI.TextRange> Markers { get; set; } = [];
 
         public KnownLayer Layer => KnownLayer.Selection;
+
+        protected override void ColorizeLine(DocumentLine line)
+        {
+            if (Markers.Count == 0)
+            {
+                return;
+            }
+
+            IBrush foreground = new SolidColorBrush(AvaloniaThemeResources.ToMediaColor(GetHighlightColor().GetTextColor())).ToImmutable();
+            foreach (global::GitUI.TextRange marker in Markers)
+            {
+                if (marker.Offset >= line.EndOffset)
+                {
+                    break;
+                }
+
+                int start = Math.Max(line.Offset, marker.Offset);
+                int end = Math.Min(line.EndOffset, marker.EndOffset);
+                if (start < end)
+                {
+                    ChangeLinePart(start, end, element => element.TextRunProperties.SetForegroundBrush(foreground));
+                }
+            }
+        }
 
         public void Draw(TextView textView, DrawingContext drawingContext)
         {
@@ -1170,10 +1367,7 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
                 return;
             }
 
-            System.Drawing.Color color = AvaloniaThemeResources.ResolveAppColor(
-                ThemeModule.Settings,
-                AppColor.HighlightAllOccurences);
-            IBrush brush = new SolidColorBrush(AvaloniaThemeResources.ToMediaColor(color)).ToImmutable();
+            IBrush brush = new SolidColorBrush(AvaloniaThemeResources.ToMediaColor(GetHighlightColor())).ToImmutable();
             foreach (global::GitUI.TextRange marker in Markers)
             {
                 foreach (Avalonia.Rect rectangle in BackgroundGeometryBuilder.GetRectsForSegment(textView, marker))
@@ -1182,6 +1376,9 @@ public partial class FileViewerInternal : GitModuleControl, IFileViewer
                 }
             }
         }
+
+        private static Color GetHighlightColor()
+            => AvaloniaThemeResources.ResolveAppColor(ThemeModule.Settings, AppColor.HighlightAllOccurences);
     }
 
     /// <summary>

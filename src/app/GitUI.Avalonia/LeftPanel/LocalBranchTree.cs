@@ -2,31 +2,21 @@ using GitCommands.Git;
 using GitExtensions.Extensibility;
 using GitExtensions.Extensibility.Git;
 using GitUI.CommandsDialogs;
-using GitUI.Properties;
 using GitUI.UserControls.RevisionGrid;
+using TreeNode = Avalonia.Controls.TreeViewItem;
 
 namespace GitUI.LeftPanel;
 
 internal sealed class LocalBranchTree : BaseRefTree
 {
     private readonly IAheadBehindDataProvider? _aheadBehindDataProvider;
-    private readonly IRevisionGridInfo? _revisionGridInfo;
-    private readonly string _currentBranch;
+    private readonly IRevisionGridInfo _revisionGridInfo;
 
-    public LocalBranchTree(
-        RepoObjectsTree owner,
-        IReadOnlyList<IGitRef> branches,
-        string currentBranch,
-        IAheadBehindDataProvider? aheadBehindDataProvider = null,
-        ICheckRefs? refsSource = null,
-        IRevisionGridInfo? revisionGridInfo = null)
-        : base(owner, RepoTreeKind.Branches, TranslatedStrings.Branches, Images.BranchLocalRoot, refsSource, RefsFilter.Heads)
+    public LocalBranchTree(TreeNode treeNode, IGitUICommandsSource uiCommands, IAheadBehindDataProvider? aheadBehindDataProvider, ICheckRefs refsSource, IRevisionGridInfo revisionGridInfo)
+        : base(treeNode, uiCommands, refsSource, RefsFilter.Heads)
     {
         _aheadBehindDataProvider = aheadBehindDataProvider;
         _revisionGridInfo = revisionGridInfo;
-        _currentBranch = currentBranch;
-        FillTree(branches, CancellationToken.None);
-        Complete(TranslatedStrings.Branches, Images.BranchLocalRoot, expanded: true);
     }
 
     protected override Nodes FillTree(IReadOnlyList<IGitRef> branches, CancellationToken token)
@@ -61,32 +51,34 @@ internal sealed class LocalBranchTree : BaseRefTree
 
         #endregion
 
+        Nodes nodes = new(this);
         IReadOnlyDictionary<string, AheadBehindData>? aheadBehindData = _aheadBehindDataProvider?.GetData();
-        string currentBranch = _revisionGridInfo?.GetCurrentBranch() ?? _currentBranch;
-        FillNested(
-            PrioritizedBranches(branches),
-            (parent, path, gitRef, _) =>
+        string currentBranch = _revisionGridInfo.GetCurrentBranch();
+        Dictionary<string, BaseRevisionNode> pathToNode = [];
+        foreach (IGitRef branch in PrioritizedBranches(branches))
+        {
+            token.ThrowIfCancellationRequested();
+
+            if (branch.ObjectId.IsZero)
             {
-                token.ThrowIfCancellationRequested();
-                if (gitRef is null)
-                {
-                    return new BranchPathNode(this, parent, path);
-                }
+                throw new InvalidOperationException($"Branch '{branch.Name}' has no ObjectId.");
+            }
 
-                if (gitRef.ObjectId.IsZero)
-                {
-                    throw new InvalidOperationException($"Branch '{gitRef.Name}' has no ObjectId.");
-                }
+            LocalBranchNode localBranchNode = new(this, branch.ObjectId, branch.Name, branch.Name == currentBranch, visible: true) { GitRef = branch };
 
-                LocalBranchNode node = new(this, parent, gitRef, path == currentBranch);
-                if (aheadBehindData?.TryGetValue(node.FullPath, out AheadBehindData aheadBehind) is true)
-                {
-                    node.UpdateAheadBehind(aheadBehind.ToDisplay(), aheadBehind.RemoteRef);
-                }
+            if (aheadBehindData?.TryGetValue(localBranchNode.FullPath, out AheadBehindData aheadBehind) is true)
+            {
+                localBranchNode.UpdateAheadBehind(aheadBehind.ToDisplay(), aheadBehind.RemoteRef);
+            }
 
-                return node;
-            });
-        return Nodes;
+            BaseRevisionNode? parent = localBranchNode.CreateRootNode(pathToNode, (tree, parentPath) => new BranchPathNode(tree, parentPath));
+            if (parent is not null)
+            {
+                nodes.AddNode(parent);
+            }
+        }
+
+        return nodes;
     }
 
     protected override void PostFillTreeViewNode(bool firstTime)
@@ -97,7 +89,21 @@ internal sealed class LocalBranchTree : BaseRefTree
         }
 
         // Skip hidden node
-        // Selection is restored after every root has been attached by RepoObjectsTree.
-        // If there's a selected treenode, don't stomp over it
+        if (!IsEnabled)
+        {
+            return;
+        }
+
+        if (OwnerControl.SelectedNode is not null)
+        {
+            // If there's a selected treenode, don't stomp over it
+            return;
+        }
+
+        LocalBranchNode? currentBranch = Nodes.DepthEnumerator<LocalBranchNode>().FirstOrDefault(b => b.IsCurrent);
+        if (currentBranch is not null)
+        {
+            OwnerControl.SelectTreeViewItem(currentBranch.TreeViewNode);
+        }
     }
 }

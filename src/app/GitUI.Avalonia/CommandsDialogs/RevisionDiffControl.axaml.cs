@@ -19,7 +19,6 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
     private IRevisionGridUpdate? _revisionGridUpdate;
     private Func<string>? _pathFilter;
 
-    private readonly FileStatusDiffCalculator _diffCalculator;
     private RevisionDiffControl? _revisionFileTree;
 
     // Avalonia's designer constructs views before the application initializes ThreadHelper.
@@ -42,7 +41,7 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
     {
         InitializeComponent();
 
-        _diffCalculator = new FileStatusDiffCalculator(() => Module);
+        DiffFiles.MainThreadFactory = _taskManager.JoinableTaskFactory;
         DiffText.MainThreadFactory = _taskManager.JoinableTaskFactory;
         DiffFiles.SelectionMode = SelectionMode.Multiple;
         DiffFiles.CanUseFindInCommitFilesGitGrep = true;
@@ -351,39 +350,22 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
         try
         {
             _isImplicitListSelection = true;
-            DiffFiles.Clear();
             BlameControl.IsVisible = false;
             DiffText.IsVisible = true;
             DisplayedRevision = null;
             if (revisions.Count == 0)
             {
+                DiffFiles.ClearDiffs();
                 return;
             }
 
-            await TaskScheduler.Default;
-            cancellationToken.ThrowIfCancellationRequested();
-
-            IReadOnlyList<FileStatusWithDescription> groups;
-            if (IsFileTreeMode)
-            {
-                _diffCalculator.SetDiff(revisions, _revisionGridInfo.CurrentCheckout, allowMultiDiff: false);
-                _diffCalculator.SetGrep(string.Empty, fileTreeMode: true);
-                groups = _diffCalculator.Calculate([], refreshDiff: false, refreshGrep: true, cancellationToken);
-            }
-            else
-            {
-                _diffCalculator.SetDiff(revisions, _revisionGridInfo.CurrentCheckout, allowMultiDiff: true);
-                groups = _diffCalculator.Calculate([], refreshDiff: true, refreshGrep: false, cancellationToken);
-            }
-
+            await DiffFiles.SetDiffsAsync(revisions, _revisionGridInfo.CurrentCheckout, cancellationToken);
             await _taskManager.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
             if (!_displayedRevisions.SequenceEqual(revisions))
             {
                 return;
             }
 
-            DiffFiles.SetDiffs(groups, IsFileTreeMode);
             DisplayedRevision = revisions[0];
 
             // Warning: Do not directly *show* a file here by means of "notify: false" and ShowSelectedFile()!
@@ -430,7 +412,7 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
         _viewChangesSequence.CancelCurrent();
         _displayedRevisions = [];
         DisplayedRevision = null;
-        DiffFiles.Clear();
+        DiffFiles.ClearDiffs();
         DiffText.ViewPatch(string.Empty);
     }
 
@@ -457,8 +439,6 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
         _showBlame = requestBlame;
         DiffFiles.tsmiBlame.ToggleType = MenuItemToggleType.CheckBox;
         DiffFiles.tsmiBlame.IsChecked = _showBlame;
-        _diffCalculator.DescribeRevision = objectId => DescribeRevision(objectId);
-        _diffCalculator.GetActualRevision = revisionGridInfo.GetActualRevision;
         DiffFiles.Bind(
             RefreshArtificial,
             canAutoRefresh: true,
@@ -471,7 +451,7 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
             filterFileInGrid: FilterFileInGrid,
             refreshParent: RequestRefresh,
             openInFileTreeTab_AsBlame: revisionFileTree is null ? null : OpenInFileTreeTab,
-            getCurrentRevision: () => DisplayedRevision,
+            getCurrentRevision: () => _revisionGridInfo?.GetRevision(_revisionGridInfo.CurrentCheckout),
             getLineNumber: () => BlameControl.IsVisible ? BlameControl.CurrentFileLine : DiffText.CurrentFileLine,
             getSelectedText: DiffText.GetSelectedText,
             getSupportLinePatching: () => DiffText.SupportLinePatching);
@@ -494,6 +474,24 @@ public partial class RevisionDiffControl : GitModuleControl, IRevisionGridFileUp
 
         ReloadHotkeys();
         LoadCustomDifftools();
+    }
+
+    /// <summary>
+    /// Clean up any resources being used.
+    /// </summary>
+    /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _viewChangesSequence.Dispose();
+            _setDiffSequence.Dispose();
+
+            // Avalonia also queues selection work before switching to the UI thread.
+            _showSelectedFileSequence.Dispose();
+        }
+
+        base.Dispose(disposing);
     }
 
     private string DescribeRevision(ObjectId objectId, int maxLength = 0)

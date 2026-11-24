@@ -362,6 +362,7 @@ public sealed class ConsoleAndOutputTests
         GitExtUtils.ServiceContainerRegistry.RegisterServices(serviceContainer);
         serviceContainer.AddService<IGitExecutorProvider>(Substitute.For<IGitExecutorProvider>());
         serviceContainer.AddService<ILinkFactory>(Substitute.For<ILinkFactory>());
+        serviceContainer.AddService<GitCommands.UserRepositoryHistory.IRepositoryDescriptionProvider>(new GitCommands.UserRepositoryHistory.RepositoryDescriptionProvider(new GitCommands.Git.GitDirectoryResolver(new System.IO.Abstractions.FileSystem())));
         GitUI.ServiceContainerRegistry.RegisterServices(serviceContainer);
         return serviceContainer;
     }
@@ -382,7 +383,7 @@ public sealed class ConsoleAndOutputTests
         commands.Module.Returns(module);
         commands.RepoChangedNotifier.Returns(notifier);
         commands.GetService(Arg.Any<Type>()).Returns(call => serviceContainer.GetService(call.Arg<Type>()));
-        return new FormBrowse(commands);
+        return new FormBrowse(commands, new BrowseArguments());
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition)

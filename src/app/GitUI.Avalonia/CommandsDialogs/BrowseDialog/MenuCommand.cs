@@ -7,6 +7,7 @@ using Avalonia.Media;
 using GitUI.Compat;
 
 using Keys = GitExtensions.Shims.WinForms.Keys;
+using ToolStripMenuItem = GitUI.Compat.WinFormsControls.ToolStripMenuItem;
 
 namespace GitUI.CommandsDialogs.BrowseDialog;
 
@@ -45,7 +46,7 @@ internal sealed class MenuCommand
 
         if (menuCommand.IsGroupHeader)
         {
-            MenuItem headerToolStripMenuItem = new()
+            ToolStripMenuItem headerToolStripMenuItem = new()
             {
                 Name = menuCommand.Name,
                 Header = AvaloniaTranslationUtils.ToAvaloniaMnemonics(menuCommand.Text ?? string.Empty),
@@ -197,6 +198,7 @@ internal sealed class MenuCommand
         }
     }
 
+    // Avalonia retains menu items outside the form's translation fields; propagate the translated command text explicitly.
     public void UpdateMenuItemsText()
     {
         foreach (MenuItem item in _registeredMenuItems)
@@ -264,6 +266,7 @@ internal sealed class MenuCommand
         }
     }
 
+    // Avalonia InputGesture requires a KeyGesture; keep the original full shortcut string separately for display.
     private static KeyGesture? ParseShortcut(string? shortcut)
     {
         if (string.IsNullOrWhiteSpace(shortcut))
